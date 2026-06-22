@@ -1,0 +1,14 @@
+# Core runtime — enough to run the full creative pipeline (separation falls back
+# to a single 'mix' stem, stretch falls back to a phase-vocoder/resampler).
+numpy>=1.24
+scipy>=1.10
+soundfile>=0.12
+pedalboard>=0.9
+click>=8.1
+pyyaml>=6.0
+
+# Optional, higher-quality stages (large): install as needed.
+#   pip install demucs torch        # real 4-stem separation
+#   pip install librosa             # beat-aware loop detection
+#   pip install pyrubberband        # artefact-free time-stretch (+ rubberband CLI)
+#   pip install soxr                # higher-quality resampling

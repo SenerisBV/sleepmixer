@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Render artifacts & separation cache
+.sleepmix_cache/
+*.wav
+*.flac
+*.mp3
+*.m4a
+!sleepmix/**/*.wav
+
+.pytest_cache/
+.DS_Store

@@ -1,0 +1,89 @@
+# sleepmix configuration — every field is optional; omit any to use its default.
+# Run:  sleepmix render --input song.flac --config sleepmix.yaml --output mix.wav
+
+seed: 0
+separation_model: htdemucs_ft   # Demucs model; needs the 'separation' extra
+
+# Output / arrangement -------------------------------------------------
+output:
+  duration_min: 25
+  sample_rate: 44100
+  channels: 2
+  cycle_crossfade_ms: 800    # blend between successive loop repetitions
+  fade_in_s: 8
+  fade_out_s: 12
+  peak_db: -1.0
+
+# The 'slowed' half of slowed-and-reverb -------------------------------
+tempo:
+  speed: 0.7                 # 0.7 = 70% speed (slower, longer); pitch preserved
+  pitch_semitones: -2        # drop two semitones for a darker tone
+
+# Loop selection -------------------------------------------------------
+loop:
+  bars: 8
+  beats_per_bar: 4
+  crossfade_ms: 120          # internal seam crossfade for seamless looping
+  search_start: 0.2          # only look for a loop between 20%..80% of the track
+  search_end: 0.8
+
+# Global reverb (each stem can scale its own send) ---------------------
+reverb:
+  room_size: 0.85
+  damping: 0.5
+  wet: 0.45
+  dry: 0.6
+  width: 1.0
+  predelay_ms: 40
+
+# Sollos-style 'sound supplement' bed ----------------------------------
+soundbed:
+  enabled: true
+  noise_type: pink           # pink | brown | white | none
+  noise_gain_db: -34
+  binaural_enabled: true     # headphones only
+  binaural_carrier_hz: 110
+  binaural_beat_hz: 2.5      # delta/theta range for sleep
+  binaural_gain_db: -30
+
+# Per-stem behaviour & disintegration ----------------------------------
+# Each decay value is interpolated from *_start to *_end across the whole mix,
+# so the loop erodes a little more on every repetition. curve: linear | exp
+# (ease-in: stays pristine longer) | log (ease-out: erodes fast, then lingers).
+stems:
+  - name: vocals
+    enabled: true
+    gain_db: 0
+    reverb_send: 1.2
+    decay:
+      enabled: true
+      curve: exp
+      lowpass_start_hz: 18000
+      lowpass_end_hz: 2200
+      amp_start_db: 0
+      amp_end_db: -16
+      dropout_start: 0.0
+      dropout_end: 0.30
+      noise_start_db: -90
+      noise_end_db: -42
+      spectral_hole_start: 0.0
+      spectral_hole_end: 0.45
+
+  - name: other            # synths, guitars, pads — the harmonic bed
+    enabled: true
+    gain_db: 0
+    reverb_send: 1.0
+    decay:
+      enabled: true
+      curve: linear
+      lowpass_end_hz: 2400
+      amp_end_db: -4
+
+  - name: bass
+    enabled: true
+    gain_db: -1
+    decay:
+      enabled: false        # keep the low end steady for a stable foundation
+
+  - name: drums
+    enabled: false          # usually too rhythmic for sleep — off by default
