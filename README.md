@@ -123,13 +123,15 @@ See `sleepmix/config.example.yaml` for every field with comments.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest -q
+pipenv install --dev
+pipenv run pytest -q
 ```
 
 The test suite covers the DSP core (disintegration, sound bed, looping, config)
 and a full end-to-end render through the fallbacks, so it runs without any ML
-dependencies.
+dependencies. `tests/conftest.py` points every test at an isolated, throwaway
+`SLEEPMIX_DATA_DIR` (see `docs/architecture.md`), so a test run never touches
+your real separation cache.
 
 ## License
 
