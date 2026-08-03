@@ -128,8 +128,11 @@ pipenv run pytest -q
 ```
 
 The test suite covers the DSP core (disintegration, sound bed, looping, config)
-and a full end-to-end render through the fallbacks, so it runs without any ML
-dependencies. `tests/conftest.py` points every test at an isolated, throwaway
+and a full end-to-end render. It needs no ML dependencies installed, and it
+does not use them when they are: separation is replaced by a synthetic stub
+(`tests/conftest.py`), except in `test_full_render_fallback`, which forces
+Demucs to fail so it genuinely exercises the single-`mix`-stem fallback path.
+`tests/conftest.py` also points every test at an isolated, throwaway
 `SLEEPMIX_DATA_DIR` (see `docs/architecture.md`), so a test run never touches
 your real separation cache.
 

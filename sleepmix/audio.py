@@ -118,3 +118,27 @@ def normalize_peak(buf: AudioBuffer, peak_db: float = -1.0) -> AudioBuffer:
 
 def silence(n_frames: int, n_channels: int, sr: int) -> AudioBuffer:
     return AudioBuffer(np.zeros((n_frames, n_channels), dtype=np.float32), sr)
+
+
+def sum_buffers(buffers: list[AudioBuffer]) -> AudioBuffer:
+    """Sum ``buffers`` at the widest channel count, padding shorter ones.
+
+    This is the reference signal loop detection runs against, and it must be
+    computed identically wherever it is needed. ``pipeline.run_pipeline`` and
+    ``session.RenderSession`` both derive a loop point from it; if their two
+    summations differed by so much as a channel-mapping order, the preview would
+    audition a different part of the song than the render produces. One function
+    is the only way to make that impossible rather than merely currently true.
+
+    ``sr`` is taken from the first buffer — callers pass stems from a single
+    separation pass, which share a rate by construction.
+    """
+    if not buffers:
+        raise ValueError("cannot sum an empty list of buffers")
+    n = max(b.n_frames for b in buffers)
+    ch = max(b.n_channels for b in buffers)
+    acc = np.zeros((n, ch), dtype=np.float32)
+    for b in buffers:
+        x = b.with_channels(ch).data
+        acc[:x.shape[0]] += x
+    return AudioBuffer(acc, buffers[0].sr)

@@ -117,10 +117,19 @@ def plan_iterations(
     """Return ``(n_iterations, xfade_frames)`` for a stream of this shape.
 
     Shared by the batch stream builder and the preview path so both agree on
-    which iteration a given point in the arc corresponds to."""
+    which iteration a given point in the arc corresponds to.
+
+    The count is the number of iterations the renderer *executes*, not an upper
+    bound on them. Iteration ``i`` leaves the write head at
+    ``loop_frames + i * stride``, so the first index at or past ``target_frames``
+    — the one the builder stops on — is ``ceil((target - xfade) / stride) - 1``.
+    An earlier version added one here, which put ``n_iterations - 1`` a full
+    iteration beyond anything the render produces: the arc never reached
+    ``progress == 1.0`` in output, and a preview scrubbed to maximum decay
+    auditioned an iteration that does not exist in any render."""
     xfade = min(int(crossfade_ms / 1000.0 * sr), loop_frames // 2)
     stride = max(loop_frames - xfade, 1)
-    n_iter = int(np.ceil((target_frames - xfade) / stride)) + 1
+    n_iter = int(np.ceil((target_frames - xfade) / stride))
     return max(n_iter, 1), xfade
 
 

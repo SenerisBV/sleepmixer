@@ -71,11 +71,14 @@ for why that trade was made deliberately.
   each stage can report its own internal progress without knowing where it
   sits in the whole pipeline; `pipeline.run_pipeline` uses it to give each
   stem an even slice of the 0.15–0.85 range. `CancelToken` is a flag with a
-  `check()` that raises `Cancelled`; call sites that do meaningful-length work
-  in a loop (the per-stem loop in `run_pipeline`, and the per-iteration loop
-  in `build_disintegrating_stream`) poll it between iterations because that is
-  where abandoning the work is safe — mid-iteration cancellation is not
-  supported, only between-iteration cancellation.
+  `check()` that raises `Cancelled`. It is polled at three points, listed in
+  full under "Progress and cancellation contract" below; the one that carries
+  the weight is inside `build_disintegrating_stream`'s per-iteration loop,
+  because that is where a long render spends its time. Polling happens
+  *between* iterations, since that is where abandoning the work is safe —
+  mid-iteration cancellation is not supported. Note that `run_pipeline`'s
+  per-stem loop does **not** itself call `cancel.check()`; it threads the
+  token down into `_process_stem` instead.
 
 - **`session.py`** — `RenderSession` holds one open song across a sequence of
   interactive edits. See the staging table below.
@@ -89,6 +92,27 @@ for why that trade was made deliberately.
   `progress` fraction to a concrete `(iteration, n_iterations)` pair using the
   same `disintegration.plan_iterations` the batch renderer uses, so the two
   paths agree on which repetition a given point in the arc corresponds to.
+  `_reverbed_window` handles the one part of a window that cannot be computed
+  from the window alone — see "Reverb on a window that has to loop" below.
+
+- **`effects.py`** — reverb, via pedalboard when installed and a numpy
+  Schroeder fallback otherwise. `reverb_dry_offset(cfg, sr)` reports how far
+  `apply_reverb` displaces the dry signal, *measured* by pushing an impulse
+  through the same call path with the wet level zeroed, and cached per
+  `(sr, predelay_ms)`. It has to be measured rather than derived because the
+  backends disagree: `_pedalboard_reverb` pre-delays the whole buffer before
+  the plugin sees it, so dry and wet both come back shifted, while
+  `_schroeder_reverb` pre-delays only the wet path. Anything that reverbs a
+  fragment and wants the fragment back needs this number.
+
+- **`audio.py`** — the `AudioBuffer` container, file I/O, resampling,
+  normalization, and `sum_buffers`, the one implementation of "sum these stems
+  at the widest channel count". `pipeline.run_pipeline` and
+  `session.RenderSession` both derive the loop point from that sum; two
+  implementations that merely happen to agree would let the preview audition a
+  different part of the song than the render produces, which is the same
+  failure class `config.plan_stem_configs` exists to prevent for stem
+  selection.
 
 - **`disintegration.py`** — the decay engine itself: lowpass sweep, spectral
   holes, dropouts, amplitude fade, and rising noise floor, each interpolated
@@ -176,6 +200,21 @@ and reverb are deliberately outside this table — they're not memoized at all,
 because `preview.render_window` applies them fresh on every call as the thing
 being auditioned.
 
+### Mutating a held session's config
+
+Only some config changes go through `update_config`, and the split is not
+obvious from the outside, so it is stated on the `RenderSession` docstring as
+well as here. `render_window` reads decay, gain, and reverb send *live* off
+`session.config` — nothing downstream of them is cached — so mutating those in
+place is both safe and the intended usage; the existing tests rely on it.
+`loop`, `tempo`, and `separation_model` are the opposite: they determine the
+memoized stages, and assigning one directly leaves the caches holding results
+computed from the old value. There is no error. The preview simply keeps
+showing the previous time-stretch, which is precisely the failure this class
+exists to prevent. A server applying edits to long-lived sessions is where
+this bites, so it should build a new `MixConfig` and call `update_config`
+unless it knows the edit is confined to the safe set.
+
 This staging is coarser than it could be: `config.loop`'s cache key is the
 whole `LoopConfig`, so changing only `crossfade_ms` (which only affects
 `make_seamless`, not `find_loop`) invalidates the loop point too, paying a
@@ -202,6 +241,30 @@ practice: because it sits inside the loop doing the actual expensive work, a
 long render can be interrupted promptly *within* a stem, not merely between
 stages, without leaving corrupted output — each iteration's contribution is a
 complete, independent unit of work.
+
+## Reverb on a window that has to loop
+
+The UI plays a preview window on a loop while you tune, which constrains what
+`render_window(..., reverb=True)` may return more than it first appears.
+Reverbing one iteration on its own violates both constraints at once:
+`effects._predelay` *prepends* the pre-delay, so the buffer comes back longer
+than the loop it came from and opening with silence — a gap and a click on
+every cycle.
+
+Both symptoms come from the same cause, reverbing a fragment as though nothing
+preceded it, so `preview._reverbed_window` gives it something that did. The
+preceding iteration is rendered as leading context, reverbed together with the
+window, and the window cut back out at `effects.reverb_dry_offset`. The window
+is then exactly one loop long, its dry signal is sample-aligned with the
+`reverb=False` window, and what fills the pre-delay region is the previous
+iteration's reverb tail — the bleed a real render has and an isolated window
+does not. Iteration 0 genuinely has nothing before it and so gets no context;
+the trim still removes the leading silence.
+
+One approximation remains and is not expected to close: the context is
+concatenated where a real render crossfades consecutive iterations over
+`cycle_crossfade_ms`, so the reverb hears a join the render does not. A wet
+window is representative; a dry one is exact. See `docs/project-state.md`.
 
 ## Where data lives
 

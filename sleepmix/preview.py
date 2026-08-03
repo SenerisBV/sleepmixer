@@ -8,15 +8,20 @@ is the whole basis of interactive tuning here.
 A preview is always a *specific iteration*: the one nearest the requested point
 in the arc. That makes it exactly reproducible against the corresponding part of
 a full render (pre-reverb), rather than an approximation of it.
+
+The window is also meant to be *played on loop* by the UI while you tune, which
+constrains reverb: a window is exactly one loop iteration long, no longer, and
+must not open with a block of silence, or every cycle would gap and click. See
+``_reverbed_window``.
 """
 from __future__ import annotations
 
 import numpy as np
 
 from .audio import AudioBuffer, silence
-from .config import plan_stem_configs
+from .config import MixConfig, StemConfig, plan_stem_configs
 from .disintegration import decayed_iteration, plan_iterations
-from .effects import apply_reverb
+from .effects import apply_reverb, reverb_dry_offset
 from .session import RenderSession
 from .util import db_to_amp
 
@@ -66,7 +71,7 @@ def render_window(
         sr = loop.sr
         chunk = decayed_iteration(loop, iteration, n_iter, sc.decay, cfg.seed, sc.name)
         if reverb:
-            chunk = apply_reverb(chunk, cfg.reverb, wet_scale=sc.reverb_send)
+            chunk = _reverbed_window(loop, chunk, iteration, n_iter, sc, cfg)
         if abs(sc.gain_db) > 1e-6:
             chunk = AudioBuffer(chunk.data * db_to_amp(sc.gain_db), chunk.sr)
         x = chunk.with_channels(cfg.output.channels).data
@@ -82,3 +87,60 @@ def render_window(
         return silence(1, cfg.output.channels, sr)
 
     return AudioBuffer(acc, sr)
+
+
+def _reverbed_window(
+    loop: AudioBuffer,
+    chunk: AudioBuffer,
+    iteration: int,
+    n_iterations: int,
+    sc: StemConfig,
+    cfg: MixConfig,
+) -> AudioBuffer:
+    """Reverb one iteration and hand back a window that still loops.
+
+    Reverbing the iteration on its own is the obvious thing and it is wrong in
+    two ways at once, both fatal to the UI's use for this buffer — playing it on
+    a loop. ``effects._predelay`` *prepends* the pre-delay (40ms by default), so
+    the result is longer than the loop and opens with silence: a gap and a click
+    on every cycle.
+
+    Both follow from reverbing a fragment as though nothing preceded it. So
+    something does: the preceding iteration is rendered as leading context,
+    reverbed together with this one, and then this one is cut back out. What
+    lands in the pre-delay region is then the previous iteration's reverb
+    tail — the bleed a real render has and an isolated window does not, which
+    is what the spec asked for. Iteration 0 genuinely has nothing before it, so
+    it gets no context; the trim still removes the leading silence.
+
+    The cut point comes from ``effects.reverb_dry_offset``, measured against
+    whichever backend is installed, so the returned frames carry this
+    iteration's dry signal sample-aligned with the ``reverb=False`` window.
+    The result is exactly ``chunk.n_frames`` long, always.
+
+    Known approximation: the context is *concatenated*, where a real render
+    crossfades consecutive iterations over ``cycle_crossfade_ms``. The reverb
+    therefore hears a small discontinuity at the join that the render does not.
+    The window remains representative rather than bit-identical with reverb on,
+    as ``docs/project-state.md`` records.
+    """
+    n = chunk.n_frames
+    if iteration > 0:
+        context = decayed_iteration(
+            loop, iteration - 1, n_iterations, sc.decay, cfg.seed, sc.name).data
+    else:
+        context = np.zeros((0, chunk.n_channels), dtype=np.float32)
+
+    joined = AudioBuffer(np.concatenate([context, chunk.data], axis=0), chunk.sr)
+    wet = apply_reverb(joined, cfg.reverb, wet_scale=sc.reverb_send)
+
+    start = context.shape[0] + reverb_dry_offset(cfg.reverb, chunk.sr)
+    out = wet.data[start:start + n]
+    if out.shape[0] < n:
+        # No backend should come up short — both return ``frames + predelay`` —
+        # but a window one frame shy of the loop would click, so pad rather than
+        # trust it.
+        out = np.concatenate(
+            [out, np.zeros((n - out.shape[0], out.shape[1]), dtype=np.float32)],
+            axis=0)
+    return AudioBuffer(out, chunk.sr)

@@ -45,6 +45,21 @@ given seed, just via a different derivation). If you have renders from before
 this branch that you need to reproduce exactly, they cannot be — regenerate
 them on this code if that matters.
 
+**Render output changed a second time, later in this same branch.**
+`disintegration.plan_iterations` was returning two more iterations than
+`build_disintegrating_stream` actually executes, so the decay arc stopped
+short — a 20-minute render off a 9-second loop reached progress 0.9932 and
+never got to the configured `*_end` values at all, and
+`preview.preview_iteration_index(session, 1.0)` pointed at an iteration no
+render produces. Dropping the stray `+ 1` fixed both, and in doing so shifted
+every render's iteration count by one and therefore its whole decay curve
+slightly. This is a *second*, separate break in output compatibility, and it
+means renders are not comparable across this branch's own history either —
+output from an early commit on `feat/core-hooks` will not match output from
+its tip. Byte-reproducibility was already deliberately forfeited above, so
+this was accepted rather than worked around; but if you are diffing renders to
+investigate something else, check which commit produced them first.
+
 **A preview window is bit-identical to the corresponding render iteration
 pre-reverb, but only representative of it with reverb on.** `render_window`
 applies each stem's decay and reverb (with that stem's `reverb_send`) in the
@@ -53,11 +68,22 @@ at the same iteration produce identical samples. With reverb enabled they
 diverge slightly, because a preview window is rendered in isolation and has
 no reverb tail bleeding in from the *previous* iteration — a real render's
 reverb is a continuous process across the whole stream, a preview's is not.
-This was found and partially fixed during Task 9's review (see the addendum
-in `.superpowers/sdd/2026-08-03-core-hooks/task-10-brief.md`); the remaining
-tail-bleed gap is inherent to rendering a window in isolation and is not
-expected to close without either rendering more context around the window or
-approximating the tail, neither of which has been done.
+This was found and partially fixed during Task 9's review (see the addendum at
+the end of `docs/superpowers/plans/2026-08-03-core-hooks.md`).
+
+The tail-bleed gap has since been closed as far as it usefully can be.
+`preview._reverbed_window` renders the *preceding* iteration as leading
+context, reverbs it together with the window, and cuts the window back out at
+an offset measured from the installed backend
+(`effects.reverb_dry_offset`). So a wet window is now exactly as long as the
+loop and opens with the previous iteration's reverb tail rather than the
+pre-delay's silence — both of which matter because the UI plays this buffer on
+a loop, where a longer-than-the-loop buffer that starts with 40ms of nothing
+gaps and clicks every cycle. What remains is one approximation: the context is
+concatenated, where a real render crossfades consecutive iterations over
+`cycle_crossfade_ms`, so the reverb hears a join the render does not. A wet
+window is therefore still representative rather than bit-identical; a dry one
+remains exact.
 
 **The separation cache moved.** It used to live at `.sleepmix_cache/`
 relative to the working directory; it now lives under
@@ -111,24 +137,12 @@ fixing in this branch.
   would reach it. Needs a validation point before that UI exists, not
   necessarily in this function.
 
-- **`tests/test_pipeline.py::test_full_render_fallback` invokes real Demucs**
-  (~10s per run) despite its name implying it exercises the no-ML fallback
-  path. It predates the `stub_separation` fixture added for this branch's
-  other tests and was not migrated to it.
-
 - **`test_reporter_receives_ordered_monotonic_events` cannot fail.**
   `ProgressReporter.emit` clamps its own output to be monotonic
   (`docs/architecture.md`), so this test is asserting a property the code
   under test enforces on itself — a regression in `pipeline.py`'s per-stem
   `stage_range` arithmetic that produced out-of-order *inputs* to `emit`
   would be silently absorbed by the clamp and this test would still pass.
-
-- **`test_cancel_aborts_the_render` cancels on the first progress event.**
-  That trips the post-separation check in `pipeline.run_pipeline`
-  (`pipeline.py:49-50`) before any stem processing starts. It never reaches
-  the per-iteration cancel check inside
-  `disintegration.build_disintegrating_stream`, so a regression in that
-  check specifically could go undetected by this test.
 
 - **`analysis._estimate_tempo` and `_librosa_loop` each have their own
   `librosa.beat.beat_track` call site.** The two paths are mutually exclusive
@@ -143,9 +157,9 @@ fixing in this branch.
   directly on `MixConfig` rather than in one of the nested per-section
   dataclasses `config_schema()` was designed around.
 
-- **`session._reference()` imports `numpy` locally**, inside the method,
-  unlike every other module in this codebase, which imports `numpy` at the
-  top. numpy is a required dependency, not one of the lazily-imported
-  optional ones (Demucs, librosa, Rubber Band, pedalboard) that this
-  codebase's graceful-degradation policy exists for — so this local import
-  doesn't serve that policy, it's just inconsistent.
+- **`MixConfig` has no validation layer.** `config_schema()` publishes bounds
+  (`min`/`max`/`step`/`choices`) for every field, but nothing enforces them —
+  they are advisory metadata for a UI to build controls from. A config loaded
+  from YAML with `tempo.speed: 50` is accepted and rendered. A UI that trusts
+  its own controls is fine; an HTTP endpoint accepting arbitrary JSON is not,
+  so validation belongs with Plan 2's server.

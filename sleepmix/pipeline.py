@@ -11,7 +11,8 @@ from typing import Callable
 import numpy as np
 
 from .analysis import find_loop, slice_loop
-from .audio import AudioBuffer, normalize_peak, resample, save_audio, silence
+from .audio import (
+    AudioBuffer, normalize_peak, resample, save_audio, silence, sum_buffers)
 from .config import MixConfig, StemConfig, plan_stem_configs
 from .disintegration import build_disintegrating_stream
 from .effects import apply_reverb
@@ -50,7 +51,7 @@ def run_pipeline(
         cancel.check()
 
     reporter.emit("loop", "Finding loop points…", 0.10)
-    reference = _sum_buffers(list(stems.values()))
+    reference = sum_buffers(list(stems.values()))
     loop_point = find_loop(reference, config.loop)
     reporter.emit("loop",
                   f"  tempo≈{loop_point.tempo:.0f} BPM, "
@@ -117,14 +118,9 @@ def _plan_jobs(stems: dict[str, AudioBuffer], config: MixConfig) -> list[tuple[A
 
 
 # -- buffer math --------------------------------------------------------
-def _sum_buffers(buffers: list[AudioBuffer]) -> AudioBuffer:
-    n = max(b.n_frames for b in buffers)
-    ch = max(b.n_channels for b in buffers)
-    sr = buffers[0].sr
-    acc = np.zeros((n, ch), dtype=np.float32)
-    for b in buffers:
-        acc = _accumulate(acc, b.with_channels(ch).data)
-    return AudioBuffer(acc, sr)
+# Summing stems into a reference signal is not here: it lives in
+# ``audio.sum_buffers``, because ``session.RenderSession`` must derive its loop
+# point from the identical computation. See that function.
 
 
 def _add(base: AudioBuffer, other: AudioBuffer) -> AudioBuffer:

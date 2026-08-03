@@ -2,14 +2,24 @@
 
 Uses Spotify's ``pedalboard`` (studio-grade reverb) when available, and falls
 back to a small numpy Schroeder reverb so the pipeline still works without it.
+
+Both backends lengthen their input by the pre-delay, but they do *not* agree on
+where the dry signal lands in the result — see ``reverb_dry_offset``, which
+measures the difference rather than assuming either one.
 """
 from __future__ import annotations
+
+from dataclasses import replace
 
 import numpy as np
 
 from .audio import AudioBuffer
 from .config import ReverbConfig
 from .util import db_to_amp
+
+# Keyed by (sr, predelay_ms): the offset depends on the installed backend and
+# the pre-delay, on nothing else, and measuring it costs a real reverb call.
+_DRY_OFFSET_CACHE: dict[tuple[int, float], int] = {}
 
 
 def apply_reverb(buf: AudioBuffer, cfg: ReverbConfig, wet_scale: float = 1.0) -> AudioBuffer:
@@ -19,6 +29,42 @@ def apply_reverb(buf: AudioBuffer, cfg: ReverbConfig, wet_scale: float = 1.0) ->
         return _pedalboard_reverb(buf, cfg, wet)
     except Exception:
         return _schroeder_reverb(buf, cfg, wet)
+
+
+def reverb_dry_offset(cfg: ReverbConfig, sr: int) -> int:
+    """Frames by which ``apply_reverb`` delays the *dry* signal, measured.
+
+    Anything that reverbs a fragment and then wants the fragment back — the
+    preview's window rendering — has to know where the input ended up in the
+    output. That cannot be derived on paper, because the two backends disagree:
+    ``_pedalboard_reverb`` pre-delays the buffer before handing it to the
+    plugin, so dry *and* wet both come back shifted by the pre-delay, while
+    ``_schroeder_reverb`` pre-delays only the wet path and mixes the dry in
+    unshifted. Measured on pedalboard 0.9.24 at 22.05kHz with a 40ms pre-delay:
+    882 frames for pedalboard, 0 for Schroeder.
+
+    So it is measured, once per ``(sr, predelay_ms)``, by pushing an impulse
+    through the *same* ``apply_reverb`` the caller will use — with the wet path
+    silenced so only the dry contribution remains — and finding where it lands.
+    Probing through ``apply_reverb`` rather than a chosen backend is deliberate:
+    whichever one the real call falls through to is the one measured.
+    """
+    key = (int(sr), float(cfg.predelay_ms))
+    cached = _DRY_OFFSET_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    d = max(int(cfg.predelay_ms / 1000.0 * sr), 0)
+    n = max(2 * d + 64, 64)
+    imp = np.zeros((n, 1), dtype=np.float32)
+    imp[0, 0] = 1.0
+    # dry=1/wet=0 isolates the dry path; the caller's dry/wet levels are
+    # irrelevant to *where* it lands.
+    probe = replace(cfg, dry=1.0, wet=0.0)
+    out = apply_reverb(AudioBuffer(imp, sr), probe, wet_scale=0.0)
+    offset = int(np.argmax(np.abs(out.data[:, 0])))
+    _DRY_OFFSET_CACHE[key] = offset
+    return offset
 
 
 def _pedalboard_reverb(buf: AudioBuffer, cfg: ReverbConfig, wet: float) -> AudioBuffer:

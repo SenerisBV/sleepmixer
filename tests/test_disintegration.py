@@ -1,5 +1,6 @@
 import numpy as np
 
+from sleepmix import disintegration
 from sleepmix.audio import AudioBuffer
 from sleepmix.config import StemDecayConfig
 from sleepmix.disintegration import (
@@ -80,6 +81,47 @@ def test_iteration_rng_differs_across_iteration_stem_and_seed():
     assert not np.array_equal(base, iteration_rng(7, "vocals", 4).standard_normal(8))
     assert not np.array_equal(base, iteration_rng(7, "bass", 3).standard_normal(8))
     assert not np.array_equal(base, iteration_rng(8, "vocals", 3).standard_normal(8))
+
+
+def test_planned_iterations_are_all_executed(monkeypatch):
+    """``plan_iterations`` counts iterations the renderer runs, not a bound.
+
+    It used to return two more than ``build_disintegrating_stream`` executes,
+    which had two consequences that only show up from outside this module: the
+    arc never reached ``progress == 1.0`` in output, so a stem never actually
+    reached its configured ``*_end`` values; and
+    ``preview.preview_iteration_index(session, 1.0)`` returned ``n_iter - 1``,
+    an iteration no render produces — so dragging a UI scrubber to maximum
+    decay auditioned something that does not exist.
+
+    Reasoning about the loop's break condition is what got this wrong in the
+    first place, so this observes the executed iterations instead.
+    """
+    executed = []
+
+    def spy(loop, iteration, n_iterations, decay, seed, stem):
+        executed.append(iteration / max(n_iterations - 1, 1))
+        return loop.copy()
+
+    monkeypatch.setattr(disintegration, "decayed_iteration", spy)
+
+    # (loop seconds, target minutes) — short, medium and realistic-length arcs.
+    for loop_secs, target_min in ((0.5, 0.05), (6.0, 2.0), (9.0, 20.0)):
+        loop = _tone(220, secs=loop_secs)
+        target = int(target_min * 60 * loop.sr)
+        xfade_ms = 800.0
+        n_iter, _ = plan_iterations(loop.n_frames, target, xfade_ms, loop.sr)
+
+        executed.clear()
+        build_disintegrating_stream(
+            loop, target, StemDecayConfig(), xfade_ms, seed=0, stem="mix")
+
+        assert len(executed) == n_iter, (
+            f"loop={loop_secs}s target={target_min}min: planned {n_iter} "
+            f"iterations, executed {len(executed)}")
+        assert max(executed) == 1.0, (
+            f"loop={loop_secs}s target={target_min}min: the arc stops at "
+            f"progress {max(executed):.4f}, never reaching the *_end values")
 
 
 def test_stream_iteration_matches_decayed_iteration():

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from .analysis import LoopPoint, find_loop, slice_loop
-from .audio import AudioBuffer
+from .audio import AudioBuffer, sum_buffers
 from .config import MixConfig
 from .looping import make_seamless
 from .paths import cache_dir
@@ -23,6 +23,35 @@ from .timestretch import slow_and_pitch
 
 
 class RenderSession:
+    """One open song, with the expensive stages before decay held in memory.
+
+    **Mutation contract — read this before editing a held session's config.**
+
+    ``self.config`` is a plain attribute and callers do reach into it directly.
+    Whether that is safe depends entirely on *which* field you touch, because
+    only some of them feed the memoized stages:
+
+    - **Safe to mutate in place on ``session.config``:** anything a preview
+      recomputes from scratch on every call — ``stems`` (including each
+      ``StemConfig``'s ``decay``, ``gain_db``, ``reverb_send`` and ``enabled``),
+      ``reverb``, ``soundbed``, ``output``, and ``seed``. Nothing downstream is
+      cached from these, so ``render_window`` picks the new value up
+      immediately. The existing tests rely on exactly this.
+
+    - **Must go through :meth:`update_config`:** ``loop``, ``tempo``, and
+      ``separation_model``. These determine ``loop_point()``, the
+      ``prepared_loop()`` cache, and ``stems()`` respectively. Assigning them
+      directly leaves the caches populated with results computed from the *old*
+      values, and there is no error — the preview simply keeps showing the
+      previous time-stretch or the previous loop region, silently, which is the
+      one failure this whole class exists to prevent.
+
+    A server applying config edits to a long-lived session should therefore
+    build the new ``MixConfig`` and hand it to :meth:`update_config` rather than
+    patching fields onto the held one, unless it knows the edit is confined to
+    the safe set.
+    """
+
     def __init__(self, input_path: str, config: MixConfig,
                  separate_fn=None) -> None:
         self.input_path = input_path
@@ -81,17 +110,11 @@ class RenderSession:
 
     # -- internals ------------------------------------------------------
     def _reference(self) -> AudioBuffer:
-        """Sum of all stems — what loop detection runs against."""
-        import numpy as np
+        """Sum of all stems — what loop detection runs against.
 
-        buffers = list(self.stems().values())
-        n = max(b.n_frames for b in buffers)
-        ch = max(b.n_channels for b in buffers)
-        acc = np.zeros((n, ch), dtype=np.float32)
-        for b in buffers:
-            x = b.with_channels(ch).data
-            acc[:x.shape[0]] += x
-        return AudioBuffer(acc, buffers[0].sr)
+        Shares ``audio.sum_buffers`` with ``pipeline.run_pipeline`` so the loop
+        point a session derives cannot drift from the one a render derives."""
+        return sum_buffers(list(self.stems().values()))
 
     @staticmethod
     def _key(section) -> tuple:

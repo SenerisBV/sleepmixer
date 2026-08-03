@@ -41,11 +41,20 @@ def fake_separate(input_path, model="htdemucs_ft", cache_dir=None):
 def stub_separation(monkeypatch):
     """Replace Demucs wherever the pipeline reaches for it.
 
-    ``sleepmix/pipeline.py`` does ``from .separation import separate``, so the
-    name must be patched on the *pipeline* module, not on ``sleepmix.separation``.
+    Both ``sleepmix/pipeline.py`` and ``sleepmix/session.py`` do
+    ``from .separation import separate``, which binds the name on each of those
+    modules — so patching ``sleepmix.separation.separate`` alone would miss
+    both. Every module that holds its own reference is patched here, because
+    the promise in this docstring is one a caller will rely on: a
+    ``RenderSession(path, cfg)`` constructed without an explicit
+    ``separate_fn`` would otherwise quietly run real Demucs inside a test that
+    took this fixture and believed itself isolated.
+
     Returns the stub so tests can also inject it directly (``RenderSession``
     takes a ``separate_fn``)."""
     import sleepmix.pipeline
+    import sleepmix.session
 
     monkeypatch.setattr(sleepmix.pipeline, "separate", fake_separate)
+    monkeypatch.setattr(sleepmix.session, "separate", fake_separate)
     return fake_separate
