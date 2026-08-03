@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+numpy = ">=1.24"
+scipy = ">=1.10"
+soundfile = ">=0.12"
+pedalboard = ">=0.9"
+click = ">=8.1"
+pyyaml = ">=6.0"
+sleepmix = {extras = ["all"], path = ".", editable = true}
+
+[dev-packages]
+pytest = ">=7.4"
+
+[requires]
+python_version = "3.14"
