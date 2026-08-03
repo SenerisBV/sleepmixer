@@ -5,6 +5,7 @@ import click
 
 from .config import MixConfig
 from .pipeline import run_pipeline
+from .progress import ProgressReporter, echo_sink
 
 
 @click.group()
@@ -38,7 +39,8 @@ def render(input_path, output_path, config_path, duration, speed, seed, soundbed
         cfg.seed = seed
     if soundbed is not None:
         cfg.soundbed.enabled = soundbed
-    run_pipeline(input_path, cfg, output_path, progress=click.echo)
+    run_pipeline(input_path, cfg, output_path,
+                 reporter=ProgressReporter(echo_sink(click.echo)))
 
 
 @main.command("init-config")

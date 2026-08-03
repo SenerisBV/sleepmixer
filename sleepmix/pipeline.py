@@ -17,6 +17,7 @@ from .disintegration import build_disintegrating_stream
 from .effects import apply_reverb
 from .looping import make_seamless
 from .paths import cache_dir
+from .progress import CancelToken, ProgressReporter
 from .separation import separate
 from .soundbed import build_soundbed
 from .timestretch import slow_and_pitch
@@ -30,41 +31,59 @@ def run_pipeline(
     config: MixConfig,
     output_path: str,
     progress: Progress = print,
+    reporter: ProgressReporter | None = None,
+    cancel: CancelToken | None = None,
 ) -> AudioBuffer:
+    """Render ``input_path`` to ``output_path``.
+
+    ``reporter`` supersedes ``progress`` when given; ``progress`` remains for
+    callers that just want printed sentences."""
+    if reporter is None:
+        reporter = ProgressReporter(
+            lambda e: progress(e.message) if progress else None)
     rng = np.random.default_rng(config.seed)
 
-    progress("Separating stems…")
+    reporter.emit("separate", "Separating stems…", 0.0)
     stems = separate(input_path, config.separation_model, cache_dir=str(cache_dir()))
     work_sr = next(iter(stems.values())).sr
+    if cancel is not None:
+        cancel.check()
 
-    progress("Finding loop points…")
+    reporter.emit("loop", "Finding loop points…", 0.10)
     reference = _sum_buffers(list(stems.values()))
     loop_point = find_loop(reference, config.loop)
-    progress(f"  tempo≈{loop_point.tempo:.0f} BPM, "
-             f"loop={ (loop_point.end-loop_point.start)/work_sr:.1f}s")
+    reporter.emit("loop",
+                  f"  tempo≈{loop_point.tempo:.0f} BPM, "
+                  f"loop={(loop_point.end-loop_point.start)/work_sr:.1f}s", 0.15)
 
     target_frames = int(config.output.duration_min * 60 * work_sr)
     jobs = _plan_jobs(stems, config)
 
     mix = silence(target_frames, config.output.channels, work_sr)
-    for buf, sc in jobs:
-        progress(f"Processing stem '{sc.name}'…")
-        stream = _process_stem(buf, sc, loop_point, config, target_frames)
-        mix = _add(mix, stream)
+    # Stems occupy the 0.15–0.85 slice of overall progress.
+    for idx, (buf, sc) in enumerate(jobs):
+        lo = 0.15 + 0.70 * (idx / len(jobs))
+        hi = 0.15 + 0.70 * ((idx + 1) / len(jobs))
+        with reporter.stage_range(lo, hi):
+            reporter.emit("stem", f"Processing stem '{sc.name}'…", 0.0, stem=sc.name)
+            stream = _process_stem(buf, sc, loop_point, config, target_frames, cancel)
+            mix = _add(mix, stream)
 
     if config.soundbed.enabled:
-        progress("Adding sound bed…")
+        reporter.emit("soundbed", "Adding sound bed…", 0.88)
         bed = build_soundbed(target_frames / work_sr, work_sr, config.soundbed, rng)
         mix = _add(mix, bed.with_channels(config.output.channels))
 
-    progress("Mastering…")
+    if cancel is not None:
+        cancel.check()
+    reporter.emit("master", "Mastering…", 0.92)
     if mix.sr != config.output.sample_rate:
         mix = resample(mix, config.output.sample_rate)
     mix = _apply_fades(mix, config.output.fade_in_s, config.output.fade_out_s)
     mix = normalize_peak(mix, config.output.peak_db)
 
     save_audio(mix, output_path)
-    progress(f"Wrote {output_path} ({mix.duration/60:.1f} min)")
+    reporter.emit("master", f"Wrote {output_path} ({mix.duration/60:.1f} min)", 1.0)
     return mix
 
 
@@ -74,13 +93,14 @@ def _process_stem(
     loop_point,
     config: MixConfig,
     target_frames: int,
+    cancel=None,
 ) -> AudioBuffer:
     loop = slice_loop(buf, loop_point)
     loop = make_seamless(loop, config.loop.crossfade_ms)
     loop = slow_and_pitch(loop, config.tempo.speed, config.tempo.pitch_semitones)
     stream = build_disintegrating_stream(
         loop, target_frames, sc.decay, config.output.cycle_crossfade_ms,
-        config.seed, sc.name)
+        config.seed, sc.name, cancel=cancel)
     stream = apply_reverb(stream, config.reverb, wet_scale=sc.reverb_send)
     if abs(sc.gain_db) > 1e-6:
         stream = AudioBuffer(stream.data * db_to_amp(sc.gain_db), stream.sr)

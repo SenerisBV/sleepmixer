@@ -144,6 +144,7 @@ def build_disintegrating_stream(
     crossfade_ms: float,
     seed: int,
     stem: str = "mix",
+    cancel=None,
 ) -> AudioBuffer:
     """Repeat ``loop`` until ``target_frames`` is reached, degrading each pass.
 
@@ -159,6 +160,8 @@ def build_disintegrating_stream(
     out = np.zeros((target_frames + loop_len, ch), dtype=np.float32)
     pos = 0
     for i in range(n_iter):
+        if cancel is not None:
+            cancel.check()
         chunk = decayed_iteration(loop, i, n_iter, decay, seed, stem).data
         if pos == 0:
             out[:loop_len] += chunk

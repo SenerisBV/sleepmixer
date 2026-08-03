@@ -11,3 +11,41 @@ import pytest
 def isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "sleepmix-data"))
     yield
+
+
+import numpy as np
+
+from sleepmix.audio import AudioBuffer, load_audio
+
+STUB_STEM_NAMES = ("vocals", "drums", "bass", "other")
+
+
+def fake_separate(input_path, model="htdemucs_ft", cache_dir=None):
+    """A stand-in for Demucs.
+
+    Real separation takes about ten seconds per call and the on-disk cache keys
+    on file path, size and mtime — so every test using a fresh ``tmp_path`` song
+    would miss the cache and run the model for real. These stems are synthetic,
+    deterministic, and distinct from each other so solo/sum behaviour is
+    observable."""
+    src = load_audio(str(input_path))
+    t = np.arange(src.n_frames) / src.sr
+    stems = {}
+    for i, name in enumerate(STUB_STEM_NAMES):
+        y = (0.2 * np.sin(2 * np.pi * 110 * (i + 1) * t)).astype(np.float32)
+        stems[name] = AudioBuffer(np.stack([y, y], axis=1), src.sr)
+    return stems
+
+
+@pytest.fixture
+def stub_separation(monkeypatch):
+    """Replace Demucs wherever the pipeline reaches for it.
+
+    ``sleepmix/pipeline.py`` does ``from .separation import separate``, so the
+    name must be patched on the *pipeline* module, not on ``sleepmix.separation``.
+    Returns the stub so tests can also inject it directly (``RenderSession``
+    takes a ``separate_fn``)."""
+    import sleepmix.pipeline
+
+    monkeypatch.setattr(sleepmix.pipeline, "separate", fake_separate)
+    return fake_separate
