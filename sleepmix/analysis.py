@@ -22,11 +22,39 @@ class LoopPoint:
 
 
 def find_loop(buf: AudioBuffer, cfg: LoopConfig) -> LoopPoint:
-    """Pick a ``cfg.bars``-bar loop from the stable middle of the track."""
+    """Pick a ``cfg.bars``-bar loop from the stable middle of the track.
+
+    An explicit ``start_s``/``end_s`` pair short-circuits detection entirely —
+    that is how the UI hands back a region you dragged on the waveform."""
+    explicit = _explicit_loop(buf, cfg)
+    if explicit is not None:
+        return explicit
     try:
         return _librosa_loop(buf, cfg)
     except Exception:
         return _fixed_tempo_loop(buf, cfg)
+
+
+def _explicit_loop(buf: AudioBuffer, cfg: LoopConfig) -> LoopPoint | None:
+    if cfg.start_s is None or cfg.end_s is None:
+        return None
+    start = int(max(cfg.start_s, 0.0) * buf.sr)
+    end = int(min(cfg.end_s * buf.sr, buf.n_frames))
+    start = min(start, max(buf.n_frames - 1, 0))
+    if end <= start:
+        return None
+    return LoopPoint(start=start, end=end, tempo=_estimate_tempo(buf))
+
+
+def _estimate_tempo(buf: AudioBuffer) -> float:
+    """Best-effort BPM, for display only — never used to place the loop here."""
+    try:
+        import librosa
+
+        tempo, _ = librosa.beat.beat_track(y=buf.to_mono().data[:, 0], sr=buf.sr)
+        return float(np.atleast_1d(tempo)[0])
+    except Exception:
+        return 120.0
 
 
 def _librosa_loop(buf: AudioBuffer, cfg: LoopConfig) -> LoopPoint:

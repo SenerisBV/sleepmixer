@@ -98,6 +98,14 @@ class LoopConfig:
         "label": "Search to", "min": 0.0, "max": 1.0, "step": 0.01,
         "help": "Fraction of the track to stop searching for a loop at, "
                 "avoiding the outro."})
+    # Explicit loop region in seconds. Both None (the default) means auto-detect.
+    # Set by the UI when you drag the loop handles on the waveform.
+    start_s: float | None = field(default=None, metadata={
+        "label": "Loop start", "unit": "s", "min": 0.0,
+        "help": "Leave empty to auto-detect a beat-aligned loop."})
+    end_s: float | None = field(default=None, metadata={
+        "label": "Loop end", "unit": "s", "min": 0.0,
+        "help": "Leave empty to auto-detect a beat-aligned loop."})
 
 
 @dataclass
