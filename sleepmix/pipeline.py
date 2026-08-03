@@ -12,7 +12,7 @@ import numpy as np
 
 from .analysis import find_loop, slice_loop
 from .audio import AudioBuffer, normalize_peak, resample, save_audio, silence
-from .config import MixConfig, StemConfig
+from .config import MixConfig, StemConfig, plan_stem_configs
 from .disintegration import build_disintegrating_stream
 from .effects import apply_reverb
 from .looping import make_seamless
@@ -110,16 +110,10 @@ def _process_stem(
 def _plan_jobs(stems: dict[str, AudioBuffer], config: MixConfig) -> list[tuple[AudioBuffer, StemConfig]]:
     """Match configured stems to the stems we actually have.
 
-    Falls back to processing whatever stems exist (e.g. a single 'mix' stem when
-    Demucs is unavailable) with default decay settings."""
-    jobs = [
-        (stems[sc.name], sc)
-        for sc in config.stems
-        if sc.enabled and sc.name in stems
-    ]
-    if not jobs:
-        jobs = [(buf, StemConfig(name=name)) for name, buf in stems.items()]
-    return jobs
+    Selection lives in ``config.plan_stem_configs`` so the preview path cannot
+    drift from what the renderer actually processes."""
+    return [(stems[sc.name], sc)
+            for sc in plan_stem_configs(list(stems.keys()), config)]
 
 
 # -- buffer math --------------------------------------------------------

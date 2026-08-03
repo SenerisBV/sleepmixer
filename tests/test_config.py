@@ -1,6 +1,6 @@
 import importlib.resources as res
 
-from sleepmix.config import MixConfig, config_schema
+from sleepmix.config import MixConfig, config_schema, plan_stem_configs
 
 
 def test_defaults_are_valid():
@@ -87,3 +87,14 @@ def test_metadata_does_not_change_defaults_or_yaml_loading(tmp_path):
     cfg = MixConfig.from_yaml(str(p))
     assert cfg.tempo.speed == 0.5
     assert cfg.tempo.pitch_semitones == -2.0
+
+
+def test_plan_stem_configs_selects_enabled_configured_stems():
+    planned = plan_stem_configs(["vocals", "drums", "bass", "other"], MixConfig())
+    assert [sc.name for sc in planned] == ["vocals", "other", "bass"]
+
+
+def test_plan_stem_configs_falls_back_only_when_nothing_matches():
+    planned = plan_stem_configs(["mix"], MixConfig())
+    assert [sc.name for sc in planned] == ["mix"]
+    assert planned[0].enabled

@@ -74,3 +74,29 @@ def test_window_is_fast_once_the_session_is_warm(tmp_path, stub_separation):
     t0 = time.perf_counter()
     render_window(s, 0.6, stems=[name])
     assert time.perf_counter() - t0 < 1.0, "preview must stay interactive"
+
+
+def test_preview_ignores_stems_the_render_would_drop(tmp_path, stub_separation):
+    """A stem in the session but absent from cfg.stems must not be rendered.
+
+    ``_plan_jobs`` falls back to defaults only when *no* configured stem
+    matches, so an unlisted stem is dropped by the real render. Previewing it
+    would show audio that never ships."""
+    s = _session(tmp_path, stub_separation)
+    names = s.stem_names()
+    assert len(names) >= 2
+    s.config.stems = [StemConfig(name=names[0])]
+    full = render_window(s, 0.5, reverb=False)
+    only = render_window(s, 0.5, stems=[names[0]], reverb=False)
+    assert np.array_equal(full.data, only.data)
+
+
+def test_reverb_send_is_applied_per_stem(tmp_path, stub_separation):
+    """Reverb follows each stem's send, as the render does."""
+    s = _session(tmp_path, stub_separation)
+    names = s.stem_names()[:2]
+    s.config.stems = [StemConfig(name=n) for n in names]
+    base = render_window(s, 0.5, stems=names, reverb=True)
+    s.config.stems[1].reverb_send = 0.0
+    changed = render_window(s, 0.5, stems=names, reverb=True)
+    assert not np.array_equal(base.data, changed.data)

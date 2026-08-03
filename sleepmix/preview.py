@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 
 from .audio import AudioBuffer, silence
-from .config import StemConfig
+from .config import plan_stem_configs
 from .disintegration import decayed_iteration, plan_iterations
 from .effects import apply_reverb
 from .session import RenderSession
@@ -44,23 +44,32 @@ def render_window(
 ) -> AudioBuffer:
     """One loop iteration at ``progress``, summed over ``stems``.
 
-    ``stems`` defaults to every stem the session has. Pass a subset to solo."""
+    ``stems`` defaults to every stem the batch renderer would process. Pass a
+    subset to solo; names outside that set are ignored, because previewing a
+    stem the render would drop is exactly the lie this module exists to avoid.
+
+    Each stem is decayed, reverbed with its own send, gained and channel-mapped
+    in the same order as ``pipeline._process_stem`` — reverb is not linear
+    across differing wet scales, so summing dry and reverbing once would not
+    match the render."""
     cfg = session.config
-    names = stems if stems is not None else session.stem_names()
+    planned = plan_stem_configs(session.stem_names(), cfg)
+    if stems is not None:
+        wanted = set(stems)
+        planned = [sc for sc in planned if sc.name in wanted]
     iteration, n_iter = preview_iteration_index(session, progress)
 
     acc: np.ndarray | None = None
     sr = 0
-    for name in names:
-        sc = _stem_config(cfg.stems, name)
-        if not sc.enabled:
-            continue
-        loop = session.prepared_loop(name)
+    for sc in planned:
+        loop = session.prepared_loop(sc.name)
         sr = loop.sr
-        chunk = decayed_iteration(loop, iteration, n_iter, sc.decay, cfg.seed, name)
-        x = chunk.with_channels(cfg.output.channels).data
+        chunk = decayed_iteration(loop, iteration, n_iter, sc.decay, cfg.seed, sc.name)
+        if reverb:
+            chunk = apply_reverb(chunk, cfg.reverb, wet_scale=sc.reverb_send)
         if abs(sc.gain_db) > 1e-6:
-            x = x * db_to_amp(sc.gain_db)
+            chunk = AudioBuffer(chunk.data * db_to_amp(sc.gain_db), chunk.sr)
+        x = chunk.with_channels(cfg.output.channels).data
         if acc is None:
             acc = x.copy()
         else:
@@ -68,18 +77,8 @@ def render_window(
             acc[:m] += x[:m]
 
     if acc is None:
-        return silence(1, cfg.output.channels, cfg.output.sample_rate)
+        available = session.stems()
+        sr = next(iter(available.values())).sr if available else cfg.output.sample_rate
+        return silence(1, cfg.output.channels, sr)
 
-    out = AudioBuffer(acc, sr)
-    if reverb:
-        out = apply_reverb(out, cfg.reverb)
-    return out
-
-
-def _stem_config(configured: list[StemConfig], name: str) -> StemConfig:
-    """The configured stem, or defaults when the session has a stem the config
-    doesn't mention (e.g. the single 'mix' stem from the no-Demucs fallback)."""
-    for sc in configured:
-        if sc.name == name:
-            return sc
-    return StemConfig(name=name)
+    return AudioBuffer(acc, sr)

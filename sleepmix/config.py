@@ -298,3 +298,16 @@ def _default_of(f) -> Any:
     if f.default_factory is not MISSING:  # type: ignore[misc]
         return None
     return None
+
+
+def plan_stem_configs(available: list[str], config: "MixConfig") -> list[StemConfig]:
+    """Which stem configs apply, given the stems that actually exist.
+
+    Configured stems that are enabled and present; or — only when none of them
+    match — every available stem at defaults, which is what happens when
+    separation falls back to a single 'mix' stem. Preview and batch render must
+    agree on this or the preview shows audio the render never produces."""
+    planned = [sc for sc in config.stems if sc.enabled and sc.name in available]
+    if not planned:
+        planned = [StemConfig(name=name) for name in available]
+    return planned
