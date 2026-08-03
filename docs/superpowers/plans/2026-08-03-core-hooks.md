@@ -80,7 +80,7 @@ git commit -m "chore: add pytest to dev-packages"
 Create `tests/test_paths.py`:
 
 ```python
-import os
+from pathlib import Path
 
 from sleepmix import paths
 
@@ -102,11 +102,17 @@ def test_cache_dir_lives_under_data_dir(tmp_path, monkeypatch):
     assert paths.cache_dir().is_dir()
 
 
-def test_default_data_dir_is_absolute_and_not_cwd(monkeypatch):
-    monkeypatch.delenv("SLEEPMIX_DATA_DIR", raising=False)
-    d = paths.data_dir()
+def test_platform_data_dir_is_absolute_and_not_cwd():
+    """Assert on the default location without creating it.
+
+    ``_platform_data_dir`` is a pure resolver — it does no I/O — so this checks
+    the default is a real per-user path without writing anything into the
+    operator's actual home. Calling ``data_dir()`` here instead would create
+    that directory for real, which the suite must never do.
+    """
+    d = paths._platform_data_dir()
     assert d.is_absolute()
-    assert d != os.getcwd()
+    assert d != Path.cwd()
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
