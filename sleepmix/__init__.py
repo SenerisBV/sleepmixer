@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .audio import AudioBuffer, load_audio, save_audio
 from .config import MixConfig, config_schema, plan_stem_configs
+from .peaks import compute_peaks
 from .pipeline import run_pipeline
 from .preview import render_window, preview_iteration_index
 from .progress import CancelToken, Cancelled, ProgressEvent, ProgressReporter
@@ -23,3 +24,4 @@ __all__ += ["render_window", "preview_iteration_index", "RenderSession",
 # actually process — the two most UI-facing functions in the package were the
 # two you had to reach into a submodule for.
 __all__ += ["config_schema", "plan_stem_configs"]
+__all__ += ["compute_peaks"]
