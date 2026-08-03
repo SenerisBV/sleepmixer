@@ -8,19 +8,19 @@ from sleepmix.server.app import create_app
 
 
 def test_health_reports_status_and_version():
-    client = TestClient(create_app())
-    r = client.get("/api/health")
-    assert r.status_code == 200
-    body = r.json()
-    # Subset rather than exact equality: Task 6 adds a "warm" field, and a
-    # health endpoint growing a key should not break an unrelated test.
-    assert body["status"] == "ok"
-    assert body["version"] == sleepmix.__version__
+    with TestClient(create_app()) as client:
+        r = client.get("/api/health")
+        assert r.status_code == 200
+        body = r.json()
+        # Subset rather than exact equality: Task 6 adds a "warm" field, and a
+        # health endpoint growing a key should not break an unrelated test.
+        assert body["status"] == "ok"
+        assert body["version"] == sleepmix.__version__
 
 
 def test_unknown_api_route_is_404():
-    client = TestClient(create_app())
-    assert client.get("/api/nope").status_code == 404
+    with TestClient(create_app()) as client:
+        assert client.get("/api/nope").status_code == 404
 
 
 def test_core_imports_without_server_dependencies():
