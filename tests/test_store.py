@@ -51,6 +51,31 @@ def test_update_song_rejects_unknown_columns(store):
         store.update_song(song["id"], nonsense="x")
 
 
+def test_update_song_serializes_stems(store):
+    """A list must survive the round trip, not come back as a JSON string."""
+    song = store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
+    stems = ["vocals", "drums", "bass", "other"]
+    updated = store.update_song(song["id"], stems=stems)
+    assert updated["stems"] == stems
+    assert store.get_song(song["id"])["stems"] == stems
+
+
+def test_update_render_serializes_config(store):
+    """Nested config must round trip through the update path, not just insert."""
+    song = store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
+    r = store.add_render(song_id=song["id"], config={"seed": 1},
+                         path="/tmp/o.wav", status="running")
+    updated = store.update_render(r["id"], config={"seed": 9, "tempo": {"speed": 0.5}})
+    assert updated["config"] == {"seed": 9, "tempo": {"speed": 0.5}}
+    assert store.get_render(r["id"])["config"]["tempo"]["speed"] == 0.5
+
+
+def test_update_with_no_fields_is_a_no_op(store):
+    """Calling update with nothing to set must return the row unchanged."""
+    song = store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
+    assert store.update_song(song["id"]) == store.get_song(song["id"])
+
+
 def test_update_song_returns_none_when_absent(store):
     assert store.update_song("nope", title="x") is None
 
