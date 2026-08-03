@@ -10,9 +10,12 @@ pipeline degrades to a fixed-tempo loop guess without it.
 """
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 
 _warmed = False
+_lock = threading.Lock()
 
 
 def is_warm() -> bool:
@@ -22,15 +25,16 @@ def is_warm() -> bool:
 def warm_analysis() -> None:
     """Run a tiny beat-track so the JIT compiles now rather than on first use."""
     global _warmed
-    if _warmed:
-        return
-    try:
-        import librosa
+    with _lock:
+        if _warmed:
+            return
+        try:
+            import librosa
 
-        sr = 22050
-        t = np.arange(sr) / sr
-        y = np.sin(2 * np.pi * 220 * t).astype(np.float32)
-        librosa.beat.beat_track(y=y, sr=sr)
-    except Exception:  # noqa: BLE001 - librosa is optional; warming is best-effort
-        pass
-    _warmed = True
+            sr = 22050
+            t = np.arange(sr) / sr
+            y = np.sin(2 * np.pi * 220 * t).astype(np.float32)
+            librosa.beat.beat_track(y=y, sr=sr)
+        except Exception:  # noqa: BLE001 - librosa is optional; warming is best-effort
+            pass
+        _warmed = True

@@ -36,6 +36,10 @@ def create_app(store: Store | None = None) -> FastAPI:
         try:
             yield
         finally:
+            # Abandons the await, not the thread: asyncio.to_thread runs on a
+            # non-cancellable executor, so a warm-up already in flight finishes
+            # on its own. Acceptable here — it is bounded by one beat_track call
+            # and the worker is not a daemon holding the process open.
             app.state.warm_task.cancel()
             app.state.store.close()
 
