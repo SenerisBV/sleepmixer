@@ -65,6 +65,18 @@ def test_schema_includes_units_where_meaningful():
     assert s["sections"]["stem_decay"]["fields"]["lowpass_end_hz"]["unit"] == "Hz"
 
 
+def test_schema_omits_nested_dataclasses_from_leaf_fields():
+    """Nested sections must never appear as scalar controls.
+
+    ``StemConfig.decay`` is a dataclass, not a value — a UI iterating the stem
+    section's fields would otherwise render a text input for it."""
+    s = config_schema()
+    assert "decay" not in s["sections"]["stem"]["fields"]
+    assert "stems" not in s["fields"]
+    for section in ("loop", "tempo", "reverb", "soundbed", "output"):
+        assert section not in s["fields"]
+
+
 def test_metadata_does_not_change_defaults_or_yaml_loading(tmp_path):
     # Defaults survive the addition of metadata.
     assert MixConfig().tempo.speed == 0.7

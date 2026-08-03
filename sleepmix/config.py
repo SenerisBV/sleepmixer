@@ -250,10 +250,18 @@ def config_schema() -> dict[str, Any]:
 
 
 def _describe_fields(dc_type: type) -> dict[str, Any]:
+    from typing import get_type_hints
+
+    hints = get_type_hints(dc_type)
     out: dict[str, Any] = {}
     for f in fields(dc_type):
-        if f.name in _SECTION_TYPES or f.name == "stems":
-            continue  # nested sections are described separately
+        # Nested dataclasses (and the stem list) are described as their own
+        # sections, never as leaf controls — a UI iterating these fields must
+        # not be handed 'decay' or 'loop' as though they were scalar inputs.
+        # Types are resolved via get_type_hints because ``from __future__ import
+        # annotations`` makes ``f.type`` a string.
+        if is_dataclass(hints.get(f.name)) or f.name == "stems":
+            continue
         meta = dict(f.metadata)
         entry: dict[str, Any] = {
             "type": _type_name(f),
