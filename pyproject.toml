@@ -36,4 +36,4 @@ sleepmix = "sleepmix.cli:main"
 include = ["sleepmix*"]
 
 [tool.setuptools.package-data]
-sleepmix = ["config.example.yaml"]
+sleepmix = ["config.example.yaml", "static/*"]
