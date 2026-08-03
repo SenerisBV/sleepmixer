@@ -2,7 +2,9 @@ import numpy as np
 
 from sleepmix.audio import AudioBuffer
 from sleepmix.config import StemDecayConfig
-from sleepmix.disintegration import apply_decay, build_disintegrating_stream
+from sleepmix.disintegration import (
+    apply_decay, build_disintegrating_stream, decayed_iteration, plan_iterations)
+from sleepmix.util import iteration_rng
 
 
 def _tone(freq, sr=22050, secs=1.0):
@@ -52,10 +54,9 @@ def test_decay_reduces_amplitude_over_time():
 
 def test_stream_hits_target_length():
     loop = _tone(440, secs=0.5)
-    rng = np.random.default_rng(0)
     target = loop.sr * 3  # 3 seconds from a 0.5s loop
     stream = build_disintegrating_stream(
-        loop, target, StemDecayConfig(), crossfade_ms=50, rng=rng)
+        loop, target, StemDecayConfig(), crossfade_ms=50, seed=0, stem="mix")
     assert stream.n_frames == target
     assert np.all(np.isfinite(stream.data))
 
@@ -63,8 +64,44 @@ def test_stream_hits_target_length():
 def test_stream_is_deterministic_with_seed():
     loop = _tone(440, secs=0.5)
     target = loop.sr * 2
-    a = build_disintegrating_stream(loop, target, StemDecayConfig(),
-                                    50, np.random.default_rng(42))
-    b = build_disintegrating_stream(loop, target, StemDecayConfig(),
-                                    50, np.random.default_rng(42))
+    a = build_disintegrating_stream(loop, target, StemDecayConfig(), 50, seed=42, stem="mix")
+    b = build_disintegrating_stream(loop, target, StemDecayConfig(), 50, seed=42, stem="mix")
     assert np.array_equal(a.data, b.data)
+
+
+def test_iteration_rng_is_reproducible():
+    a = iteration_rng(7, "vocals", 3).standard_normal(8)
+    b = iteration_rng(7, "vocals", 3).standard_normal(8)
+    assert np.array_equal(a, b)
+
+
+def test_iteration_rng_differs_across_iteration_stem_and_seed():
+    base = iteration_rng(7, "vocals", 3).standard_normal(8)
+    assert not np.array_equal(base, iteration_rng(7, "vocals", 4).standard_normal(8))
+    assert not np.array_equal(base, iteration_rng(7, "bass", 3).standard_normal(8))
+    assert not np.array_equal(base, iteration_rng(8, "vocals", 3).standard_normal(8))
+
+
+def test_stream_iteration_matches_decayed_iteration():
+    """The stream is genuinely built from decayed_iteration outputs.
+
+    Iteration i occupies out[i*stride : i*stride + loop_len]. Its neighbours
+    overlap only in the crossfade regions, so [i*stride + xfade, (i+1)*stride]
+    is contributed by iteration i alone and must match exactly.
+    """
+    loop = _tone(440, secs=0.5)
+    decay = StemDecayConfig()
+    target = loop.sr * 3
+    xfade_ms = 50.0
+
+    stream = build_disintegrating_stream(
+        loop, target, decay, xfade_ms, seed=11, stem="vocals")
+    n_iter, xfade = plan_iterations(loop.n_frames, target, xfade_ms, loop.sr)
+    stride = max(loop.n_frames - xfade, 1)
+
+    i = 1
+    chunk = decayed_iteration(loop, i, n_iter, decay, seed=11, stem="vocals")
+    lo = i * stride + xfade
+    hi = min((i + 1) * stride, target)
+    assert hi > lo, "test setup produced no clean region"
+    assert np.allclose(stream.data[lo:hi], chunk.data[xfade:xfade + (hi - lo)], atol=1e-6)

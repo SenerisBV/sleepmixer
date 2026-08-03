@@ -1,6 +1,8 @@
 """Small shared helpers: dB conversions and decay-curve shaping."""
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 
 
@@ -32,3 +34,15 @@ def shape_progress(p: float, curve: str = "linear") -> float:
 def lerp(a: float, b: float, t: float) -> float:
     """Linear interpolation between ``a`` and ``b`` by ``t`` in [0, 1]."""
     return float(a + (b - a) * t)
+
+
+def iteration_rng(seed: int, stem: str, iteration: int) -> np.random.Generator:
+    """A generator determined solely by ``(seed, stem, iteration)``.
+
+    Deriving randomness per iteration rather than drawing from one shared stream
+    is what lets a preview of a single point in the decay arc reproduce exactly
+    what the full render produces there. With a shared generator, iteration i's
+    noise depends on every draw before it, so nothing can be previewed in
+    isolation."""
+    h = int.from_bytes(hashlib.sha256(stem.encode("utf-8")).digest()[:8], "big")
+    return np.random.default_rng([int(seed), h, int(iteration)])

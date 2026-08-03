@@ -49,7 +49,7 @@ def run_pipeline(
     mix = silence(target_frames, config.output.channels, work_sr)
     for buf, sc in jobs:
         progress(f"Processing stem '{sc.name}'…")
-        stream = _process_stem(buf, sc, loop_point, config, target_frames, rng)
+        stream = _process_stem(buf, sc, loop_point, config, target_frames)
         mix = _add(mix, stream)
 
     if config.soundbed.enabled:
@@ -74,13 +74,13 @@ def _process_stem(
     loop_point,
     config: MixConfig,
     target_frames: int,
-    rng: np.random.Generator,
 ) -> AudioBuffer:
     loop = slice_loop(buf, loop_point)
     loop = make_seamless(loop, config.loop.crossfade_ms)
     loop = slow_and_pitch(loop, config.tempo.speed, config.tempo.pitch_semitones)
     stream = build_disintegrating_stream(
-        loop, target_frames, sc.decay, config.output.cycle_crossfade_ms, rng)
+        loop, target_frames, sc.decay, config.output.cycle_crossfade_ms,
+        config.seed, sc.name)
     stream = apply_reverb(stream, config.reverb, wet_scale=sc.reverb_send)
     if abs(sc.gain_db) > 1e-6:
         stream = AudioBuffer(stream.data * db_to_amp(sc.gain_db), stream.sr)

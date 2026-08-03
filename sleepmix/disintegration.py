@@ -17,7 +17,7 @@ from scipy import signal
 from .audio import AudioBuffer
 from .config import StemDecayConfig
 from .looping import equal_power_crossfade
-from .util import db_to_amp, lerp, shape_progress
+from .util import db_to_amp, iteration_rng, lerp, shape_progress
 
 
 def _lowpass(x: np.ndarray, cutoff_hz: float, sr: int) -> np.ndarray:
@@ -111,31 +111,55 @@ def apply_decay(
     return AudioBuffer(x, sr)
 
 
+def plan_iterations(
+    loop_frames: int, target_frames: int, crossfade_ms: float, sr: int
+) -> tuple[int, int]:
+    """Return ``(n_iterations, xfade_frames)`` for a stream of this shape.
+
+    Shared by the batch stream builder and the preview path so both agree on
+    which iteration a given point in the arc corresponds to."""
+    xfade = min(int(crossfade_ms / 1000.0 * sr), loop_frames // 2)
+    stride = max(loop_frames - xfade, 1)
+    n_iter = int(np.ceil((target_frames - xfade) / stride)) + 1
+    return max(n_iter, 1), xfade
+
+
+def decayed_iteration(
+    loop: AudioBuffer,
+    iteration: int,
+    n_iterations: int,
+    decay: StemDecayConfig,
+    seed: int,
+    stem: str,
+) -> AudioBuffer:
+    """The loop as it sounds on repetition ``iteration`` of ``n_iterations``."""
+    progress = iteration / max(n_iterations - 1, 1)
+    return apply_decay(loop, progress, decay, iteration_rng(seed, stem, iteration))
+
+
 def build_disintegrating_stream(
     loop: AudioBuffer,
     target_frames: int,
     decay: StemDecayConfig,
     crossfade_ms: float,
-    rng: np.random.Generator,
+    seed: int,
+    stem: str = "mix",
 ) -> AudioBuffer:
     """Repeat ``loop`` until ``target_frames`` is reached, degrading each pass.
 
     Successive iterations are joined with an equal-power crossfade so cycle
-    boundaries don't click."""
+    boundaries don't click. Each iteration's randomness is derived from
+    ``(seed, stem, iteration)`` so any single iteration can be reproduced in
+    isolation — see ``util.iteration_rng``."""
     sr = loop.sr
     ch = loop.n_channels
     loop_len = loop.n_frames
-    xfade = min(int(crossfade_ms / 1000.0 * sr), loop_len // 2)
-    # Each iteration advances the stream by (loop_len - xfade) frames.
-    stride = max(loop_len - xfade, 1)
-    n_iter = int(np.ceil((target_frames - xfade) / stride)) + 1
-    n_iter = max(n_iter, 1)
+    n_iter, xfade = plan_iterations(loop_len, target_frames, crossfade_ms, sr)
 
     out = np.zeros((target_frames + loop_len, ch), dtype=np.float32)
     pos = 0
     for i in range(n_iter):
-        progress = i / max(n_iter - 1, 1)
-        chunk = apply_decay(loop, progress, decay, rng).data
+        chunk = decayed_iteration(loop, i, n_iter, decay, seed, stem).data
         if pos == 0:
             out[:loop_len] += chunk
             pos = loop_len
