@@ -50,14 +50,58 @@ steady and **drums** are off — but it's all per-stem config (see below).
 
 ## Install
 
+sleepmix is a command-line tool rather than a library, so install it the way
+you'd install any tool — in its own environment, with its entry point on your
+PATH:
+
 ```bash
-pip install -e .                 # core: full pipeline via fallbacks
-pip install -e ".[all]"          # + Demucs, librosa, Rubber Band, soxr (large)
+pipx install "sleepmix[all,ui]"
+sleepmix render --input song.flac --output mix.wav
 ```
 
-The `[all]` extra pulls in PyTorch + Demucs (multi-GB). Rubber Band also needs
-the `rubberband` CLI on your PATH (`brew install rubberband` /
-`apt install rubberband-cli`).
+`uv tool install "sleepmix[all,ui]"` does the same thing if you prefer uv.
+Either way there's no environment to activate and nothing to remember later.
+
+Plain `pip install` into your system Python will likely refuse — most Python
+installs are now marked externally-managed (PEP 668) so that pip and your
+package manager can't fight over the same directory. That's a good default,
+and pipx works with it rather than around it.
+
+### Extras
+
+| Extra | Adds | Cost |
+|---|---|---|
+| *(none)* | The full pipeline via fallbacks | small |
+| `all` | Demucs, librosa, Rubber Band, soxr | ~700 MB — PyTorch and Demucs are large |
+| `ui` | FastAPI + uvicorn, for `sleepmix ui` | small |
+
+Everything runs on the base install alone: without `all` you get one `mix`
+stem instead of four separated ones, and a rougher loop, but a complete render.
+Add it when you want a final one.
+
+Rubber Band is the one piece that isn't pip-installable — it wants the
+`rubberband` CLI on your PATH (`brew install rubberband`, `apt install
+rubberband-cli`). Without it, time-stretching falls back to librosa's phase
+vocoder, which is what most renders have used in practice.
+
+### Working on sleepmix
+
+Contributors want a checkout rather than an installed copy. The repo carries a
+`Pipfile`:
+
+```bash
+git clone https://github.com/<you>/sleepmixer && cd sleepmixer
+pipenv install --dev
+pipenv run pytest -q
+pipenv run sleepmix ui
+```
+
+Plain venv works too, if you'd rather not add pipenv:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[all,ui,dev]"
+```
 
 ## Usage
 
@@ -76,7 +120,6 @@ sleepmix render --input song.flac --duration 45 --speed 0.6 --soundbed
 ### UI (early)
 
 ```bash
-pip install "sleepmix[ui]"
 sleepmix ui
 ```
 
@@ -135,17 +178,18 @@ See `sleepmix/config.example.yaml` for every field with comments.
   brain perceives the difference). The wellness claims around them are weak —
   treat the sound bed as an aesthetic layer, not therapy.
 - **mp3 decoding** depends on your libsndfile build; WAV/FLAC always work.
-- Separation results are cached in `.sleepmix_cache/` keyed by file + model, so
-  re-rendering with different creative settings skips the slow ML step.
+- Separation results are cached under your platform's app-data directory
+  (`~/Library/Application Support/sleepmix` on macOS, `~/.local/share/sleepmix`
+  on Linux), keyed by file + model, so re-rendering with different creative
+  settings skips the slow ML step. Set `SLEEPMIX_DATA_DIR` to move it. Older
+  versions cached into a `.sleepmix_cache/` beside wherever you happened to be
+  standing; if you have one of those, it's orphaned and safe to delete.
 - For **copyrighted music**, keep renders personal — this is a tool for your own
   listening, not redistribution.
 
 ## Development
 
-```bash
-pipenv install --dev
-pipenv run pytest -q
-```
+See [Working on sleepmix](#working-on-sleepmix) above for getting set up.
 
 The test suite covers the DSP core (disintegration, sound bed, looping, config)
 and a full end-to-end render. It needs no ML dependencies installed, and it
