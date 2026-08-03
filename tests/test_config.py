@@ -1,6 +1,6 @@
 import importlib.resources as res
 
-from sleepmix.config import MixConfig
+from sleepmix.config import MixConfig, config_schema
 
 
 def test_defaults_are_valid():
@@ -41,3 +41,37 @@ def test_example_yaml_parses(tmp_path):
     cfg = MixConfig.from_yaml(str(p))
     assert cfg.soundbed.enabled is True
     assert cfg.output.duration_min == 25
+
+
+def test_schema_describes_tempo_speed():
+    s = config_schema()
+    speed = s["sections"]["tempo"]["fields"]["speed"]
+    assert speed["type"] == "float"
+    assert speed["default"] == 0.7
+    assert speed["min"] == 0.05
+    assert speed["max"] == 1.0
+    assert speed["label"]
+
+
+def test_schema_exposes_curve_choices():
+    s = config_schema()
+    curve = s["sections"]["stem_decay"]["fields"]["curve"]
+    assert set(curve["choices"]) == {"linear", "exp", "log"}
+
+
+def test_schema_includes_units_where_meaningful():
+    s = config_schema()
+    assert s["sections"]["output"]["fields"]["duration_min"]["unit"] == "min"
+    assert s["sections"]["stem_decay"]["fields"]["lowpass_end_hz"]["unit"] == "Hz"
+
+
+def test_metadata_does_not_change_defaults_or_yaml_loading(tmp_path):
+    # Defaults survive the addition of metadata.
+    assert MixConfig().tempo.speed == 0.7
+    assert MixConfig().output.duration_min == 20.0
+    # Partial YAML still merges as before.
+    p = tmp_path / "c.yaml"
+    p.write_text("tempo:\n  speed: 0.5\n")
+    cfg = MixConfig.from_yaml(str(p))
+    assert cfg.tempo.speed == 0.5
+    assert cfg.tempo.pitch_semitones == -2.0

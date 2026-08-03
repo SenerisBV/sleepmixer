@@ -3,10 +3,15 @@
 Every field has a sensible default, so a minimal config (even an empty file)
 produces a valid mix. ``MixConfig.from_dict`` does shallow, forgiving merging
 so partial YAML overrides just the keys you specify.
+
+Fields also carry display metadata (label, unit, bounds, choices, help) so a
+UI can build its controls from ``config_schema()`` instead of hard-coding
+them — a hard-coded UI drifts from the config the moment a parameter is
+added or its bounds change.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from typing import Any
 
 
@@ -18,89 +23,149 @@ class StemDecayConfig:
     length of the mix, so the loop erodes a little more on every repetition.
     """
 
-    enabled: bool = True
-    curve: str = "linear"  # linear | exp (ease-in) | log (ease-out)
+    enabled: bool = field(default=True, metadata={"label": "Enabled"})
+    curve: str = field(default="linear", metadata={
+        "label": "Curve", "choices": ["linear", "exp", "log"],
+        "help": "linear · exp (ease-in, dissolves late) · log (ease-out, "
+                "degrades fast then lingers)"})
 
     # Lowpass cutoff sweep — high frequencies erode first, like tape oxide.
-    lowpass_start_hz: float = 18000.0
-    lowpass_end_hz: float = 1600.0
+    lowpass_start_hz: float = field(default=18000.0, metadata={
+        "label": "Lowpass start", "unit": "Hz", "min": 20.0, "max": 20000.0,
+        "step": 100.0})
+    lowpass_end_hz: float = field(default=1600.0, metadata={
+        "label": "Lowpass end", "unit": "Hz", "min": 20.0, "max": 20000.0,
+        "step": 100.0})
 
     # Amplitude fade across the arc.
-    amp_start_db: float = 0.0
-    amp_end_db: float = -9.0
+    amp_start_db: float = field(default=0.0, metadata={
+        "label": "Amplitude start", "unit": "dB", "min": -60.0, "max": 0.0,
+        "step": 0.5})
+    amp_end_db: float = field(default=-9.0, metadata={
+        "label": "Amplitude end", "unit": "dB", "min": -60.0, "max": 0.0,
+        "step": 0.5})
 
     # Probability/density of brief dropouts (0..1).
-    dropout_start: float = 0.0
-    dropout_end: float = 0.25
+    dropout_start: float = field(default=0.0, metadata={
+        "label": "Dropouts start", "min": 0.0, "max": 1.0, "step": 0.01})
+    dropout_end: float = field(default=0.25, metadata={
+        "label": "Dropouts end", "min": 0.0, "max": 1.0, "step": 0.01})
 
     # Added noise-floor level (dBFS).
-    noise_start_db: float = -90.0
-    noise_end_db: float = -42.0
+    noise_start_db: float = field(default=-90.0, metadata={
+        "label": "Noise floor start", "unit": "dB", "min": -120.0, "max": 0.0,
+        "step": 1.0})
+    noise_end_db: float = field(default=-42.0, metadata={
+        "label": "Noise floor end", "unit": "dB", "min": -120.0, "max": 0.0,
+        "step": 1.0})
 
     # Fraction of spectral bins zeroed ('holes' in the spectrum), 0..1.
-    spectral_hole_start: float = 0.0
-    spectral_hole_end: float = 0.30
+    spectral_hole_start: float = field(default=0.0, metadata={
+        "label": "Spectral holes start", "min": 0.0, "max": 1.0, "step": 0.01})
+    spectral_hole_end: float = field(default=0.30, metadata={
+        "label": "Spectral holes end", "min": 0.0, "max": 1.0, "step": 0.01})
 
 
 @dataclass
 class StemConfig:
     """One separated stem and how it should behave in the mix."""
 
-    name: str = "other"          # vocals | drums | bass | other | mix
-    enabled: bool = True
-    gain_db: float = 0.0
-    reverb_send: float = 1.0     # multiplies the global reverb wet for this stem
+    name: str = field(default="other", metadata={
+        "label": "Stem", "choices": ["vocals", "drums", "bass", "other", "mix"]})
+    enabled: bool = field(default=True, metadata={"label": "Enabled"})
+    gain_db: float = field(default=0.0, metadata={
+        "label": "Gain", "unit": "dB", "min": -24.0, "max": 12.0, "step": 0.5})
+    reverb_send: float = field(default=1.0, metadata={
+        "label": "Reverb send", "min": 0.0, "max": 2.0, "step": 0.01})
     decay: StemDecayConfig = field(default_factory=StemDecayConfig)
 
 
 @dataclass
 class LoopConfig:
-    bars: int = 8
-    beats_per_bar: int = 4
-    crossfade_ms: float = 120.0   # internal seam crossfade for seamless looping
+    bars: int = field(default=8, metadata={
+        "label": "Bars", "min": 1, "max": 64, "step": 1})
+    beats_per_bar: int = field(default=4, metadata={
+        "label": "Beats per bar", "min": 1, "max": 16, "step": 1})
+    crossfade_ms: float = field(default=120.0, metadata={
+        "label": "Seam crossfade", "unit": "ms", "min": 0.0, "max": 2000.0,
+        "step": 10.0})
     # Where to look for a loop, as fractions of the track (avoids intro/outro).
-    search_start: float = 0.2
-    search_end: float = 0.8
+    search_start: float = field(default=0.2, metadata={
+        "label": "Search from", "min": 0.0, "max": 1.0, "step": 0.01,
+        "help": "Fraction of the track to start searching for a loop from, "
+                "avoiding the intro."})
+    search_end: float = field(default=0.8, metadata={
+        "label": "Search to", "min": 0.0, "max": 1.0, "step": 0.01,
+        "help": "Fraction of the track to stop searching for a loop at, "
+                "avoiding the outro."})
 
 
 @dataclass
 class TempoConfig:
     # Playback speed as a fraction of the original. 0.7 = 70% speed (slower,
     # longer). Pitch is preserved unless ``pitch_semitones`` is set.
-    speed: float = 0.7
-    pitch_semitones: float = -2.0
+    speed: float = field(default=0.7, metadata={
+        "label": "Speed", "unit": "×", "min": 0.05, "max": 1.0, "step": 0.01,
+        "help": "Playback speed as a fraction of the original. 0.7 = 70% speed."})
+    pitch_semitones: float = field(default=-2.0, metadata={
+        "label": "Pitch", "unit": "st", "min": -12.0, "max": 12.0, "step": 0.5,
+        "help": "Semitones to shift, independent of speed."})
 
 
 @dataclass
 class ReverbConfig:
-    room_size: float = 0.85
-    damping: float = 0.5
-    wet: float = 0.45
-    dry: float = 0.6
-    width: float = 1.0
-    predelay_ms: float = 40.0
+    room_size: float = field(default=0.85, metadata={
+        "label": "Room size", "min": 0.0, "max": 1.0, "step": 0.01})
+    damping: float = field(default=0.5, metadata={
+        "label": "Damping", "min": 0.0, "max": 1.0, "step": 0.01})
+    wet: float = field(default=0.45, metadata={
+        "label": "Wet", "min": 0.0, "max": 1.0, "step": 0.01})
+    dry: float = field(default=0.6, metadata={
+        "label": "Dry", "min": 0.0, "max": 1.0, "step": 0.01})
+    width: float = field(default=1.0, metadata={
+        "label": "Width", "min": 0.0, "max": 1.0, "step": 0.01})
+    predelay_ms: float = field(default=40.0, metadata={
+        "label": "Pre-delay", "unit": "ms", "min": 0.0, "max": 500.0, "step": 1.0})
 
 
 @dataclass
 class SoundbedConfig:
-    enabled: bool = False
-    noise_type: str = "pink"      # pink | brown | white | none
-    noise_gain_db: float = -34.0
-    binaural_enabled: bool = False
-    binaural_carrier_hz: float = 110.0
-    binaural_beat_hz: float = 2.5   # delta/theta range for sleep
-    binaural_gain_db: float = -30.0
+    enabled: bool = field(default=False, metadata={"label": "Sound bed"})
+    noise_type: str = field(default="pink", metadata={
+        "label": "Noise type", "choices": ["pink", "brown", "white", "none"]})
+    noise_gain_db: float = field(default=-34.0, metadata={
+        "label": "Noise level", "unit": "dB", "min": -80.0, "max": 0.0, "step": 1.0})
+    binaural_enabled: bool = field(default=False, metadata={
+        "label": "Binaural beats",
+        "help": "Requires headphones — binaural beats rely on each ear "
+                "receiving a different tone."})
+    binaural_carrier_hz: float = field(default=110.0, metadata={
+        "label": "Carrier", "unit": "Hz", "min": 20.0, "max": 500.0, "step": 1.0})
+    binaural_beat_hz: float = field(default=2.5, metadata={
+        "label": "Beat frequency", "unit": "Hz", "min": 0.5, "max": 30.0, "step": 0.1})
+    binaural_gain_db: float = field(default=-30.0, metadata={
+        "label": "Binaural level", "unit": "dB", "min": -80.0, "max": 0.0, "step": 1.0})
 
 
 @dataclass
 class OutputConfig:
-    duration_min: float = 20.0
-    sample_rate: int = 44100
-    channels: int = 2
-    cycle_crossfade_ms: float = 800.0  # crossfade between successive loop cycles
-    fade_in_s: float = 8.0
-    fade_out_s: float = 12.0
-    peak_db: float = -1.0
+    duration_min: float = field(default=20.0, metadata={
+        "label": "Duration", "unit": "min", "min": 1.0, "max": 480.0, "step": 1.0,
+        "help": "Length of the finished mix."})
+    sample_rate: int = field(default=44100, metadata={
+        "label": "Sample rate", "unit": "Hz", "choices": [22050, 44100, 48000]})
+    channels: int = field(default=2, metadata={
+        "label": "Channels", "choices": [1, 2]})
+    cycle_crossfade_ms: float = field(default=800.0, metadata={
+        "label": "Cycle crossfade", "unit": "ms", "min": 0.0, "max": 5000.0,
+        "step": 10.0, "help": "Crossfade between successive loop cycles."})
+    fade_in_s: float = field(default=8.0, metadata={
+        "label": "Fade in", "unit": "s", "min": 0.0, "max": 120.0, "step": 1.0})
+    fade_out_s: float = field(default=12.0, metadata={
+        "label": "Fade out", "unit": "s", "min": 0.0, "max": 120.0, "step": 1.0})
+    peak_db: float = field(default=-1.0, metadata={
+        "label": "Peak ceiling", "unit": "dBFS", "min": -12.0, "max": 0.0,
+        "step": 0.1})
 
 
 @dataclass
@@ -157,3 +222,63 @@ def _build(dc_type: type, d: dict[str, Any]) -> Any:
         else:
             kwargs[name] = val
     return dc_type(**kwargs)
+
+
+# -- schema export ------------------------------------------------------
+_SECTION_TYPES = {
+    "loop": LoopConfig,
+    "tempo": TempoConfig,
+    "reverb": ReverbConfig,
+    "soundbed": SoundbedConfig,
+    "output": OutputConfig,
+    "stem": StemConfig,
+    "stem_decay": StemDecayConfig,
+}
+
+
+def config_schema() -> dict[str, Any]:
+    """Describe every config field so a UI can generate its own controls.
+
+    Hard-coding controls in the frontend means they drift from the config the
+    moment a parameter is added. This is the single source of truth for bounds,
+    units and labels."""
+    return {
+        "fields": _describe_fields(MixConfig),
+        "sections": {name: {"fields": _describe_fields(t)}
+                     for name, t in _SECTION_TYPES.items()},
+    }
+
+
+def _describe_fields(dc_type: type) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for f in fields(dc_type):
+        if f.name in _SECTION_TYPES or f.name == "stems":
+            continue  # nested sections are described separately
+        meta = dict(f.metadata)
+        entry: dict[str, Any] = {
+            "type": _type_name(f),
+            "default": _default_of(f),
+            "label": meta.get("label", f.name.replace("_", " ").capitalize()),
+            "help": meta.get("help"),
+        }
+        for key in ("min", "max", "step", "unit", "choices"):
+            if key in meta:
+                entry[key] = meta[key]
+        out[f.name] = entry
+    return out
+
+
+def _type_name(f) -> str:
+    raw = f.type if isinstance(f.type, str) else getattr(f.type, "__name__", "str")
+    for py, name in (("bool", "bool"), ("int", "int"), ("float", "float")):
+        if raw.startswith(py):
+            return name
+    return "str"
+
+
+def _default_of(f) -> Any:
+    if f.default is not MISSING:
+        return f.default
+    if f.default_factory is not MISSING:  # type: ignore[misc]
+        return None
+    return None
