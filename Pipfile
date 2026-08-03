@@ -14,6 +14,7 @@ sleepmix = {extras = ["all"], path = ".", editable = true}
 
 [dev-packages]
 pytest = ">=7.4"
+pytest-asyncio = ">=0.23"
 fastapi = ">=0.110"
 uvicorn = ">=0.27"
 httpx = ">=0.27"
