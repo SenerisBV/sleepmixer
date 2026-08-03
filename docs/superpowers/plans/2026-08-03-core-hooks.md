@@ -675,16 +675,71 @@ git commit -m "feat: structured progress events and cancellation token"
 - Modify: `sleepmix/pipeline.py` (signature, all `progress(...)` calls, stem loop)
 - Modify: `sleepmix/disintegration.py` (`build_disintegrating_stream` gains an optional cancel check)
 - Modify: `sleepmix/cli.py:41` (adapt events to `click.echo`)
+- Modify: `tests/conftest.py` (add `fake_separate` and the `stub_separation` fixture)
 - Test: `tests/test_pipeline.py` (add three tests)
 
 **Interfaces:**
 - Consumes: `ProgressReporter`, `CancelToken`, `Cancelled`, `echo_sink` from Task 4
-- Produces: `run_pipeline(input_path, config, output_path, progress=print, reporter=None, cancel=None) -> AudioBuffer`
-  - `progress` keeps its old meaning (a string callback) for backward compatibility
-  - `reporter: ProgressReporter | None` takes precedence when given
-  - `cancel: CancelToken | None` aborts with `Cancelled`
+- Produces:
+  - `run_pipeline(input_path, config, output_path, progress=print, reporter=None, cancel=None) -> AudioBuffer`
+    - `progress` keeps its old meaning (a string callback) for backward compatibility
+    - `reporter: ProgressReporter | None` takes precedence when given
+    - `cancel: CancelToken | None` aborts with `Cancelled`
+  - `conftest.fake_separate(input_path, model=..., cache_dir=None) -> dict[str, AudioBuffer]` — four deterministic synthetic stems
+  - `stub_separation` fixture, returning `fake_separate`; used by Tasks 5, 8 and 9
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the separation stub**
+
+Real separation takes ~10 s per call (measured, Demucs on a 6 s file) and the
+cache misses on every fresh `tmp_path`, so tests that render would spend minutes
+exercising the ML model rather than the code under test.
+
+The stub lives in `tests/conftest.py` rather than its own module so tests can
+reach it through a fixture — `tests/` is not a package, so a sibling module
+would need import gymnastics.
+
+Append to `tests/conftest.py`:
+
+```python
+import numpy as np
+
+from sleepmix.audio import AudioBuffer, load_audio
+
+STUB_STEM_NAMES = ("vocals", "drums", "bass", "other")
+
+
+def fake_separate(input_path, model="htdemucs_ft", cache_dir=None):
+    """A stand-in for Demucs.
+
+    Real separation takes about ten seconds per call and the on-disk cache keys
+    on file path, size and mtime — so every test using a fresh ``tmp_path`` song
+    would miss the cache and run the model for real. These stems are synthetic,
+    deterministic, and distinct from each other so solo/sum behaviour is
+    observable."""
+    src = load_audio(str(input_path))
+    t = np.arange(src.n_frames) / src.sr
+    stems = {}
+    for i, name in enumerate(STUB_STEM_NAMES):
+        y = (0.2 * np.sin(2 * np.pi * 110 * (i + 1) * t)).astype(np.float32)
+        stems[name] = AudioBuffer(np.stack([y, y], axis=1), src.sr)
+    return stems
+
+
+@pytest.fixture
+def stub_separation(monkeypatch):
+    """Replace Demucs wherever the pipeline reaches for it.
+
+    ``sleepmix/pipeline.py`` does ``from .separation import separate``, so the
+    name must be patched on the *pipeline* module, not on ``sleepmix.separation``.
+    Returns the stub so tests can also inject it directly (``RenderSession``
+    takes a ``separate_fn``)."""
+    import sleepmix.pipeline
+
+    monkeypatch.setattr(sleepmix.pipeline, "separate", fake_separate)
+    return fake_separate
+```
+
+- [ ] **Step 2: Write the failing tests**
 
 Add to `tests/test_pipeline.py` (extend the imports):
 
@@ -697,7 +752,7 @@ from sleepmix.progress import CancelToken, Cancelled, ProgressReporter
 Then add:
 
 ```python
-def test_reporter_receives_ordered_monotonic_events(tmp_path):
+def test_reporter_receives_ordered_monotonic_events(tmp_path, stub_separation):
     song = tmp_path / "song.wav"
     out = tmp_path / "mix.wav"
     _synth_song(song)
@@ -718,7 +773,7 @@ def test_reporter_receives_ordered_monotonic_events(tmp_path):
     assert 0.0 <= fractions[0] and fractions[-1] <= 1.0
 
 
-def test_cancel_aborts_the_render(tmp_path):
+def test_cancel_aborts_the_render(tmp_path, stub_separation):
     song = tmp_path / "song.wav"
     out = tmp_path / "mix.wav"
     _synth_song(song)
@@ -737,7 +792,7 @@ def test_cancel_aborts_the_render(tmp_path):
     assert not out.exists(), "a cancelled render must not leave output behind"
 
 
-def test_string_progress_callback_still_works(tmp_path):
+def test_string_progress_callback_still_works(tmp_path, stub_separation):
     song = tmp_path / "song.wav"
     out = tmp_path / "mix.wav"
     _synth_song(song)
@@ -753,12 +808,12 @@ def test_string_progress_callback_still_works(tmp_path):
     assert any("Wrote" in line for line in lines)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 3: Run tests to verify they fail**
 
 Run: `pipenv run pytest tests/test_pipeline.py -v`
 Expected: FAIL — `TypeError: run_pipeline() got an unexpected keyword argument 'reporter'`
 
-- [ ] **Step 3: Add a cancel check to the stream builder**
+- [ ] **Step 4: Add a cancel check to the stream builder**
 
 In `sleepmix/disintegration.py`, add the optional parameter to `build_disintegrating_stream`:
 
@@ -783,7 +838,7 @@ And inside the `for i in range(n_iter):` loop, as the first line of the body:
 
 Keep the rest of the function exactly as Task 3 left it. The parameter is untyped-by-import on purpose so `disintegration.py` doesn't import `progress`; any object with a `.check()` method works.
 
-- [ ] **Step 4: Rewrite the pipeline's progress handling**
+- [ ] **Step 5: Rewrite the pipeline's progress handling**
 
 In `sleepmix/pipeline.py`, replace the imports and `run_pipeline` signature. Add:
 
@@ -878,7 +933,7 @@ def _process_stem(
     return stream.with_channels(config.output.channels)
 ```
 
-- [ ] **Step 5: Update the CLI to use the reporter**
+- [ ] **Step 6: Update the CLI to use the reporter**
 
 In `sleepmix/cli.py`, add to the imports:
 
@@ -899,12 +954,12 @@ to:
                  reporter=ProgressReporter(echo_sink(click.echo)))
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 7: Run the tests**
 
 Run: `pipenv run pytest tests/test_pipeline.py -v`
 Expected: PASS (4 tests)
 
-- [ ] **Step 7: Verify the CLI output is unchanged by hand**
+- [ ] **Step 8: Verify the CLI output is unchanged by hand**
 
 Run:
 
@@ -931,12 +986,12 @@ Mastering…
 Wrote /tmp/cli-check.wav (0.1 min)
 ```
 
-- [ ] **Step 8: Run the full suite**
+- [ ] **Step 9: Run the full suite**
 
 Run: `pipenv run pytest -q`
 Expected: PASS
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add sleepmix/pipeline.py sleepmix/disintegration.py sleepmix/cli.py tests/test_pipeline.py
@@ -1299,9 +1354,9 @@ Without staged memoization, every preview re-runs the phase vocoder and preview 
 - Test: `tests/test_session.py`
 
 **Interfaces:**
-- Consumes: `separate`, `find_loop`, `slice_loop`, `make_seamless`, `slow_and_pitch`, `cache_dir`
+- Consumes: `separate`, `find_loop`, `slice_loop`, `make_seamless`, `slow_and_pitch`, `cache_dir`; the `stub_separation` fixture (Task 5) in tests
 - Produces:
-  - `RenderSession(input_path: str, config: MixConfig)`
+  - `RenderSession(input_path: str, config: MixConfig, separate_fn=None)` — `separate_fn` defaults to the real `separate`; injecting it is how tests avoid a ~10 s Demucs call per session
   - `.stems() -> dict[str, AudioBuffer]` — cached across config changes
   - `.loop_point() -> LoopPoint` — invalidated by `config.loop`
   - `.prepared_loop(stem: str) -> AudioBuffer` — seamless + time-stretched; invalidated by `config.loop` or `config.tempo`
@@ -1326,28 +1381,26 @@ def _song(path, sr=22050, secs=6.0):
     save_audio(AudioBuffer(np.stack([y, y], axis=1).astype(np.float32), sr), str(path))
 
 
-def test_stems_are_computed_once(tmp_path, monkeypatch):
+def test_stems_are_computed_once(tmp_path, stub_separation):
     song = tmp_path / "s.wav"
     _song(song)
-    s = RenderSession(str(song), MixConfig())
 
     calls = []
-    real = s._separate_fn
     def counting(*a, **k):
         calls.append(1)
-        return real(*a, **k)
-    monkeypatch.setattr(s, "_separate_fn", counting)
+        return stub_separation(*a, **k)
 
+    s = RenderSession(str(song), MixConfig(), separate_fn=counting)
     s.stems()
     s.stems()
     assert len(calls) == 1
 
 
-def test_changing_tempo_invalidates_prepared_loop_but_not_stems(tmp_path):
+def test_changing_tempo_invalidates_prepared_loop_but_not_stems(tmp_path, stub_separation):
     song = tmp_path / "s.wav"
     _song(song)
     cfg = MixConfig()
-    s = RenderSession(str(song), cfg)
+    s = RenderSession(str(song), cfg, separate_fn=stub_separation)
 
     stems_before = s.stems()
     name = s.stem_names()[0]
@@ -1361,10 +1414,10 @@ def test_changing_tempo_invalidates_prepared_loop_but_not_stems(tmp_path):
     assert s.prepared_loop(name).n_frames != loop_before.n_frames
 
 
-def test_changing_decay_invalidates_nothing_cached(tmp_path):
+def test_changing_decay_invalidates_nothing_cached(tmp_path, stub_separation):
     song = tmp_path / "s.wav"
     _song(song)
-    s = RenderSession(str(song), MixConfig())
+    s = RenderSession(str(song), MixConfig(), separate_fn=stub_separation)
     name = s.stem_names()[0]
     loop_before = s.prepared_loop(name)
 
@@ -1375,13 +1428,13 @@ def test_changing_decay_invalidates_nothing_cached(tmp_path):
     assert s.prepared_loop(name) is loop_before, "decay must not touch the loop"
 
 
-def test_loop_point_respects_explicit_config(tmp_path):
+def test_loop_point_respects_explicit_config(tmp_path, stub_separation):
     song = tmp_path / "s.wav"
     _song(song)
     cfg = MixConfig()
     cfg.loop.start_s = 1.0
     cfg.loop.end_s = 3.0
-    s = RenderSession(str(song), cfg)
+    s = RenderSession(str(song), cfg, separate_fn=stub_separation)
     lp = s.loop_point()
     assert lp.start == int(1.0 * 22050)
 ```
@@ -1421,10 +1474,12 @@ from .timestretch import slow_and_pitch
 
 
 class RenderSession:
-    def __init__(self, input_path: str, config: MixConfig) -> None:
+    def __init__(self, input_path: str, config: MixConfig,
+                 separate_fn=None) -> None:
         self.input_path = input_path
         self.config = config
-        self._separate_fn = separate
+        # Injectable so tests can skip a ~10 s Demucs call per session.
+        self._separate_fn = separate_fn or separate
         self._stems: dict[str, AudioBuffer] | None = None
         self._loop_point: LoopPoint | None = None
         self._prepared: dict[str, AudioBuffer] = {}
@@ -1549,20 +1604,20 @@ def _song(path, sr=22050, secs=6.0):
     save_audio(AudioBuffer(np.stack([y, y], axis=1).astype(np.float32), sr), str(path))
 
 
-def _session(tmp_path):
+def _session(tmp_path, sep):
     song = tmp_path / "s.wav"
     _song(song)
     cfg = MixConfig()
     cfg.output.duration_min = 2.0
-    return RenderSession(str(song), cfg)
+    return RenderSession(str(song), cfg, separate_fn=sep)
 
 
-def test_window_matches_decayed_iteration_pre_reverb(tmp_path):
+def test_window_matches_decayed_iteration_pre_reverb(tmp_path, stub_separation):
     """The preview is the same computation the render performs.
 
     Compared pre-reverb because reverb is applied per-window here and has no
     tail from the preceding iteration — see the fidelity caveat in the spec."""
-    s = _session(tmp_path)
+    s = _session(tmp_path, stub_separation)
     name = s.stem_names()[0]
     s.config.stems = [StemConfig(name=name)]
 
@@ -1574,8 +1629,8 @@ def test_window_matches_decayed_iteration_pre_reverb(tmp_path):
     assert np.array_equal(out.data, expected.data)
 
 
-def test_iteration_index_spans_the_arc(tmp_path):
-    s = _session(tmp_path)
+def test_iteration_index_spans_the_arc(tmp_path, stub_separation):
+    s = _session(tmp_path, stub_separation)
     first, n = preview_iteration_index(s, 0.0)
     last, _ = preview_iteration_index(s, 1.0)
     assert first == 0
@@ -1583,18 +1638,17 @@ def test_iteration_index_spans_the_arc(tmp_path):
     assert n > 1
 
 
-def test_soloing_stems_changes_the_result(tmp_path):
-    s = _session(tmp_path)
+def test_soloing_stems_changes_the_result(tmp_path, stub_separation):
+    s = _session(tmp_path, stub_separation)
     names = s.stem_names()
-    if len(names) < 2:
-        return  # single 'mix' stem fallback — nothing to solo
+    assert len(names) >= 2, "the stub provides four distinct stems"
     a = render_window(s, 0.5, stems=names[:1], reverb=False)
     b = render_window(s, 0.5, stems=names, reverb=False)
     assert not np.array_equal(a.data, b.data)
 
 
-def test_window_is_finite_and_reverb_is_applied(tmp_path):
-    s = _session(tmp_path)
+def test_window_is_finite_and_reverb_is_applied(tmp_path, stub_separation):
+    s = _session(tmp_path, stub_separation)
     name = s.stem_names()[0]
     dry = render_window(s, 0.5, stems=[name], reverb=False)
     wet = render_window(s, 0.5, stems=[name], reverb=True)
@@ -1602,8 +1656,8 @@ def test_window_is_finite_and_reverb_is_applied(tmp_path):
     assert not np.array_equal(dry.data, wet.data)
 
 
-def test_window_is_fast_once_the_session_is_warm(tmp_path):
-    s = _session(tmp_path)
+def test_window_is_fast_once_the_session_is_warm(tmp_path, stub_separation):
+    s = _session(tmp_path, stub_separation)
     name = s.stem_names()[0]
     render_window(s, 0.5, stems=[name])          # warm the session
     t0 = time.perf_counter()
