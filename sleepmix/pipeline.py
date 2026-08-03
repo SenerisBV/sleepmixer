@@ -16,6 +16,7 @@ from .config import MixConfig, StemConfig
 from .disintegration import build_disintegrating_stream
 from .effects import apply_reverb
 from .looping import make_seamless
+from .paths import cache_dir
 from .separation import separate
 from .soundbed import build_soundbed
 from .timestretch import slow_and_pitch
@@ -33,7 +34,7 @@ def run_pipeline(
     rng = np.random.default_rng(config.seed)
 
     progress("Separating stems…")
-    stems = separate(input_path, config.separation_model)
+    stems = separate(input_path, config.separation_model, cache_dir=str(cache_dir()))
     work_sr = next(iter(stems.values())).sr
 
     progress("Finding loop points…")
