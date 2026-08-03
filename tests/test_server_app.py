@@ -23,6 +23,45 @@ def test_unknown_api_route_is_404():
         assert client.get("/api/nope").status_code == 404
 
 
+def test_an_injected_store_outlives_the_app():
+    """`create_app(store=...)` borrows a store; it must not close it.
+
+    Closing a caller-owned store on shutdown made the injection point unusable:
+    a second TestClient context over the same app rebound the now-closed
+    connection and every query raised sqlite3.ProgrammingError."""
+    from sleepmix.server.store import Store
+
+    store = Store()
+    try:
+        app = create_app(store=store)
+        with TestClient(app) as client:
+            assert client.post("/api/songs", json={"path": "/nope.wav"}).status_code == 400
+        # Second context over the same app: this is what used to blow up.
+        with TestClient(app) as client:
+            assert client.get("/api/songs").status_code == 200
+        # And the caller's store is still the caller's, still open.
+        song = store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0,
+                              sample_rate=44100)
+        assert store.get_song(song["id"])["title"] == "A"
+    finally:
+        store.close()
+
+
+def test_an_injected_store_backs_the_routes():
+    """The app must read and write the store it was handed, not a new one."""
+    from sleepmix.server.store import Store
+
+    store = Store()
+    try:
+        store.add_song(path="/tmp/injected.wav", title="Injected",
+                       duration_s=1.0, sample_rate=44100)
+        with TestClient(create_app(store=store)) as client:
+            titles = [s["title"] for s in client.get("/api/songs").json()["songs"]]
+        assert "Injected" in titles
+    finally:
+        store.close()
+
+
 def test_core_imports_without_server_dependencies():
     """`import sleepmix` must not pull in fastapi.
 
@@ -46,6 +85,44 @@ def test_ui_command_is_registered():
     result = CliRunner().invoke(main, ["ui", "--help"])
     assert result.exit_code == 0
     assert "--port" in result.output
+
+
+def test_ui_refuses_a_non_loopback_bind_and_says_why():
+    """The guard must fire before uvicorn.run — nothing may start listening.
+
+    No server is started here: if the guard ever moved below `uvicorn.run`
+    this test would hang rather than fail, which is itself the signal."""
+    from click.testing import CliRunner
+
+    from sleepmix.cli import main
+
+    result = CliRunner().invoke(main, ["ui", "--host", "0.0.0.0", "--no-open"])
+    assert result.exit_code != 0
+    out = result.output.lower()
+    assert "0.0.0.0" in result.output
+    # It must name the consequence, not just say "not allowed".
+    assert "read" in out and "authentication" in out
+    assert "--allow-remote" in result.output
+
+
+def test_ui_accepts_loopback_hosts_without_the_flag():
+    """The guard must not fire on the addresses that are actually fine.
+
+    Asserted via `--help`-free invocation would start a server, so this checks
+    the predicate the command uses rather than running it."""
+    from sleepmix.cli import _LOOPBACK_HOSTS
+
+    assert {"127.0.0.1", "::1", "localhost"} <= _LOOPBACK_HOSTS
+
+
+def test_ui_help_documents_allow_remote():
+    from click.testing import CliRunner
+
+    from sleepmix.cli import main
+
+    result = CliRunner().invoke(main, ["ui", "--help"])
+    assert result.exit_code == 0
+    assert "--allow-remote" in result.output
 
 
 def test_subpackages_are_declared_for_distribution():

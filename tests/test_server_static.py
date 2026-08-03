@@ -18,6 +18,17 @@ def test_root_serves_the_index_page(client):
     assert "sleepmix" in r.text.lower()
 
 
+def test_static_mount_serves_files(client):
+    """Not just `/`. Plan 3 serves the compiled Elm bundle from /static, and a
+    mount pointing at the wrong directory would 404 every asset while the
+    index page kept working — a break that ships silently."""
+    r = client.get("/static/index.html")
+    assert r.status_code == 200
+    assert "sleepmix" in r.text.lower()
+    # And a missing asset is a 404 from the mount, not a 500 or the index page.
+    assert client.get("/static/not-a-real-asset.js").status_code == 404
+
+
 def test_health_reports_warm_state(client):
     assert "warm" in client.get("/api/health").json()
 

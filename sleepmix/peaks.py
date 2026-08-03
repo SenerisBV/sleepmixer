@@ -22,6 +22,14 @@ def compute_peaks(buf: AudioBuffer, buckets: int = 2000) -> list[list[float]]:
         return [[0.0, 0.0] for _ in range(buckets)]
 
     mono = buf.to_mono().data[:, 0]
+    # A float-subtype WAV can legally carry NaN/±Inf, and `float(NaN)` survives
+    # all the way out: the route is annotated `-> dict`, so pydantic serializes
+    # non-finite floats to JSON `null` rather than erroring. One such sample
+    # anywhere in a file then fails the frontend's `list (list float)` decode
+    # and blanks the entire waveform, with no server-side error to diagnose
+    # from. Clamp to the signal's own range instead — the drawn waveform is a
+    # display summary, and a full-scale spike is the honest picture of garbage.
+    mono = np.nan_to_num(mono, nan=0.0, posinf=1.0, neginf=-1.0)
     # Bucket boundaries by index rather than a reshape, so a buffer that does
     # not divide evenly (or is shorter than `buckets`) still yields one pair per
     # bucket instead of dropping the remainder.

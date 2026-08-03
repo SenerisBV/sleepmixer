@@ -44,6 +44,24 @@ def test_empty_buffer_returns_zeroed_pairs():
     assert peaks == [[0.0, 0.0]] * 8
 
 
+def test_non_finite_samples_do_not_reach_the_output():
+    """A float-subtype WAV may carry NaN/Inf; JSON has no way to say either.
+
+    Left alone these serialize to `null` (pydantic, on a `-> dict` route), and
+    a single one blanks the whole waveform in a frontend decoding floats."""
+    import json
+
+    y = np.linspace(-0.5, 0.5, 1000)
+    y[10] = np.nan
+    y[500] = np.inf
+    y[900] = -np.inf
+    peaks = compute_peaks(_buf(y), buckets=32)
+
+    assert all(np.isfinite(v) for pair in peaks for v in pair)
+    assert "null" not in json.dumps(peaks)
+    assert json.loads(json.dumps(peaks)) == peaks
+
+
 def test_values_are_json_serializable_floats():
     import json
 
