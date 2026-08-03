@@ -1,33 +1,58 @@
 # Project state
 
-Status as of the end of the `feat/core-hooks` branch (Plan 1 of the spec, all
-10 tasks complete). This is the branch that gave the pipeline the hooks a
-local web UI needs — session staging, cheap preview, structured progress,
-stable data paths, a config schema — without building the UI itself. Read
-`docs/architecture.md` first for how the pieces fit together; this document
-is about what's true right now, what was traded off to get here, and what's
-explicitly not done yet.
+Status as of the end of the `feat/server-foundation` branch (Plan 2a of the
+spec, all 7 tasks complete), on top of `feat/core-hooks` (Plan 1, all 10
+tasks complete). Plan 1 gave the pipeline the hooks a local web UI needs —
+session staging, cheap preview, structured progress, stable data paths, a
+config schema — without building the UI itself. Plan 2a puts an HTTP server
+in front of that: a FastAPI app, a SQLite library store, and enough of a
+songs API to import a file and draw its waveform. Read `docs/architecture.md`
+first for how the pieces fit together; this document is about what's true
+right now, what was traded off to get here, and what's explicitly not done
+yet.
 
-## What's built
+## Plan 2a: what's built, and what it deliberately doesn't do yet
 
-Everything under "What each module owns" in `docs/architecture.md`:
+`sleepmix/server/app.py`'s `create_app` factory, `server/store.py`'s SQLite
+store (songs/presets/renders tables), `server/warmup.py`'s startup JIT
+warm-up, and `server/api/schema.py` + `server/api/songs.py` (import a song by
+path, list/fetch songs, compute waveform peaks) are all there and tested.
+`sleepmix ui` starts it, serving on `127.0.0.1:8765` by default and opening a
+browser tab.
+
+That's the whole surface. Plan 2a does **not** yet have: a preview endpoint
+(`POST /api/preview` and the `audio.encode_wav` it needs), renders (starting,
+cancelling, downloading, or a job manager to run them in the background), an
+SSE progress stream, presets CRUD over the table Task 2 already created, or a
+`RenderSession` registry keyed by song. All of that — the interactive
+machinery — is Plan 2b. Until it lands, this server can register a song and
+draw its waveform and nothing else; it cannot render or preview anything.
+
+`sleepmix/static/index.html` is a deliberate placeholder, not a preview of
+the finished UI. `app.py` serves it at `/` today only so there is something
+to load in a browser and confirm the server is up; Plan 3 replaces it
+outright with a compiled Elm application. Don't read anything about the
+eventual interface into its current contents.
+
+## Plan 1 (`feat/core-hooks`) recap
+
+What it built: everything under "What each module owns" in
+`docs/architecture.md` up to and including the server section —
 `paths.py`, `progress.py`, `session.py`, `preview.py`, the config schema in
 `config.py`, and the pre-existing render pipeline (`pipeline.py`,
 `analysis.py`, `separation.py`, `timestretch.py`, `disintegration.py`,
 `effects.py`, `soundbed.py`, `looping.py`) unchanged in behavior except where
-noted below. The CLI (`cli.py`) still only does `render` and `init-config`.
+noted below. Nothing in that branch served HTTP; `cli.py` still only did
+`render` and `init-config`. It built the load-bearing capabilities a server
+and a UI would need without exposing any of them to a user who wasn't calling
+Python directly.
 
-## What's not built here
-
-Nothing in this branch serves HTTP. The FastAPI server, the SSE progress
-endpoint, the background job manager, and the SQLite library store (songs,
-presets, renders) are Plan 2. The React SPA — library view, song view, mixer,
-render screen, schema-driven controls consuming `config_schema()`, Web Audio
-buffer swapping at loop boundaries using `render_window` — is Plan 3. Segment
-selection and arrangement, output length as an arrangement property, and a
-bundled desktop app are noted in the spec as future work beyond either plan.
-This branch built the load-bearing capabilities those plans need; it does not
-expose any of them to a user who isn't calling Python directly.
+What still sits beyond both plans so far: the Elm application itself
+(library view, song view, mixer, render screen, schema-driven controls
+consuming `config_schema()`, Web Audio buffer swapping at loop boundaries
+using `render_window`) is Plan 3. Segment selection and arrangement, output
+length as an arrangement property, and a bundled desktop app are noted in the
+spec as future work beyond any plan written so far.
 
 ## Accepted changes and caveats
 
@@ -95,30 +120,12 @@ nothing on this branch reads it, so those songs will be re-separated (a real
 Demucs call, ~10s+ depending on hardware) the next time each is rendered. It
 can be deleted; nothing here depends on it existing.
 
-## Scheduled for Plan 2, not fixed here
-
-**The silent Demucs fallback is still silent.** `separation.py` catches every
-exception from the real separation call and falls back to a single `mix`
-stem, surfacing the failure only via `warnings.warn`. That's adequate for a
-CLI running in a terminal a person is watching. It is not adequate for a UI:
-a user would configure per-stem decay, get back one undifferentiated stem,
-and have no indication why their vocal-only decay setting did nothing. Making
-this an explicit, visible piece of song state is Plan 2's job, not this
-branch's — this branch doesn't have anywhere to surface it to.
-
-**librosa's first call is cold.** librosa's beat-tracking and effects
-functions are numba-JIT-compiled on first use in a process. During
-development of this branch, one first call exceeded a two-minute test
-timeout; the second call in the same process took 0.9s. Nothing in this
-branch warms that up. A startup warm-up pass — calling the relevant librosa
-functions once on dummy audio before a server starts accepting requests — is
-scheduled for Plan 2, since only a long-lived server process benefits from
-paying that cost once instead of on a user's first real request.
-
 ## Known weaknesses, deferred deliberately
 
 These were identified and left as-is; each has a reason it wasn't worth
-fixing in this branch.
+fixing in the branch that found it. Plan 1 (`feat/core-hooks`) items are
+listed first, followed by Plan 2a (`feat/server-foundation`) items found
+during this plan's review.
 
 - **`RenderSession`'s loop-stage cache key is coarser than it needs to be.**
   It covers all of `LoopConfig`, so changing only `crossfade_ms` — which only
@@ -161,5 +168,62 @@ fixing in this branch.
   (`min`/`max`/`step`/`choices`) for every field, but nothing enforces them —
   they are advisory metadata for a UI to build controls from. A config loaded
   from YAML with `tempo.speed: 50` is accepted and rendered. A UI that trusts
-  its own controls is fine; an HTTP endpoint accepting arbitrary JSON is not,
-  so validation belongs with Plan 2's server.
+  its own controls is fine; an HTTP endpoint accepting arbitrary JSON is not.
+  No Plan 2a endpoint accepts a `MixConfig` yet, so this hasn't bitten;
+  validation has to land with whichever Plan 2b endpoint first accepts one
+  over HTTP (presets, preview, or renders).
+
+- **`Store` has no lock around writes, and this is the most important item to
+  fix before Plan 2b lands.** `server/store.py` opens SQLite with
+  `check_same_thread=False` so more than one thread may use the same
+  connection, but no `threading.Lock` guards the execute/commit pairs in
+  `add_song`, `update_song`, `add_render`, `update_render`, etc. Nothing
+  writes from a second thread today — the warm-up thread never touches the
+  store, and every request in this plan runs on FastAPI's single event loop.
+  Plan 2b's job manager changes that: it runs renders on a worker thread and
+  writes results back into `renders` from there, concurrently with the event
+  loop's own reads and writes. Two writes racing between `execute` and
+  `commit` on the same `sqlite3.Connection` can corrupt a statement or lose an
+  update. A lock needs to go in before that job manager starts writing, not
+  after something demonstrates the race.
+
+- **`load_audio` decodes the whole file with no caching, and pays that cost
+  twice per song already.** `server/api/songs.py`'s `import_song` decodes the
+  file once to get `duration_s`/`sample_rate` for the store row, and
+  `get_peaks` decodes it again, in full, on *every* call — there is nothing
+  between a request and `soundfile.read`. For a large file this is real,
+  repeated cost every time a waveform is drawn, and it will only get more
+  visible once a UI calls `/peaks` on every song-view load.
+
+- **`import_song` accepts an arbitrary absolute filesystem path from the
+  request body with no allow-listing.** It resolves `~` and relative
+  components and 400s cleanly if the result isn't a readable file — it
+  doesn't crash — but nothing restricts *which* files under the operating
+  system's permissions it will read. That's fine for what this is today: a
+  loopback-only tool reading the operator's own music on their own machine.
+  It stops being fine the moment the server is ever bound to anything but
+  `127.0.0.1` — at that point any caller who can reach the port can ask it to
+  read any file the server process can read. State this constraint
+  explicitly rather than leaving it implicit: **do not bind this server
+  beyond localhost without adding a path allow-list first.**
+
+- **`cli.py`'s `ui` command only guards the `uvicorn` import.** The
+  `try/except ImportError` around `import uvicorn` does not extend to the
+  following `from .server.app import create_app`, which pulls in `fastapi`.
+  An install with `uvicorn` present but `fastapi` missing (an unusual but
+  possible partial install) shows a raw `ImportError` traceback instead of
+  the `pip install "sleepmix[ui]"` hint the guard exists to give.
+
+- **Waveform peaks are computed on the mono downmix.** `peaks.compute_peaks`
+  calls `buf.to_mono()` before bucketing min/max pairs, so a transient present
+  in only one channel — a hard-panned hit, for instance — is averaged down
+  with the other channel rather than shown at full height. The drawn waveform
+  is a legitimate summary of loudness but not a faithful per-channel picture.
+
+- **`test_warm_analysis_makes_the_next_loop_search_fast`'s budget is loose.**
+  It asserts a post-warm-up `find_loop` call finishes in under 5 seconds. That
+  bound is loose enough that it would also pass if `warm_analysis` silently
+  did nothing at all — a genuinely cold `librosa.beat.beat_track` on four
+  seconds of audio is slow, but not reliably slower than 5 seconds on modern
+  hardware. The test currently only proves warm-up doesn't make things worse,
+  not that it does what it claims.

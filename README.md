@@ -73,6 +73,19 @@ sleepmix render --input song.flac --config sleepmix.yaml --output mix.wav
 sleepmix render --input song.flac --duration 45 --speed 0.6 --soundbed
 ```
 
+### UI (early)
+
+```bash
+pip install "sleepmix[ui]"
+sleepmix ui
+```
+
+Starts a local server on `127.0.0.1:8765` and opens a browser tab. Right now
+that tab shows a placeholder page — the interactive interface (library,
+waveform, live preview) is a separate, later change. What's already there is
+the server underneath it: import a song, list your library, pull its
+waveform. Nothing here renders audio yet.
+
 Or from Python:
 
 ```python

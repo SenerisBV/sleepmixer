@@ -1914,5 +1914,11 @@ in the same order as `_process_stem` (decay → reverb → gain → channels).
 
 The equality guarantee this task exists for is now stated precisely: a preview
 window is bit-identical to the corresponding render iteration **pre-reverb**;
-with reverb enabled it is representative but not identical, because a preview
-window has no reverb tail bleeding in from the preceding iteration.
+with reverb enabled it is representative but not identical. (A later fix
+narrowed why: `preview._reverbed_window` now renders the preceding iteration
+as leading context and reverbs it together with the window, so a wet window
+does carry a reverb tail bleeding in from the previous iteration, the way a
+real render's does. What remains is that the context is concatenated rather
+than crossfaded over `cycle_crossfade_ms`, so the reverb still hears a join a
+real render does not — see `docs/architecture.md`'s "Reverb on a window that
+has to loop" and `docs/project-state.md`.)

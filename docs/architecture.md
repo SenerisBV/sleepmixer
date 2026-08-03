@@ -1,9 +1,10 @@
 # Architecture
 
-This document covers the core render pipeline and the interactive layer built
-on top of it (separation → loop → stretch → decay → reverb → sum → sound bed →
-master, plus preview, sessions, and progress). It does not cover the server,
-library store, or UI — those are Plans 2 and 3; see `docs/project-state.md`.
+This document covers the core render pipeline, the interactive layer built on
+top of it (separation → loop → stretch → decay → reverb → sum → sound bed →
+master, plus preview, sessions, and progress), and the server that will
+eventually expose all of that over HTTP. It does not cover the UI itself —
+that's Plan 3; see `docs/project-state.md`.
 
 ## The load-bearing property: decay is a pure function of progress
 
@@ -232,10 +233,10 @@ loop at 0.10–0.15, stems spanning 0.15–0.85 split evenly via `stage_range`,
 sound bed at 0.88, mastering at 0.92–1.0); a caller wanting a progress bar
 reads `ProgressEvent.fraction` and does not need to know the stage
 boundaries. Cancellation is checked at three points: immediately after
-`separate()` returns (`pipeline.py:49-50`), once after the stem and sound-bed
-sections finish and before mastering begins (`pipeline.py:77-78`), and inside
+`separate()` returns (`pipeline.py:50-51`), once after the stem and sound-bed
+sections finish and before mastering begins (`pipeline.py:78-79`), and inside
 `build_disintegrating_stream`'s per-iteration loop, reached via `cancel`
-threaded through `_process_stem` (`pipeline.py:69`, `pipeline.py:103`) into
+threaded through `_process_stem` (`pipeline.py:70`, `pipeline.py:104`) into
 that function. The per-iteration check is the one that matters most in
 practice: because it sits inside the loop doing the actual expensive work, a
 long render can be interrupted promptly *within* a stem, not merely between
@@ -269,10 +270,93 @@ window is representative; a dry one is exact. See `docs/project-state.md`.
 ## Where data lives
 
 `paths.data_dir()` — a per-user location outside the project directory — is
-the only place sleepmix writes app data (currently just the separation cache
-under `paths.cache_dir()`). `SLEEPMIX_DATA_DIR` overrides it entirely; the
-test suite sets this to a fresh `tmp_path` for every test via the autouse
-`isolated_data_dir` fixture in `tests/conftest.py`, so no test run touches a
-real cache. Nothing else — no config, no library database, no rendered
-output — is written outside paths the caller explicitly asks for
-(`--output`, `save_audio`'s destination).
+the only place sleepmix writes app data: the separation cache under
+`paths.cache_dir()`, and, since this plan, the library database at
+`paths.data_dir() / "library.db"` (`server/store.py`). `SLEEPMIX_DATA_DIR`
+overrides it entirely; the test suite sets this to a fresh `tmp_path` for
+every test via the autouse `isolated_data_dir` fixture in `tests/conftest.py`,
+so no test run touches a real cache or a real library. Nothing else — no
+config, no rendered output — is written outside paths the caller explicitly
+asks for (`--output`, `save_audio`'s destination).
+
+## The server
+
+`sleepmix/server/` is the part of this plan that makes the pipeline reachable
+over HTTP. It is deliberately thin: everything it does is either call into a
+module documented above or persist a record of having done so.
+
+**The server holds no business logic.** `server/api/songs.py` decodes audio
+with `audio.load_audio` and summarizes it with `peaks.compute_peaks` — both
+pre-existing pipeline modules — rather than reimplementing anything; the only
+code specific to the route is turning a `Store` row into a response and a bad
+path into an `HTTPException`. `server/api/schema.py`'s entire body is one call
+to `config.config_schema()`. This buys two things: the pipeline stays usable
+identically from the CLI, from Python, and from HTTP, so a bug fixed once is
+fixed everywhere; and every route is a thin enough wrapper that it barely
+needs its own tests beyond wiring — the actual behavior is already covered
+where the wrapped function lives.
+
+**`create_app` is a factory, not a module-level `app`.** A module-level
+`FastAPI()` instance would be process-global — every test importing the
+server module would share one `Store` and one on-disk database. `create_app`
+takes an optional `store: Store | None`, so tests build a fresh app over a
+fresh (often in-memory or `tmp_path`) store, and `lifespan` owns the store's
+whole lifetime: it opens (or accepts) one on startup, puts it on
+`app.state.store` where every route reaches it via `request.app.state.store`,
+and closes it on shutdown. The real entry point, `cli.py`'s `ui` command,
+just calls `create_app()` with no store and gets the default.
+
+**`fastapi`/`uvicorn` are the `ui` optional extra** (`pyproject.toml`), not a
+core dependency — the same policy that keeps Demucs, librosa, and Rubber Band
+optional applies here: nothing beyond `numpy`/`scipy`/`soundfile`/`pedalboard`
+is needed for `import sleepmix` or the CLI's `render`/`init-config` commands
+to work, and a server most people never run shouldn't change that.
+`cli.py`'s `ui` command wraps `import uvicorn` in a `try/except ImportError`
+and raises a `SystemExit` pointing at `pip install "sleepmix[ui]"` if it's
+missing. That guard has a gap, recorded in `docs/project-state.md`: the
+following `from .server.app import create_app`, which pulls in `fastapi`, sits
+outside the `try`, so an install with `uvicorn` present but `fastapi` missing
+shows a raw `ImportError` traceback instead of the same hint.
+
+**The store's schema (`server/store.py`) is three flat tables** — `songs`,
+`presets`, `renders` — behind stdlib `sqlite3`, no ORM. `songs` carries
+`path`, `title`, `duration_s`, `sample_rate`, `separation_status` /
+`separation_reason` (columns this plan adds for a later plan to populate —
+nothing sets them yet; see `docs/project-state.md`), and `stems`. `presets`
+and `renders` each carry a `config` column that stores a whole `MixConfig` as
+a JSON blob rather than exploding it into one column per field. This is
+deliberate: `MixConfig` already round-trips through `dataclasses.asdict` and
+back (that's what `config_schema()` and YAML loading both rely on), so
+storing its dict form costs nothing extra, while a normalized schema would
+need a migration every time a decay parameter is added or renamed — which,
+given how young this config surface still is, would be often. The cost is
+that nothing can filter or sort renders by an individual config field in SQL;
+nothing here needs to yet.
+
+**Importing a song registers a path; it does not copy the file.** This is a
+local tool pointed at the operator's own music library — copying
+potentially gigabyte-scale files into an app-data directory on every import
+would double disk usage for no benefit the operator asked for. The
+consequence is in `server/api/songs.py`: if the file at that path is later
+moved, renamed, or deleted, `import_song` already succeeded and the row
+already exists, so the failure surfaces on the *next* access instead —
+`GET /api/songs/{id}/peaks` checks `os.path.isfile` itself and returns a 404
+with an explicit "it has moved or been deleted" message rather than letting
+`load_audio` raise something opaque. Nothing re-links or repairs the entry;
+the row just keeps 404ing on peaks (and will keep 404ing on preview and
+render once Plan 2b adds them) until the operator re-imports it or fixes the
+path by hand.
+
+**The warm-up (`server/warmup.py`) exists because librosa's first call in a
+process is slow and every later call is fast.** librosa leans on numba, which
+JIT-compiles on first use; during Plan 1's development, one cold first call
+exceeded a two-minute test timeout while the very next call in the same
+process took under a second (`docs/project-state.md`). A CLI eats that cost
+once per invocation and it's tolerable; a server that stays up for a session
+should not make a user's first click pay it. `app.py`'s `lifespan` kicks off
+`warm_analysis` via `asyncio.create_task(asyncio.to_thread(...))` so it runs
+off the event loop — the point is that `/api/health` and the static shell can
+already respond while a beat-track call is warming numba in the background —
+and `is_warm()` is surfaced on `/api/health` so a caller can tell whether
+that's finished. It is silent and best-effort if librosa isn't installed at
+all, matching the rest of the codebase's graceful-degradation policy.
