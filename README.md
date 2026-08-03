@@ -86,6 +86,13 @@ waveform, live preview) is a separate, later change. What's already there is
 the server underneath it: import a song, list your library, pull its
 waveform. Nothing here renders audio yet.
 
+**Keep it on localhost.** There is no authentication, and importing a song
+takes a filesystem path — so anything that can reach the port can ask the
+server to read any audio file your user account can read, and get a detailed
+waveform of it back. That's fine when the only thing that can reach it is you.
+It is not fine on a shared network, so `sleepmix ui` refuses a non-loopback
+`--host` unless you pass `--allow-remote`.
+
 Or from Python:
 
 ```python

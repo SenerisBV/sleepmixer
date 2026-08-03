@@ -17,3 +17,6 @@ venv/
 
 .pytest_cache/
 .DS_Store
+
+# Working notes from the planning workflow — drafts, not published docs.
+.superpowers/
