@@ -46,3 +46,21 @@ def test_ui_command_is_registered():
     result = CliRunner().invoke(main, ["ui", "--help"])
     assert result.exit_code == 0
     assert "--port" in result.output
+
+
+def test_subpackages_are_declared_for_distribution():
+    """A non-editable install must include sleepmix.server and its children.
+
+    The editable install used in development resolves imports from the source
+    tree, so a missing package declaration is invisible here and only shows up
+    as ModuleNotFoundError for whoever ran `pip install "sleepmix[ui]"`.
+    Asserting on the declaration is the cheap proxy for building a wheel.
+    """
+    from pathlib import Path
+
+    import sleepmix
+
+    pyproject = Path(sleepmix.__file__).resolve().parent.parent / "pyproject.toml"
+    text = pyproject.read_text()
+    assert "[tool.setuptools.packages.find]" in text
+    assert 'include = ["sleepmix*"]' in text

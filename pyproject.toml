@@ -32,8 +32,8 @@ dev = ["pytest>=7.4", "fastapi>=0.110", "uvicorn>=0.27", "httpx>=0.27"]
 [project.scripts]
 sleepmix = "sleepmix.cli:main"
 
-[tool.setuptools]
-packages = ["sleepmix"]
+[tool.setuptools.packages.find]
+include = ["sleepmix*"]
 
 [tool.setuptools.package-data]
 sleepmix = ["config.example.yaml"]
