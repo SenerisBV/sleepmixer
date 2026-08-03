@@ -1423,12 +1423,18 @@ In `pyproject.toml`, extend the package-data entry:
 sleepmix = ["config.example.yaml", "static/*"]
 ```
 
-And add the static package so setuptools includes the directory:
+Package discovery is already automatic — Task 1 set:
 
 ```toml
-[tool.setuptools]
-packages = ["sleepmix", "sleepmix.server", "sleepmix.server.api"]
+[tool.setuptools.packages.find]
+include = ["sleepmix*"]
 ```
+
+so `sleepmix.server` and `sleepmix.server.api` are picked up without being
+listed. **Do not replace that with an explicit package list**; enumeration is
+what caused `sleepmix.server` to be omitted from the wheel in the first place,
+and an editable install cannot reveal the mistake. Only the `package-data` line
+above needs changing in this step.
 
 - [ ] **Step 6: Wire static serving and warm-up into the app**
 
