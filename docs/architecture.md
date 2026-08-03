@@ -20,8 +20,10 @@ calls it once per repetition and crossfades the results together
 
 This is what makes a preview cheap. `preview.render_window` answers "what does
 this sound like two-thirds of the way through" by computing a single
-iteration — about 33ms per stem on the reference machine — instead of
-rendering everything that precedes it. Without the purity property, previewing
+iteration — tens of milliseconds per stem (measured during development on a
+6.4-second stereo loop at 44.1kHz: `apply_decay` at 23-24ms, `apply_reverb` at
+9-34ms) — instead of rendering everything that precedes it. Without the
+purity property, previewing
 iteration 800 would mean either rendering iterations 1–800 (defeating the
 point of a preview) or maintaining running state that could drift from a real
 render.
@@ -190,11 +192,16 @@ working. Stages emit at fixed overall-progress checkpoints (separate at 0.0,
 loop at 0.10–0.15, stems spanning 0.15–0.85 split evenly via `stage_range`,
 sound bed at 0.88, mastering at 0.92–1.0); a caller wanting a progress bar
 reads `ProgressEvent.fraction` and does not need to know the stage
-boundaries. Cancellation is checked at the top of the stem loop, once per
-stem, and inside `build_disintegrating_stream`'s per-iteration loop — the
-two points where a render can stop without leaving corrupted output, since
-each iteration and each stem's contribution to `mix` is a complete,
-independent unit of work.
+boundaries. Cancellation is checked at three points: immediately after
+`separate()` returns (`pipeline.py:49-50`), once after the stem and sound-bed
+sections finish and before mastering begins (`pipeline.py:77-78`), and inside
+`build_disintegrating_stream`'s per-iteration loop, reached via `cancel`
+threaded through `_process_stem` (`pipeline.py:69`, `pipeline.py:103`) into
+that function. The per-iteration check is the one that matters most in
+practice: because it sits inside the loop doing the actual expensive work, a
+long render can be interrupted promptly *within* a stem, not merely between
+stages, without leaving corrupted output — each iteration's contribution is a
+complete, independent unit of work.
 
 ## Where data lives
 

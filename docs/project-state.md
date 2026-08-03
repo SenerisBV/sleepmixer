@@ -63,10 +63,11 @@ approximating the tail, neither of which has been done.
 relative to the working directory; it now lives under
 `paths.cache_dir()` (a per-user app-data directory, see
 `docs/architecture.md`). This repository still has a `.sleepmix_cache/` at
-its root — roughly 170MB, one cached song — left over from before this
-branch. It is orphaned: nothing on this branch reads it, so that song will
-be re-separated (a real Demucs call, ~10s+ depending on hardware) the next
-time it's rendered. It can be deleted; nothing here depends on it existing.
+its root — roughly 170MB across two cached songs (`004542e5a96e70ee` and
+`68b53b05350142ff`) — left over from before this branch. It is orphaned:
+nothing on this branch reads it, so those songs will be re-separated (a real
+Demucs call, ~10s+ depending on hardware) the next time each is rendered. It
+can be deleted; nothing here depends on it existing.
 
 ## Scheduled for Plan 2, not fixed here
 
@@ -122,17 +123,18 @@ fixing in this branch.
   `stage_range` arithmetic that produced out-of-order *inputs* to `emit`
   would be silently absorbed by the clamp and this test would still pass.
 
-- **`test_cancel_aborts_the_render` cancels on the first progress event.** It
-  exercises the stem-loop cancel check in `pipeline.run_pipeline` but never
-  reaches the per-iteration cancel check inside
-  `disintegration.build_disintegrating_stream`, so that check has no direct
-  test coverage.
+- **`test_cancel_aborts_the_render` cancels on the first progress event.**
+  That trips the post-separation check in `pipeline.run_pipeline`
+  (`pipeline.py:49-50`) before any stem processing starts. It never reaches
+  the per-iteration cancel check inside
+  `disintegration.build_disintegrating_stream`, so a regression in that
+  check specifically could go undetected by this test.
 
-- **`analysis._estimate_tempo` duplicates the `librosa.beat.beat_track` call**
-  already made inside `_librosa_loop` for the auto-detect path — when
-  detection succeeds, tempo is effectively computed twice. Only the
-  explicit-loop path (`_explicit_loop`) actually needs `_estimate_tempo`
-  as a separate call.
+- **`analysis._estimate_tempo` and `_librosa_loop` each have their own
+  `librosa.beat.beat_track` call site.** The two paths are mutually exclusive
+  within a single `find_loop` call — an explicit `start_s`/`end_s` short-
+  circuits auto-detection entirely, so `beat_track` is never invoked twice in
+  one call — but the duplicate call sites could still share a helper.
 
 - **`MixConfig.seed` and `separation_model` carry no field metadata.** Every
   other config field has a `label`/`help`/bounds dict for `config_schema()`
