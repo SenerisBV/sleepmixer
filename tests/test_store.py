@@ -1,7 +1,9 @@
+import threading
+
 import pytest
 
 from sleepmix import paths
-from sleepmix.server.store import Store
+from sleepmix.server.store import SEPARATION_STATUSES, Store
 
 
 @pytest.fixture
@@ -103,6 +105,49 @@ def test_renders_round_trip(store):
     assert store.get_render(r["id"])["status"] == "running"
     assert store.update_render(r["id"], status="done")["status"] == "done"
     assert [x["id"] for x in store.list_renders()] == [r["id"]]
+
+
+def test_default_separation_status_is_in_the_declared_vocabulary(store):
+    song = store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
+    assert song["separation_status"] in SEPARATION_STATUSES
+
+
+def test_concurrent_writers_and_readers_do_not_lose_rows(store):
+    """FastAPI runs `def` routes in a threadpool, so this is the real shape.
+
+    Without the lock in `Store`, interleaved execute/commit pairs on one
+    `sqlite3.Connection` (opened `check_same_thread=False`) are only safe by
+    accident of the platform's `sqlite3.threadsafety`. This asserts the
+    contract directly: every insert lands, every read is well-formed, and
+    nothing raises on any thread."""
+    n_threads, per_thread = 8, 25
+    errors: list[BaseException] = []
+    start = threading.Barrier(n_threads)
+
+    def worker(t: int) -> None:
+        try:
+            start.wait(timeout=10)
+            for i in range(per_thread):
+                store.add_song(path=f"/tmp/{t}-{i}.wav", title=f"{t}-{i}",
+                               duration_s=1.0, sample_rate=44100)
+                # Interleave reads and a read-modify-write with the inserts.
+                for song in store.list_songs():
+                    assert song["title"]
+                store.update_song(
+                    store.list_songs()[0]["id"], separation_status="running")
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+        assert not t.is_alive(), "a worker deadlocked — is the lock an RLock?"
+
+    assert errors == []
+    titles = {s["title"] for s in store.list_songs()}
+    assert len(titles) == n_threads * per_thread
 
 
 def test_a_second_store_sees_the_first_store_s_data(store):
