@@ -1310,10 +1310,20 @@ def test_health_reports_warm_state(client):
     assert "warm" in client.get("/api/health").json()
 
 
-def test_warm_analysis_is_idempotent_and_quiet():
-    """Must not raise even when librosa is absent — it is an optional dep."""
+def test_warm_analysis_sets_the_flag_and_is_idempotent():
+    """Must not raise even when librosa is absent — it is an optional dep.
+
+    Reaches into ``_warmed`` because module-level memoization is exactly what
+    is under test: without resetting it, whichever test ran first would have
+    already warmed the module and this would assert nothing."""
+    from sleepmix.server import warmup
+
+    warmup._warmed = False
+    assert warmup.is_warm() is False
     warm_analysis()
-    warm_analysis()
+    assert warmup.is_warm() is True
+    warm_analysis()  # second call must be a no-op, not an error
+    assert warmup.is_warm() is True
 
 
 def test_warm_analysis_makes_the_next_loop_search_fast():
