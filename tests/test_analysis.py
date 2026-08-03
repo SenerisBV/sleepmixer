@@ -27,6 +27,21 @@ def test_explicit_loop_points_are_clamped_to_the_buffer():
     assert lp.end == buf.n_frames
 
 
+def test_loop_points_past_the_end_fall_back_to_auto():
+    """Clamping must not manufacture a one-frame loop."""
+    buf = _tone(secs=10.0)
+    lp = find_loop(buf, LoopConfig(start_s=999.0, end_s=1000.0))
+    auto = find_loop(buf, LoopConfig())
+    assert (lp.start, lp.end) == (auto.start, auto.end)
+
+
+def test_degenerate_explicit_range_falls_back_to_auto():
+    buf = _tone(secs=10.0)
+    lp = find_loop(buf, LoopConfig(start_s=5.0, end_s=5.01))  # 10 ms
+    auto = find_loop(buf, LoopConfig())
+    assert (lp.start, lp.end) == (auto.start, auto.end)
+
+
 def test_omitting_loop_points_still_auto_detects():
     buf = _tone()
     lp = find_loop(buf, LoopConfig())

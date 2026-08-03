@@ -36,12 +36,17 @@ def find_loop(buf: AudioBuffer, cfg: LoopConfig) -> LoopPoint:
 
 
 def _explicit_loop(buf: AudioBuffer, cfg: LoopConfig) -> LoopPoint | None:
+    """The caller's region, or ``None`` to fall through to auto-detection.
+
+    A region that clamps to less than a tenth of a second is treated as absent
+    rather than honoured. Clamping a request that sits past the end of the
+    track would otherwise yield a technically-valid one-frame loop, which
+    survives slicing and then falls apart in the crossfade."""
     if cfg.start_s is None or cfg.end_s is None:
         return None
     start = int(max(cfg.start_s, 0.0) * buf.sr)
     end = int(min(cfg.end_s * buf.sr, buf.n_frames))
-    start = min(start, max(buf.n_frames - 1, 0))
-    if end <= start:
+    if end - start < max(int(0.1 * buf.sr), 1):
         return None
     return LoopPoint(start=start, end=end, tempo=_estimate_tempo(buf))
 
