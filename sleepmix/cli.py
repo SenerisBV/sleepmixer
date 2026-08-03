@@ -55,5 +55,30 @@ def init_config(output_path):
     click.echo(f"Wrote {output_path}")
 
 
+@main.command()
+@click.option("--host", default="127.0.0.1", help="Interface to bind.")
+@click.option("--port", default=8765, type=int, help="Port to bind.")
+@click.option("--open/--no-open", "open_browser", default=True,
+              help="Open a browser tab on start.")
+def ui(host, port, open_browser):
+    """Start the local web UI."""
+    try:
+        import uvicorn
+    except ImportError:
+        raise SystemExit(
+            "The UI needs extra dependencies. Install them with:\n"
+            "    pip install \"sleepmix[ui]\""
+        )
+    from .server.app import create_app
+
+    if open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(
+            1.0, lambda: webbrowser.open(f"http://{host}:{port}/")).start()
+    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+
+
 if __name__ == "__main__":
     main()
