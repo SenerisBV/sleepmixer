@@ -18,7 +18,10 @@ store (songs/presets/renders tables), `server/warmup.py`'s startup JIT
 warm-up, and `server/api/schema.py` + `server/api/songs.py` (import a song by
 path, list/fetch songs, compute waveform peaks) are all there and tested.
 `sleepmix ui` starts it, serving on `127.0.0.1:8765` by default and opening a
-browser tab.
+browser tab. It refuses a non-loopback `--host` unless `--allow-remote` is
+passed, because the server has no authentication and `import_song` will read
+any audio file the process can read — see the deferred-items section below for
+the full shape of that constraint.
 
 That's the whole surface. Plan 2a does **not** yet have: a preview endpoint
 (`POST /api/preview` and the `audio.encode_wav` it needs), renders (starting,
@@ -188,39 +191,106 @@ during this plan's review.
   reason is sitting two layers down in the core. That was the whole point of
   the original item, so it's only half-closed.
 
-- **`Store` has no lock around writes, and this is the most important item to
-  fix before Plan 2b lands.** `server/store.py` opens SQLite with
-  `check_same_thread=False` so more than one thread may use the same
-  connection, but no `threading.Lock` guards the execute/commit pairs in
-  `add_song`, `update_song`, `add_render`, `update_render`, etc. Nothing
-  writes from a second thread today — the warm-up thread never touches the
-  store, and every request in this plan runs on FastAPI's single event loop.
-  Plan 2b's job manager changes that: it runs renders on a worker thread and
-  writes results back into `renders` from there, concurrently with the event
-  loop's own reads and writes. Two writes racing between `execute` and
-  `commit` on the same `sqlite3.Connection` can corrupt a statement or lose an
-  update. A lock needs to go in before that job manager starts writing, not
-  after something demonstrates the race.
+- **A cached fallback is sticky, and `POST /api/songs/{id}/separate` will have
+  to break the stickiness itself.** `separation._cache_key` is
+  `sha1(abspath : size : mtime : model)` — it says nothing about whether Demucs
+  was actually available when those stems were written. So once a fallback is
+  cached, `separate_detailed` finds the cached single `mix` stem, returns early
+  at the `_load_cache` hit, and never retries the real model. That includes
+  *after* the operator installs the `separation` extra: the file hasn't
+  changed, so the key hasn't changed, so they keep getting "Demucs
+  unavailable" on a machine where Demucs now works, with no indication that
+  the answer is stale rather than current.
 
-- **`load_audio` decodes the whole file with no caching, and pays that cost
-  twice per song already.** `server/api/songs.py`'s `import_song` decodes the
-  file once to get `duration_s`/`sample_rate` for the store row, and
-  `get_peaks` decodes it again, in full, on *every* call — there is nothing
-  between a request and `soundfile.read`. For a large file this is real,
-  repeated cost every time a waveform is drawn, and it will only get more
-  visible once a UI calls `/peaks` on every song-view load.
+  This is invisible today because nothing re-runs separation. Plan 2b's
+  `POST /api/songs/{id}/separate` makes it the first thing an operator hits:
+  they see one `mix` stem, install the extra, press the button, get the same
+  answer. That endpoint needs a force/invalidate path — delete
+  `.sleepmix_cache/<key>/` and recompute — or the cache key needs to
+  incorporate fallback-ness. Straight `separate()` calls should keep the
+  current short-circuit; the point is that the *user-initiated retry* must be
+  able to say "no, actually try again."
+
+  Related and same cause: `_save_fallback_reason`'s `reason is None →
+  os.remove(path)` branch, which exists to clear a stale marker when a
+  later run succeeds, is unreachable in the ordinary flow. Anything that would
+  reach it with a stale marker on disk has already returned from the cache hit
+  above. It becomes live again as soon as invalidation exists — worth keeping,
+  not worth deleting as dead code.
+
+- **`Store` is locked now — and the reason the earlier deferral was wrong is
+  worth keeping.** An earlier version of this document claimed "every request
+  in this plan runs on FastAPI's single event loop." **That was false.** Every
+  route in `server/api/` is declared `def`, not `async def`, and FastAPI runs
+  sync path-operation functions in an AnyIO threadpool — instrumenting
+  `Store.list_songs` and issuing `GET /api/songs` records the call on an
+  `AnyIO worker thread`, not `MainThread`. So the store was already reachable
+  from several threads at once, and would have been from the Elm UI's very
+  first paint, which fires several requests in parallel by design.
+
+  `sqlite3.threadsafety` is 3 (SERIALIZED) on the development machine, so
+  nothing corrupted — but that is platform-dependent, and
+  `check_same_thread=False` disables the only guard Python offers. Two
+  problems were real regardless of the platform: `commit()` is
+  connection-wide, so one thread's commit flushes another's in-flight implicit
+  transaction; and `update_song`/`update_render` are read-modify-write
+  (`get` → `UPDATE` → `get`) and lose updates under concurrency.
+
+  Every public method on `Store` now holds a `threading.RLock` for its whole
+  body. **`RLock`, not `Lock`** — `update_song` calls `get_song` while already
+  holding the lock, and a non-reentrant lock deadlocks there on the first
+  update (verified). `tests/test_store.py::test_concurrent_writers_and_readers_do_not_lose_rows`
+  exercises it with eight threads. Plan 2b's job manager will add a genuinely
+  separate worker thread writing into `renders`; the lock is already in place
+  for it.
+
+- **`load_audio` materialises the whole file in RAM, on every `/peaks`
+  request.** `server/api/songs.py`'s `import_song` decodes the file once to
+  get `duration_s`/`sample_rate` for the store row, and `get_peaks` decodes it
+  again, in full, on *every* call — there is nothing between a request and
+  `soundfile.read`. That is repeated cost every time a waveform is drawn, and
+  it is worse than slow: a one-hour 96 kHz stereo file is roughly 2.7 GB as
+  float32, and `import_song` accepts any path, so a single request can OOM the
+  process. `soundfile.blocks()` would make peak computation O(1) in memory and
+  is the obvious fix — peaks are a streaming reduction and never need the
+  whole array at once. Worth doing in Plan 2b, before the UI starts calling
+  `/peaks` on every song-view load.
 
 - **`import_song` accepts an arbitrary absolute filesystem path from the
   request body with no allow-listing.** It resolves `~` and relative
   components and 400s cleanly if the result isn't a readable file — it
   doesn't crash — but nothing restricts *which* files under the operating
-  system's permissions it will read. That's fine for what this is today: a
-  loopback-only tool reading the operator's own music on their own machine.
-  It stops being fine the moment the server is ever bound to anything but
-  `127.0.0.1` — at that point any caller who can reach the port can ask it to
-  read any file the server process can read. State this constraint
-  explicitly rather than leaving it implicit: **do not bind this server
-  beyond localhost without adding a path allow-list first.**
+  system's permissions it will read, and `/peaks?buckets=20000` will hand back
+  a detailed summary of whatever it read. That's acceptable for what this is:
+  a loopback-only tool reading the operator's own music on their own machine.
+  It stops being acceptable the moment the server is bound anywhere else.
+
+  That constraint is no longer implicit. `cli.py`'s `ui` command refuses a
+  non-loopback `--host` unless `--allow-remote` is passed, and says why in the
+  refusal; the README's UI section says the same thing in prose. **A path
+  allow-list is still the thing that would actually make a non-loopback bind
+  safe, and it does not exist** — `--allow-remote` is an informed-consent
+  switch, not a mitigation.
+
+- **DNS rebinding is not mitigated, deliberately.** Binding loopback stops
+  other machines from connecting; it does not stop a web page the operator
+  visits from rebinding its own hostname to `127.0.0.1`, at which point the
+  page is same-origin with the API and can drive it — import a path, read the
+  waveform back. `TrustedHostMiddleware` with a `Host` allow-list is the cheap
+  mitigation, but it needs care rather than a one-liner: FastAPI's
+  `TestClient` sends `Host: testserver`, so a naive allow-list of
+  `127.0.0.1`/`localhost` fails every request in the suite at once. Deferred
+  for that reason, not overlooked. Whoever adds it must allow the test host
+  (or make the allow-list injectable) in the same change.
+
+- **Nothing prevents duplicate song rows for the same path.** `add_song`
+  always inserts a new row with a new id, so importing the same file twice
+  gives two library entries pointing at one file, each with its own render
+  history — and the UI has no way to tell the operator they are the same song.
+  Either a `UNIQUE` index on `songs.path` (with `import_song` returning the
+  existing row instead of 201-ing a duplicate), or a deliberate decision that
+  duplicates are allowed and the UI dedupes on display. Pick one in Plan 2b;
+  the current state is neither.
 
 - **`cli.py`'s `ui` command only guards the `uvicorn` import.** The
   `try/except ImportError` around `import uvicorn` does not extend to the
@@ -234,6 +304,13 @@ during this plan's review.
   in only one channel — a hard-panned hit, for instance — is averaged down
   with the other channel rather than shown at full height. The drawn waveform
   is a legitimate summary of loudness but not a faithful per-channel picture.
+
+  It does now clamp non-finite samples (`np.nan_to_num`, immediately after the
+  downmix). A float-subtype WAV can legally carry `NaN`/`±Inf`; those survived
+  `float()` and pydantic serialized them to JSON `null` on a `-> dict` route,
+  which would fail the Elm frontend's `list (list float)` decode and blank the
+  whole waveform with nothing logged server-side to explain it. The clamp is in
+  `peaks.py` rather than the route so the CLI and Python paths get it too.
 
 - **`test_warm_analysis_makes_the_next_loop_search_fast`'s budget is loose.**
   It asserts a post-warm-up `find_loop` call finishes in under 5 seconds. That

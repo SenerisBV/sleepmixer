@@ -290,21 +290,33 @@ with `audio.load_audio` and summarizes it with `peaks.compute_peaks` — both
 pre-existing pipeline modules — rather than reimplementing anything; the only
 code specific to the route is turning a `Store` row into a response and a bad
 path into an `HTTPException`. `server/api/schema.py`'s entire body is one call
-to `config.config_schema()`. This buys two things: the pipeline stays usable
+to `config.config_schema()`. The payoff is that the pipeline stays usable
 identically from the CLI, from Python, and from HTTP, so a bug fixed once is
-fixed everywhere; and every route is a thin enough wrapper that it barely
-needs its own tests beyond wiring — the actual behavior is already covered
-where the wrapped function lives.
+fixed everywhere. The routes still carry behaviour of their own and are tested
+for it directly (`tests/test_api_songs.py`): which failure is a 400 and which
+is a 404, the `MAX_PEAK_BUCKETS` bound, the "file has moved" case. Thin is not
+the same as trivial.
 
 **`create_app` is a factory, not a module-level `app`.** A module-level
 `FastAPI()` instance would be process-global — every test importing the
 server module would share one `Store` and one on-disk database. `create_app`
-takes an optional `store: Store | None`, so tests build a fresh app over a
-fresh (often in-memory or `tmp_path`) store, and `lifespan` owns the store's
-whole lifetime: it opens (or accepts) one on startup, puts it on
-`app.state.store` where every route reaches it via `request.app.state.store`,
-and closes it on shutdown. The real entry point, `cli.py`'s `ui` command,
-just calls `create_app()` with no store and gets the default.
+takes an optional `store: Store | None`, and `lifespan` puts whichever store
+is in play on `app.state.store`, where every route reaches it via
+`request.app.state.store`. The real entry point, `cli.py`'s `ui` command,
+calls `create_app()` with no store and gets the default.
+
+Isolation in tests comes from a different direction than the `store=`
+parameter: `tests/conftest.py`'s autouse `isolated_data_dir` fixture points
+`SLEEPMIX_DATA_DIR` at a fresh `tmp_path` for *every* test, so the default
+`Store()` a bare `create_app()` opens already lands in a throwaway directory.
+Most server tests therefore just use `TestClient(create_app())`. Nothing in
+the codebase uses an in-memory SQLite database; the store is always a file.
+
+`lifespan` closes the store **only if it opened it** (`owned = store is None`).
+A store handed in by the caller is borrowed, not owned — closing it on
+shutdown would hand back a dead connection, and a second `TestClient` context
+over the same app would rebind it and raise `sqlite3.ProgrammingError`. That
+is what `test_an_injected_store_outlives_the_app` pins down.
 
 **`fastapi`/`uvicorn` are the `ui` optional extra** (`pyproject.toml`), not a
 core dependency — the same policy that keeps Demucs, librosa, and Rubber Band
