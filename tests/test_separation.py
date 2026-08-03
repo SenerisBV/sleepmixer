@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from sleepmix.audio import AudioBuffer, save_audio
 from sleepmix.separation import SeparationResult, separate, separate_detailed
@@ -28,20 +29,61 @@ def test_fallback_reports_a_reason(tmp_path, monkeypatch):
 def test_fallback_reason_survives_a_cache_hit(tmp_path, monkeypatch):
     """A cached fallback must still report itself as a fallback.
 
-    Otherwise the second load looks like a successful separation and the UI
-    stops explaining why there is only one stem."""
+    Counts separation calls so the test proves the second read came from the
+    cache — comparing two identical reason strings would pass even if nothing
+    were cached at all."""
     import sleepmix.separation as sep
 
     song = tmp_path / "s.wav"
     _song(song)
     cache = str(tmp_path / "cache")
-    monkeypatch.setattr(sep, "_demucs_separate",
-                        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no torch")))
+    calls = []
+
+    def failing(input_path, model):
+        calls.append(1)
+        raise RuntimeError("no torch")
+
+    monkeypatch.setattr(sep, "_demucs_separate", failing)
 
     first = separate_detailed(str(song), cache_dir=cache)
     second = separate_detailed(str(song), cache_dir=cache)
+    assert len(calls) == 1, "second call should have hit the cache"
     assert first.fallback_reason is not None
     assert second.fallback_reason == first.fallback_reason
+
+
+def test_a_marker_without_stems_does_not_masquerade_as_success(tmp_path, monkeypatch):
+    """The marker/stem write window must fail safe.
+
+    If the marker lands but the stems do not, the next call must redo the
+    separation rather than trusting a cache directory that holds only a
+    marker."""
+    import sleepmix.separation as sep
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cache = str(tmp_path / "cache")
+    calls = []
+
+    def failing(input_path, model):
+        calls.append(1)
+        raise RuntimeError("no torch")
+
+    monkeypatch.setattr(sep, "_demucs_separate", failing)
+
+    real_save_cache = sep._save_cache
+
+    def boom(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(sep, "_save_cache", boom)
+    with pytest.raises(OSError):
+        separate_detailed(str(song), cache_dir=cache)
+
+    monkeypatch.setattr(sep, "_save_cache", real_save_cache)
+    result = separate_detailed(str(song), cache_dir=cache)
+    assert len(calls) == 2, "the second call must have re-run separation"
+    assert result.fallback_reason is not None
 
 
 def test_successful_separation_has_no_reason(tmp_path, monkeypatch):

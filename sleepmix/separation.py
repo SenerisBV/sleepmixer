@@ -67,8 +67,8 @@ def separate_detailed(
         warnings.warn(reason, stacklevel=2)
         stems = {"mix": load_audio(input_path)}
 
-    _save_cache(cache_dir, key, stems)
     _save_fallback_reason(cache_dir, key, reason)
+    _save_cache(cache_dir, key, stems)
     return SeparationResult(stems, reason)
 
 
@@ -126,6 +126,13 @@ def _fallback_marker_path(cache_dir: str, key: str) -> str:
 
 
 def _save_fallback_reason(cache_dir: str, key: str, reason: str | None) -> None:
+    """Persist why we fell back, so a later cache hit still knows.
+
+    Written before the stems on purpose: if this succeeds and the stems do not,
+    the next call finds no ``.wav`` files, recomputes, and overwrites the stale
+    marker. The reverse order would leave cached fallback stems with no marker,
+    which reads as a successful separation."""
+    os.makedirs(_cache_path(cache_dir, key), exist_ok=True)
     path = _fallback_marker_path(cache_dir, key)
     if reason is None:
         if os.path.exists(path):
