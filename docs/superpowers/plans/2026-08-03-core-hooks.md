@@ -1277,6 +1277,21 @@ def test_explicit_loop_points_are_clamped_to_the_buffer():
     assert lp.end == buf.n_frames
 
 
+def test_loop_points_past_the_end_fall_back_to_auto():
+    """Clamping must not manufacture a one-frame loop."""
+    buf = _tone(secs=10.0)
+    lp = find_loop(buf, LoopConfig(start_s=999.0, end_s=1000.0))
+    auto = find_loop(buf, LoopConfig())
+    assert (lp.start, lp.end) == (auto.start, auto.end)
+
+
+def test_degenerate_explicit_range_falls_back_to_auto():
+    buf = _tone(secs=10.0)
+    lp = find_loop(buf, LoopConfig(start_s=5.0, end_s=5.01))  # 10 ms
+    auto = find_loop(buf, LoopConfig())
+    assert (lp.start, lp.end) == (auto.start, auto.end)
+
+
 def test_omitting_loop_points_still_auto_detects():
     buf = _tone()
     lp = find_loop(buf, LoopConfig())
@@ -1331,12 +1346,17 @@ def find_loop(buf: AudioBuffer, cfg: LoopConfig) -> LoopPoint:
 
 
 def _explicit_loop(buf: AudioBuffer, cfg: LoopConfig) -> LoopPoint | None:
+    """The caller's region, or ``None`` to fall through to auto-detection.
+
+    A region that clamps to less than a tenth of a second is treated as absent
+    rather than honoured. Clamping a request that sits past the end of the
+    track would otherwise yield a technically-valid one-frame loop, which
+    survives slicing and then falls apart in the crossfade."""
     if cfg.start_s is None or cfg.end_s is None:
         return None
     start = int(max(cfg.start_s, 0.0) * buf.sr)
     end = int(min(cfg.end_s * buf.sr, buf.n_frames))
-    start = min(start, max(buf.n_frames - 1, 0))
-    if end <= start:
+    if end - start < max(int(0.1 * buf.sr), 1):
         return None
     return LoopPoint(start=start, end=end, tempo=_estimate_tempo(buf))
 
