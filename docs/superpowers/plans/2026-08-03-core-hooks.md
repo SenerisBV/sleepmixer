@@ -1885,3 +1885,34 @@ Per the spec's scope, and deferred to later plans:
 - **Plan 2 — server and store:** FastAPI app, SSE progress endpoint, background job manager, SQLite library (songs/presets/renders), waveform peak computation, surfacing the silent Demucs fallback as explicit song state, and the librosa warm-up pass on startup.
 - **Plan 3 — React SPA:** Library, Song view, Mixer, Render screens; schema-driven controls; Web Audio buffer swapping at loop boundaries.
 - **Future:** segment selection and arrangement; output length as an arrangement property; bundled desktop app.
+
+---
+
+## Addendum — Task 9 fix (preview/render divergence)
+
+Review of Task 9 found two ways the preview diverged from what a real render
+produces. Both were defects in this plan's design, not in its implementation.
+
+**1. Reverb was applied differently.** `pipeline._process_stem` applies
+`apply_reverb(..., wet_scale=sc.reverb_send)` to each stem *before* summing.
+`render_window` summed the stems dry and applied reverb once at the default
+`wet_scale=1.0`. Reverb is not linear across differing wet scales, so any stem
+with `reverb_send != 1.0` made the wet preview disagree with the render. The
+original tests could not catch it — the only wet-path test asserted merely that
+the output was finite and differed from dry.
+
+**2. Stem selection diverged.** `pipeline._plan_jobs` falls back to default
+`StemConfig`s only when *no* configured stem matches the available stems (the
+single-`mix`-stem fallback case). `preview._stem_config` synthesized a default
+for any unlisted stem individually, so with a partial `cfg.stems` list the
+preview rendered stems the real render silently drops.
+
+**Resolution.** Stem planning moves into `config.plan_stem_configs(available,
+config)`, used by both `pipeline._plan_jobs` and `preview.render_window`, so the
+two cannot drift. `render_window` applies reverb per stem with that stem's send,
+in the same order as `_process_stem` (decay → reverb → gain → channels).
+
+The equality guarantee this task exists for is now stated precisely: a preview
+window is bit-identical to the corresponding render iteration **pre-reverb**;
+with reverb enabled it is representative but not identical, because a preview
+window has no reverb tail bleeding in from the preceding iteration.
