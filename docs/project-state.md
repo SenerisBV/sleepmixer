@@ -173,6 +173,21 @@ during this plan's review.
   validation has to land with whichever Plan 2b endpoint first accepts one
   over HTTP (presets, preview, or renders).
 
+- **The Demucs fallback is explained internally now, but that explanation
+  doesn't reach a song's record yet.** `separation.separate_detailed` returns
+  a `SeparationResult` carrying `fallback_reason`, and `_save_fallback_reason`
+  writes that reason into a marker file beside the cached stems, so a later
+  cache hit still reports the fallback instead of quietly looking like a
+  clean separation — the mechanism the original deferred item was missing
+  now exists. But nothing connects it to a song row: `server/store.py`'s
+  `songs` table has `separation_status` (`DEFAULT 'pending'`) and
+  `separation_reason` columns for exactly this, and no server code ever calls
+  `update_song` with them — that requires `POST /api/songs/{id}/separate`,
+  which doesn't exist until Plan 2b. Until it does, the UI cannot yet explain
+  why a song came back with one `mix` stem instead of four, even though the
+  reason is sitting two layers down in the core. That was the whole point of
+  the original item, so it's only half-closed.
+
 - **`Store` has no lock around writes, and this is the most important item to
   fix before Plan 2b lands.** `server/store.py` opens SQLite with
   `check_same_thread=False` so more than one thread may use the same
