@@ -1048,6 +1048,18 @@ def test_schema_includes_units_where_meaningful():
     assert s["sections"]["stem_decay"]["fields"]["lowpass_end_hz"]["unit"] == "Hz"
 
 
+def test_schema_omits_nested_dataclasses_from_leaf_fields():
+    """Nested sections must never appear as scalar controls.
+
+    ``StemConfig.decay`` is a dataclass, not a value — a UI iterating the stem
+    section's fields would otherwise render a text input for it."""
+    s = config_schema()
+    assert "decay" not in s["sections"]["stem"]["fields"]
+    assert "stems" not in s["fields"]
+    for section in ("loop", "tempo", "reverb", "soundbed", "output"):
+        assert section not in s["fields"]
+
+
 def test_metadata_does_not_change_defaults_or_yaml_loading(tmp_path):
     # Defaults survive the addition of metadata.
     assert MixConfig().tempo.speed == 0.7
@@ -1151,10 +1163,18 @@ def config_schema() -> dict[str, Any]:
 
 
 def _describe_fields(dc_type: type) -> dict[str, Any]:
+    from typing import get_type_hints
+
+    hints = get_type_hints(dc_type)
     out: dict[str, Any] = {}
     for f in fields(dc_type):
-        if f.name in _SECTION_TYPES or f.name == "stems":
-            continue  # nested sections are described separately
+        # Nested dataclasses (and the stem list) are described as their own
+        # sections, never as leaf controls — a UI iterating these fields must
+        # not be handed 'decay' or 'loop' as though they were scalar inputs.
+        # Types are resolved via get_type_hints because ``from __future__ import
+        # annotations`` makes ``f.type`` a string.
+        if is_dataclass(hints.get(f.name)) or f.name == "stems":
+            continue
         meta = dict(f.metadata)
         entry: dict[str, Any] = {
             "type": _type_name(f),
