@@ -74,8 +74,9 @@ new DSP — only a new entry point and a memoization layer.
 ## Architecture
 
 ```
-ui/                     Vite + React + TS + Tailwind + shadcn/ui   (source)
-  └── built to ──► sleepmix/static/          shipped inside the wheel
+ui/                     Elm application (source)
+  └── elm make ──► sleepmix/static/app.js     shipped inside the wheel
+ui/ports/               hand-written JS: Web Audio engine, SSE bridge
 sleepmix/server/        FastAPI: REST + SSE, mounts static, no DSP knowledge
 sleepmix/               existing core, unchanged in spirit
   + progress.py  preview.py  session.py  paths.py
@@ -87,6 +88,55 @@ sleepmix/               existing core, unchanged in spirit
 boundary is what keeps the CLI and the Python API first-class rather than
 degraded citizens of the UI, and it is what makes the core independently
 testable without spinning up a server.
+
+### Why Elm, and where it stops
+
+The frontend is Elm rather than a JS framework. The reasoning that decided it:
+
+- **The compiler is the verification mechanism.** Much of this UI is written by
+  an agent, and Elm converts a whole class of mistakes — wrong field name,
+  unhandled case, changed shape — into build failures rather than runtime bugs
+  discovered by clicking. Nothing else on the table offers that strength of
+  guarantee.
+- **Schema-driven forms are *better* statically typed, not worse.** `/api/schema`
+  decodes into a closed `Field` union (`FloatField`, `ChoiceField`, `BoolField`,
+  …). If the server later grows a control type the UI does not render, the build
+  fails. In a dynamically typed frontend that same change silently renders
+  nothing.
+- **One frozen API.** Elm has had a single stable API since 2019 (0.19.2, July
+  2026, changed compiler performance only). There is no version-confusion trap
+  of the kind Svelte's stores-vs-runes or React's hooks-vs-RSC split creates.
+
+**Where Elm stops is the important part.** Elm's interop is ports —
+asynchronous message passing only, no synchronous FFI, and no binary payloads.
+So two subsystems live in hand-written JavaScript and are *outside* the type
+system:
+
+| Port module | Owns | Why it cannot be Elm |
+|---|---|---|
+| `ports/audio.js` | Fetching `/api/preview`, `decodeAudioData`, scheduling playback, swapping the buffer at a loop boundary | Web Audio has no Elm binding; ports cannot carry binary |
+| `ports/events.js` | `EventSource` over `/api/jobs/{id}/events`, forwarding parsed events inward | `elm/http` has no SSE support |
+
+**Elm never touches audio bytes.** It sends parameters out (`{stems, progress,
+config}`) and receives outcomes back (`{ok, durationMs}` or an error). That
+keeps the port surface narrow and JSON-shaped.
+
+This split is worth stating plainly because it inverts the usual expectation:
+the compiler protects the forms, routing and library — the parts least likely
+to break — while the genuinely bug-prone work, audio scheduling and gapless
+buffer swapping, sits in ~250 lines of unchecked JavaScript. That is an
+accepted trade, and it means those two modules deserve disproportionate review
+attention relative to their size.
+
+**The waveform does not need a port.** Peak pairs render as SVG, and loop-region
+drag handles are mouse events mapped to messages — a state machine Elm models
+well. Canvas would require escaping Elm's virtual DOM; SVG does not.
+
+**Build and distribution.** `elm make` emits a single `app.js` committed to
+`sleepmix/static/`, alongside a hand-written `index.html` and the port modules.
+There is no bundler and no `node_modules` for the application itself. Building
+requires the `elm` binary; *installing* sleepmix does not. `pip install
+sleepmix` continues to need nothing but Python.
 
 ### Module responsibilities
 
@@ -212,6 +262,12 @@ arrangement model.
 SSE rather than WebSockets: progress is one-directional, and SSE reconnects on
 its own.
 
+Two of these are consumed by the port modules rather than by Elm directly:
+`/api/preview` returns binary audio, which ports cannot carry, so `ports/audio.js`
+fetches and decodes it; `/api/jobs/{id}/events` is an event stream, which
+`elm/http` cannot open, so `ports/events.js` owns the `EventSource` and forwards
+parsed events inward. Everything else is ordinary JSON over `elm/http`.
+
 ## UI
 
 Four screens.
@@ -316,8 +372,10 @@ repeated to fill the duration, decaying monotonically 0→1. Choosing *which*
 segments get used means multiple sources arranged on a timeline, which breaks
 that single-loop assumption in `pipeline.py:78-86` and `disintegration.py:114`.
 The seams left for it: optional explicit loop points (change 7), schema-generated
-config UI, and a React frontend where a timeline is a component rather than a
-migration.
+config UI, and an Elm frontend where a timeline is a new `Msg` variant and a new
+view function rather than a migration. Elm helps here specifically: adding
+segments changes the shape of the config, and the compiler will enumerate every
+place that must be updated rather than leaving them to be found by clicking.
 
 **Output length editing** — trivial in config terms, but interesting once
 segments exist, because "length" stops being a single number and becomes an
