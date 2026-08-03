@@ -107,8 +107,18 @@ def _wait_for_fraction(manager, job_id, fraction, timeout=5.0):
 
 
 def test_a_submitted_job_runs_and_reports_its_result(manager):
-    job = manager.submit("test", lambda reporter, cancel: {"answer": 42})
-    assert job.status in ("queued", "running")
+    release = threading.Event()
+
+    def work(reporter, cancel):
+        release.wait(timeout=5.0)
+        return {"answer": 42}
+
+    job = manager.submit("test", work)
+    # Re-read through the manager: the Job returned by submit is a snapshot and
+    # a trivial job can finish before the caller's next bytecode.
+    assert manager.get(job.id).status in ("queued", "running")
+    release.set()
+
     done = _wait_for(manager, job.id, ("done",))
     assert done.result == {"answer": 42}
     assert done.fraction == 1.0
@@ -194,18 +204,22 @@ async def test_subscribers_receive_progress_events():
     loop = asyncio.get_running_loop()
     manager = JobManager(loop=loop)
     try:
+        release = threading.Event()
+
         def work(reporter, cancel):
+            # Held until the test has subscribed, so the event below cannot
+            # fire before there is anyone listening for it.
+            release.wait(timeout=5.0)
             reporter.emit("stage-a", "working", 0.5)
-            time.sleep(0.05)
             return {}
 
         job = manager.submit("test", work)
         queue = manager.subscribe(job.id)
         assert queue is not None
+        release.set()
 
         seen = []
-        deadline = loop.time() + 5.0
-        while loop.time() < deadline:
+        while True:
             event = await asyncio.wait_for(queue.get(), timeout=5.0)
             seen.append(event)
             if event["status"] in ("done", "failed", "cancelled"):
@@ -213,6 +227,7 @@ async def test_subscribers_receive_progress_events():
         assert any(e["message"] == "working" for e in seen)
         assert seen[-1]["status"] == "done"
     finally:
+        release.set()   # or a failed assertion leaves the worker blocked
         manager.shutdown(wait=True)
 
 
@@ -1185,19 +1200,62 @@ git commit -m "feat: SSE progress stream for background jobs"
 **Files:**
 - Modify: `sleepmix/audio.py` (add `encode_wav`)
 - Modify: `sleepmix/config.py` (validate `seed` in `from_dict`)
+- Modify: `sleepmix/session.py` (add the `master_gain` memo slot)
+- Modify: `sleepmix/preview.py` (add `master_gain`, and a `master` parameter)
+- Modify: `tests/test_preview.py` (the bit-identity test opts out of mastering)
 - Create: `sleepmix/server/api/preview.py`
 - Modify: `sleepmix/server/app.py` (mount the router)
 - Test: `tests/test_audio_encode.py` (new), `tests/test_api_preview.py` (new)
 
 **Interfaces:**
-- Consumes: `render_window(session, progress, stems=None, reverb=True)`, `SessionRegistry.get`
+- Consumes: `render_window`, `SessionRegistry.get`, `db_to_amp`
 - Produces:
   - `audio.encode_wav(buf: AudioBuffer, subtype: str = "PCM_16") -> bytes`
+  - `preview.master_gain(session) -> float`
+  - `render_window(session, progress, stems=None, reverb=True, master=True)` — **signature change**, new trailing parameter
+  - `RenderSession.master_gain: float | None` — memo slot, cleared by `update_config`
   - `POST /api/preview` body `{song_id, progress, stems?, reverb?, config?}` → `audio/wav`
 
 **This is the payoff endpoint.** `apply_decay` is a pure function of progress, so rendering the point two-thirds through a twenty-five-minute mix costs one loop iteration — measured at tens of milliseconds per stem — rather than rendering everything before it. The session registry is what keeps that true across requests.
 
 **Seed validation belongs here** because this is the first place a config crosses an API boundary. `util.iteration_rng` feeds `seed` to numpy's `SeedSequence`, which requires non-negative entropy; a negative seed from a UI field would raise deep in the DSP with an unhelpful message.
+
+### Master-gain matching — found by listening, not by testing
+
+A preview is one window of a stream that `run_pipeline` peak-normalizes **as a
+whole**. The mix's peak sits early, where the audio is least eroded, so the
+finished render is scaled down by a single global factor — measured at 0.656,
+or −3.7 dB, on a default config. A preview gets no such scaling, so it plays
+about 4 dB hot against the render it claims to represent.
+
+This was caught by ear and confirmed by measurement. Sliding a preview-length
+window across a real render and comparing on spectral centroid (which tracks
+the lowpass sweep, and is level-invariant) put the best match within 30 s of the
+predicted position — the *content* was right. Comparing on RMS put the best
+match at the very start of the mix. The operator, reading both cues at once,
+placed the preview at roughly half its true position in the arc.
+
+None of the 118 tests could have caught it: the bit-identity test compares
+pre-reverb and pre-master, so it passed throughout while the audible result
+diverged. Loudness reads as less-decayed, which corrupts exactly the judgement
+a preview exists to support.
+
+**The fix, and why it is cheap.** Window peak falls monotonically across the arc
+— decay only removes energy — so the first iteration is the loudest and a single
+window predicts the factor the master will apply. Measured across a real song:
+
+| progress | window peak |
+|---|---|
+| 0.00 | 1.358 |
+| 0.50 | 1.049 |
+| 1.00 | 0.753 |
+
+`target / 1.358 = 0.656`, matching the render's actual factor.
+
+**What this must not become.** Normalizing each preview to its own peak would
+make every point in the arc equally loud and destroy the decay entirely. One
+factor, computed once, applied to all windows — the arc is preserved because
+later windows are genuinely quieter.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1404,7 +1462,166 @@ In `sleepmix/config.py`, change `MixConfig.from_dict` to validate after building
 
 `MixConfig.from_yaml` already routes through `from_dict`, so it inherits the check.
 
-- [ ] **Step 5: Add the preview router**
+- [ ] **Step 5: Add the memo slot to the session**
+
+In `sleepmix/session.py`, add to `__init__`:
+
+```python
+        # Filled in by preview.master_gain. It lives here rather than in
+        # preview.py because it is invalidated by exactly the config changes
+        # this class already tracks — and preview imports session, so session
+        # cannot import preview to own the computation itself.
+        self.master_gain: float | None = None
+```
+
+and clear it at the top of `update_config`:
+
+```python
+        self.master_gain = None
+```
+
+- [ ] **Step 6: Add `master_gain` and the `master` parameter**
+
+In `sleepmix/preview.py`, add the import `from .util import db_to_amp` if it is
+not already present, then add above `render_window`:
+
+```python
+def master_gain(session: RenderSession) -> float:
+    """The gain ``run_pipeline``'s mastering stage will apply to this mix.
+
+    A preview is one window of a stream that gets peak-normalized as a whole.
+    Without this correction a preview plays about 4 dB above the render it
+    represents — and louder reads as *less decayed*, which corrupts exactly the
+    judgement a preview exists to support. Found by listening; no test caught it,
+    because the bit-identity check compares pre-reverb and pre-master.
+
+    One window is enough: decay only removes energy, so the peak falls
+    monotonically across the arc and the first iteration is the loudest."""
+    if session.master_gain is None:
+        loudest = render_window(session, 0.0, reverb=True, master=False)
+        peak = float(np.abs(loudest.data).max())
+        target = db_to_amp(session.config.output.peak_db)
+        session.master_gain = float(target / peak) if peak > 1e-9 else 1.0
+    return session.master_gain
+```
+
+Change `render_window`'s signature to take a trailing `master: bool = True`, and
+apply the gain just before returning — after the stems are summed, so one factor
+covers the whole window:
+
+```python
+    out = AudioBuffer(acc, sr)
+    if master:
+        # One factor for every window, never per-window normalization: the arc
+        # survives only because later windows stay genuinely quieter.
+        out = AudioBuffer(out.data * master_gain(session), sr)
+    return out
+```
+
+Update the docstring to say the window is master-matched by default.
+
+**Watch the recursion:** `master_gain` calls `render_window(..., master=False)`.
+If you leave that argument off you get infinite recursion, and the tests will
+hang rather than fail.
+
+- [ ] **Step 7: Let the bit-identity test opt out**
+
+`tests/test_preview.py::test_window_matches_decayed_iteration_pre_reverb`
+compares a window against a raw `decayed_iteration` call. That comparison is
+about the pre-reverb, pre-master signal path, so it must now pass
+`master=False`:
+
+```python
+    out = render_window(s, progress, stems=[name], reverb=False, master=False)
+```
+
+Do not change anything else about that test — it is the one pinning
+preview/render equality for content.
+
+Check the other tests in that file: any that compare two windows against each
+other are unaffected, because both sides get the same factor.
+
+- [ ] **Step 8: Write the test that would have caught this**
+
+Add to `tests/test_preview.py`:
+
+```python
+def test_a_mastered_preview_sits_at_the_render_s_level(tmp_path, stub_separation):
+    """Preview loudness must track the render's, not float above it.
+
+    This is the check that was missing. The bit-identity test compares
+    pre-master, so it passed while previews played ~4 dB hot — and because
+    louder reads as less decayed, tuning done in the UI was being done against
+    something that would never ship."""
+    from sleepmix.audio import load_audio
+    from sleepmix.disintegration import plan_iterations
+    from sleepmix.pipeline import run_pipeline
+
+    song = tmp_path / "s.wav"
+    _song(song)
+
+    cfg = MixConfig()
+    cfg.output.duration_min = 0.5
+    cfg.output.sample_rate = 22050      # match the source: no resample step
+    cfg.output.fade_in_s = 0.0
+    cfg.output.fade_out_s = 0.0
+    cfg.reverb.wet = 0.0                # compare the dry path only
+
+    out = tmp_path / "mix.wav"
+    run_pipeline(str(song), cfg, str(out))
+    rendered = load_audio(str(out))
+
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    name = session.stem_names()[0]
+    loop = session.prepared_loop(name)
+    target_frames = int(cfg.output.duration_min * 60 * loop.sr)
+    n_iter, xfade = plan_iterations(
+        loop.n_frames, target_frames, cfg.output.cycle_crossfade_ms, loop.sr)
+    stride = max(loop.n_frames - xfade, 1)
+
+    i = max(n_iter // 2, 1)
+    progress = i / max(n_iter - 1, 1)
+    lo, hi = i * stride + xfade, min((i + 1) * stride, target_frames)
+    assert hi > lo, "test setup produced no clean region"
+
+    window = render_window(session, progress, reverb=False)   # mastered
+    rendered_rms = float(np.sqrt(np.mean(rendered.data[lo:hi] ** 2)))
+    window_rms = float(np.sqrt(np.mean(window.data[xfade:xfade + (hi - lo)] ** 2)))
+
+    assert rendered_rms > 0
+    ratio = window_rms / rendered_rms
+    assert 0.85 < ratio < 1.15, f"preview is {20 * np.log10(ratio):+.1f} dB off the render"
+
+
+def test_master_gain_is_computed_once_per_config(tmp_path, stub_separation):
+    """It costs a window render, so it must not run on every preview."""
+    from sleepmix.preview import master_gain
+
+    s = _session(tmp_path, stub_separation)
+    first = master_gain(s)
+    assert s.master_gain == first
+    assert master_gain(s) is s.master_gain
+
+    changed = MixConfig()
+    changed.output.duration_min = 2.0
+    changed.tempo.speed = 0.5
+    s.update_config(changed)
+    assert s.master_gain is None, "a config change must invalidate the gain"
+
+
+def test_mastering_preserves_the_arc(tmp_path, stub_separation):
+    """One factor for all windows — not per-window normalization.
+
+    If each window were normalized to its own peak, every point in the decay
+    arc would come back equally loud and the whole effect would be inaudible in
+    preview."""
+    s = _session(tmp_path, stub_separation)
+    early = render_window(s, 0.0, reverb=False)
+    late = render_window(s, 1.0, reverb=False)
+    assert float(np.abs(late.data).max()) < float(np.abs(early.data).max())
+```
+
+- [ ] **Step 9: Add the preview router**
 
 Create `sleepmix/server/api/preview.py`:
 
@@ -1464,21 +1681,21 @@ def preview(body: PreviewRequest, request: Request) -> Response:
     return Response(content=encode_wav(window), media_type="audio/wav")
 ```
 
-- [ ] **Step 6: Mount it**
+- [ ] **Step 10: Mount it**
 
 In `sleepmix/server/app.py`, add `preview` to the `from .api import ...` line and `app.include_router(preview.router)` alongside the others.
 
-- [ ] **Step 7: Run the tests**
+- [ ] **Step 11: Run the tests**
 
 Run: `pipenv run pytest tests/test_audio_encode.py tests/test_api_preview.py tests/test_config.py -v`
 Expected: PASS
 
-- [ ] **Step 8: Run the full suite**
+- [ ] **Step 12: Run the full suite**
 
 Run: `pipenv run pytest -q`
 Expected: PASS
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
 git add sleepmix/audio.py sleepmix/config.py sleepmix/server tests/test_audio_encode.py tests/test_api_preview.py tests/test_config.py
