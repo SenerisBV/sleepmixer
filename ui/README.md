@@ -16,8 +16,10 @@ happen silently at runtime, and an agent is exactly the kind of author who
 won't reliably notice a blank div where a waveform should be.
 
 `ui/src/Main.elm` is a `port module` built with `Browser.element`. `Model`
-carries which screen is showing (derived from `selectedSongId` and `mixer`, not
-stored redundantly — see `routeFor`), the state of a library fetch, the song
+carries which screen is showing (derived from `selectedSongId`, `mixer`,
+`renders` and `queue`, not stored redundantly — see `routeFor`, and note that
+`renders = Nothing` and `queue = Nothing` *are* "that screen is closed", which
+is also what stops the queue's poll), the state of a library fetch, the song
 currently open, its peaks and loop region, the config schema, any in-flight
 separation job, and — while the mixer is open — the mixer's own state beside
 the preview state machine. `update` is a
@@ -54,6 +56,24 @@ carrying exactly one thing decoded by exactly one strict decoder. A malformed
 event is handled separately again and says so: separation started fine, the
 *event* was unreadable, and both paths end the separation cleanly rather than
 leaving the panel at "Separating…" forever.
+
+**The queue screen polls; it does not stream.** `Page.Queue` shows every job
+the one worker is running or about to run, and it refreshes by re-asking `GET
+/api/jobs` every four seconds while it is open. An `EventSource` per row was
+the obvious alternative and is the wrong shape: `ports/events.js` is built
+around watching a single job and `JobManager` fans out per subscriber, so ten
+rows would mean ten connections reporting one worker's progress. Polling a list
+is the right shape for a list.
+
+The timer is `Process.sleep` re-armed from `update` rather than `Time.every`,
+and that is a dependency constraint rather than a preference: `elm/time` is an
+*indirect* dependency here, so `import Time` does not compile, and promoting it
+would change the declared dependency set. `Process` and `Task` are `elm/core`,
+which is already direct. The cost is that a subscription would have stopped
+existing the moment the model said the screen was closed, whereas a sleep
+already in flight still lands — so `Main.QueueTick` carries the id of the chain
+that scheduled it and checks both that the id is current and that `queue` is
+still `Just` before it polls or re-arms. A stale tick does nothing at all.
 
 ### Where Elm stops, and why
 
@@ -218,7 +238,7 @@ cd /Users/moopius/projects/sleepmixer/ui
 elm-test
 ```
 
-`ui/tests/` has ten suites:
+`ui/tests/` has twelve suites:
 
 - `ApiTest.elm` — the `Api.elm` decoders, including that an unknown status
   fails rather than falling through.
@@ -251,6 +271,17 @@ elm-test
   "all" are one empty list apart), and `Main`'s half of the preview lifecycle:
   nothing sent before the session is warm, one request in flight at a time, and
   every door out of the mixer stopping the audio.
+- `RendersTest.elm` — `Page.Renders`: the joins and summaries a renders row is
+  built from, including the id-based pairing of a render with the job that
+  produced it, which exists because pairing by song and timestamp put a live
+  render's Cancel button on a dead row.
+- `QueueTest.elm` — `Page.Queue`'s ordering and grouping, which is the whole
+  logic of that screen: running above waiting above ended, submission order
+  inside each group, nothing terminal offered as cancellable, and an empty
+  list producing the sentence that explains why. Every ordering test supplies
+  more than one input order, because `GET /api/jobs` already answers in
+  submission order and a single-arrangement test would pass against a sort
+  that does nothing.
 - `Fixtures.elm` — not a suite so much as a shared `Schema` for the two above,
   copied out of a live `/api/schema` and trimmed; its one test asserts it still
   decodes, so a fixture that has drifted fails loudly rather than leaving the
@@ -275,8 +306,9 @@ is emitted. `.back` is the case that showed it: styled as `.song-view .back`
 and emitted by the mixer inside `div [ class "mixer" ]`, so the mixer's back
 button lost its margin while both class tests stayed green. Making the scan
 scope-aware means parsing selectors against a DOM the tests do not have, so it
-is not attempted; the rule now names both screens, and a third screen with a
-back button will need a third selector.
+is not attempted; the rule names every screen that emits `.back` — the song
+view, the mixer, the renders screen and the queue — and a fifth will need a
+fifth selector added by hand.
 
 `Main.routeFor` is still only exercised indirectly.
 

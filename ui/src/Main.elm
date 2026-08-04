@@ -40,11 +40,14 @@ import Json.Decode as Decode
 import Json.Encode as Encode
 import Page.Library as Library
 import Page.Mixer as Mixer
+import Page.Queue as Queue
 import Page.Renders as Renders
 import Page.Song
 import Preview
+import Process
 import Request
 import Schema
+import Task
 
 
 {-| Elm cannot open an `EventSource` — `elm/http` has no server-sent-events
@@ -205,6 +208,9 @@ type alias Model =
     , renderJobs : List Api.Job
     , watchedRender : Maybe String
     , rendersProblem : Maybe String
+    , queue : Maybe Queue.State
+    , queueTick : Int
+    , queueProblem : Maybe String
     , preview : Preview.State
     , previewError : Maybe String
     , loopSeconds : Maybe Float
@@ -331,36 +337,54 @@ What is deliberately *not* thrown away when it closes is `renderJobs` and
 `watchedRender`: a render keeps going whether or not anyone is looking at it,
 and dropping the watch would orphan the event stream — the same mistake
 `separationOnSelect` exists to prevent one screen along.
+
+`queue` is `renders` again, one screen further along, and for the same reason:
+the fetch behind the queue screen exists only while the screen does, so
+`Nothing` *is* "the screen is closed". That is also what stops the poll — see
+`QueueTick`, which asks this field whether to carry on. A `polling : Bool`
+beside a list would allow "closed but still polling", which is the state the
+timer must never be able to reach.
 -}
 type Route
     = Library
+    | QueueView Queue.State
     | RendersView Renders.State
     | SongView String
     | MixerView Mixer.State
 
 
-{-| The renders screen is checked first because it is the only one that can be
-open over a selected song: it is reached from anywhere, and closing it puts you
-back where you were rather than at the library.
+{-| The queue and the renders screens are checked before the rest because either
+can be open over a selected song: both are reached from the library's nav strip,
+and closing one puts you back where you were rather than at the library.
+
+Their order relative to each other is deliberately not load-bearing. `OpenQueue`
+closes the renders screen and `OpenRenders` closes this one, so they are never
+both open — stated in `update` rather than left to whichever branch happens to
+be read first here.
 -}
 routeFor : Model -> Route
 routeFor model =
-    case model.renders of
+    case model.queue of
         Just state ->
-            RendersView state
+            QueueView state
 
         Nothing ->
-            case model.mixer of
+            case model.renders of
                 Just state ->
-                    MixerView state
+                    RendersView state
 
                 Nothing ->
-                    case model.selectedSongId of
-                        Nothing ->
-                            Library
+                    case model.mixer of
+                        Just state ->
+                            MixerView state
 
-                        Just songId ->
-                            SongView songId
+                        Nothing ->
+                            case model.selectedSongId of
+                                Nothing ->
+                                    Library
+
+                                Just songId ->
+                                    SongView songId
 
 
 {-| How many peak buckets to ask for. 200 buckets across the 960px-wide
@@ -412,6 +436,12 @@ type Msg
     | RenderDeleted (Result Http.Error ())
     | CancelRenderClicked String
     | RenderCancelSent (Result Http.Error Api.Job)
+    | OpenQueue
+    | CloseQueue
+    | QueueTick Int
+    | GotQueueJobs (Result Http.Error (List Api.Job))
+    | CancelJobClicked String
+    | JobCancelSent (Result Http.Error Api.Job)
 
 
 main : Program () Model Msg
@@ -509,6 +539,9 @@ init _ =
       , renderJobs = []
       , watchedRender = Nothing
       , rendersProblem = Nothing
+      , queue = Nothing
+      , queueTick = 0
+      , queueProblem = Nothing
       , preview = Preview.Cold
       , previewError = Nothing
       , loopSeconds = Nothing
@@ -917,7 +950,17 @@ update msg model =
                 ( closed, stopped ) =
                     leaveMixer model
             in
-            ( { closed | renders = Just Renders.Loading, rendersProblem = Nothing }
+            ( { closed
+                | renders = Just Renders.Loading
+                , rendersProblem = Nothing
+
+                -- The two nav screens are alternatives, not layers. Closing
+                -- the queue here is what makes `routeFor`'s order between them
+                -- not matter, and it is also what ends the queue's poll: the
+                -- next tick reads `Nothing` and stops.
+                , queue = Nothing
+                , queueProblem = Nothing
+              }
             , Cmd.batch [ stopped, refreshRenders ]
             )
 
@@ -1000,6 +1043,120 @@ update msg model =
                 | rendersProblem = Just ("Could not cancel that render — " ++ httpErrorToString err)
               }
             , refreshRenders
+            )
+
+        OpenQueue ->
+            -- Through `leaveMixer` for the reason `OpenRenders` gives: a
+            -- preview loops until something stops it, and a mixer left open
+            -- under this screen would go on playing with nothing on screen to
+            -- stop it.
+            let
+                ( closed, stopped ) =
+                    leaveMixer model
+
+                ( tick, issued ) =
+                    issue closed
+            in
+            ( { issued
+                | queue = Just Queue.Loading
+                , queueTick = tick
+                , queueProblem = Nothing
+                , renders = Nothing
+                , rendersProblem = Nothing
+              }
+            , Cmd.batch [ stopped, Request.jobs GotQueueJobs, scheduleQueueTick tick ]
+            )
+
+        CloseQueue ->
+            -- The list goes and the poll stops with it, because the poll asks
+            -- this field. Nothing else needs unwinding: this screen owns no
+            -- event stream, which is the whole reason it polls.
+            ( { model | queue = Nothing, queueProblem = Nothing }, Cmd.none )
+
+        QueueTick tick ->
+            if model.queueTick /= tick then
+                -- A chain left over from an earlier visit. Opening the screen
+                -- issues a new tick id, so a stale timer that was still in
+                -- flight when the screen closed and reopened lands here, finds
+                -- it is not the current one, and stops — rather than running
+                -- beside the new chain and doubling the request rate for the
+                -- rest of the session.
+                ( model, Cmd.none )
+
+            else
+                case model.queue of
+                    Nothing ->
+                        -- Closed. The chain ends here rather than being
+                        -- cancelled, because there is nothing to cancel: a
+                        -- `Process.sleep` that nobody re-arms simply stops.
+                        ( model, Cmd.none )
+
+                    Just _ ->
+                        ( model
+                        , Cmd.batch [ Request.jobs GotQueueJobs, scheduleQueueTick tick ]
+                        )
+
+        GotQueueJobs result ->
+            case model.queue of
+                Nothing ->
+                    -- A poll that landed after the screen closed. Writing it
+                    -- back would reopen the screen out from under whatever the
+                    -- user is now looking at, since `queue` is what `routeFor`
+                    -- reads to decide that.
+                    ( model, Cmd.none )
+
+                Just state ->
+                    case result of
+                        Ok jobs ->
+                            ( { model | queue = Just (Queue.Loaded jobs) }, Cmd.none )
+
+                        Err err ->
+                            -- The rows already on screen are kept: this is a
+                            -- poll every few seconds, and one dropped request
+                            -- must not replace a live queue with an error
+                            -- line. `Stale` carries the rows and the reason
+                            -- together, so the next poll that succeeds clears
+                            -- the warning by replacing the state rather than by
+                            -- remembering to blank a field.
+                            ( { model | queue = Just (Queue.afterFailedPoll (httpErrorToString err) state) }
+                            , Cmd.none
+                            )
+
+        CancelJobClicked jobId ->
+            ( { model | queueProblem = Nothing }, Request.cancelJob jobId JobCancelSent )
+
+        JobCancelSent (Ok job) ->
+            -- Cancelling is a request, not an outcome: the worker stops at its
+            -- next check, so a job that was genuinely cancelled comes back
+            -- still `running`. A job that comes back *terminal* is one the
+            -- server refused — `JobManager.cancel` returns False for anything
+            -- already finished, and answers 200 either way. That is reachable
+            -- by ordinary use, because the button is drawn from a poll up to
+            -- `queueInterval` old, and it is worth a sentence: the row is about
+            -- to flip to "done" on its own, and without one the button would
+            -- simply have done nothing and said nothing about it.
+            --
+            -- Re-fetching the whole list rather than writing this job into it
+            -- keeps one answer to "what is the queue".
+            ( { model
+                | queueProblem =
+                    if Api.isFinished job.status then
+                        Just
+                            ("That job had already finished, so nothing was "
+                                ++ "stopped — the row was from the last poll."
+                            )
+
+                    else
+                        model.queueProblem
+              }
+            , Request.jobs GotQueueJobs
+            )
+
+        JobCancelSent (Err err) ->
+            ( { model
+                | queueProblem = Just ("Could not cancel that job — " ++ httpErrorToString err)
+              }
+            , Request.jobs GotQueueJobs
             )
 
 
@@ -1112,6 +1269,38 @@ means the row was staler than the server.
 refreshRenders : Cmd Msg
 refreshRenders =
     Request.renders GotRenders
+
+
+{-| How often the queue screen re-asks what the worker is doing.
+
+Four seconds: long enough that a screen left open costs almost nothing, short
+enough that a job finishing and the next one starting shows up while you are
+still looking at it. `GET /api/jobs` reads a dictionary under a lock and
+serialises it; there is no query behind it.
+-}
+queueInterval : Float
+queueInterval =
+    4000
+
+
+{-| The next poll, as a command rather than a subscription.
+
+This is `Time.every` written by hand, and it is written by hand for one reason:
+`elm/time` is an *indirect* dependency of this application, so `Time` cannot be
+imported without promoting it in `elm.json` — which is a change to the declared
+dependency set, and this branch is not making one. `Process.sleep` and
+`Task.perform` are both `elm/core`, which is already direct.
+
+What that costs is the thing a subscription gives for free: a subscription
+derived from the model stops existing the moment the model says the screen is
+closed, whereas a sleep already in flight will still land. So the tick carries
+the id of the chain that scheduled it and `QueueTick` checks two things before
+re-arming — that the id is still current, and that the screen is still open.
+A stale tick does nothing at all; it does not poll and it does not reschedule.
+-}
+scheduleQueueTick : Int -> Cmd Msg
+scheduleQueueTick tick =
+    Process.sleep queueInterval |> Task.perform (\_ -> QueueTick tick)
 
 
 refreshRendersIfOpen : Model -> Cmd Msg
@@ -1399,6 +1588,9 @@ view model =
             Library ->
                 libraryView model
 
+            QueueView state ->
+                queueView model state
+
             RendersView state ->
                 rendersView model state
 
@@ -1437,11 +1629,41 @@ rendersView model state =
         }
 
 
+{-| The queue screen.
+
+Takes the library's songs for the same reason the renders screen does: a job
+carries a `song_id` and nothing else about the song, and this is the only place
+that id can be turned back into a title. A song removed out from under a job
+that outlived it falls back to the id rather than to a blank cell.
+
+`songs` is `[]` while the library fetch is still in flight, which reads as every
+row showing an id for a second. That beats withholding the screen: someone
+opening the queue is usually trying to stop something.
+-}
+queueView : Model -> Queue.State -> Html Msg
+queueView model state =
+    Queue.view
+        { state = state
+        , songs =
+            case model.library of
+                Library.Loaded songs ->
+                    songs
+
+                _ ->
+                    []
+        , problem = model.queueProblem
+        , onCancel = CancelJobClicked
+        , onBack = CloseQueue
+        }
+
+
 libraryView : Model -> Html Msg
 libraryView model =
     div []
         [ div [ class "nav" ]
-            [ button [ onClick OpenRenders ] [ text "Renders" ] ]
+            [ button [ onClick OpenQueue ] [ text "Queue" ]
+            , button [ onClick OpenRenders ] [ text "Renders" ]
+            ]
         , Library.view
             { state = model.library
             , pathInput = model.pathInput

@@ -70,8 +70,11 @@
      other rule, and dropping the scope would leave that class styling nothing
      — trading this blind spot for the one the coverage test does catch. A
      third screen with a back button needs a third selector here.
-     The renders screen is that third one, added below with its own screen. */
-  .song-view .back, .mixer .back, .renders .back { margin-bottom: 1.25rem; }
+     The renders screen is that third one, added below with its own screen, and
+     the queue screen is the fourth. Every screen with a back button must be
+     named here; the class-coverage test will not notice a missing one. */
+  .song-view .back, .mixer .back, .renders .back,
+  .queue .back { margin-bottom: 1.25rem; }
   .waveform { display: block; width: 100%; margin: 1rem 0 1.5rem;
               background: #101115; border: 1px solid var(--line);
               border-radius: 5px; }
@@ -203,6 +206,47 @@
                           font-size: .82rem; line-height: 1.45;
                           max-height: 22rem; overflow: auto;
                           white-space: pre; }
+
+  /* Queue. One worker runs every separation and every render, so this is a
+     single column read top to bottom: what is running, what is behind it, what
+     recently ended. Nothing here competes with anything else for attention —
+     the ordering is the information, and the only loud thing on the screen is
+     a red status on a job that failed.
+     Scoped under `.queue` throughout, except the progress bar (shared with the
+     separation panel and the renders screen) and `.cancel` (shared with the
+     renders screen) — both of which have their own unscoped rules already.
+     Read these against `ui/src/Page/Queue.elm`'s markup, not just against the
+     class-coverage test: that test proves a rule exists somewhere, not that it
+     applies where the class is emitted. */
+  .queue h2 { margin-bottom: .5rem; }
+  .queue .queue-list { border-top: 1px solid var(--line); margin-top: 1.25rem; }
+  .queue .queue-row { border-bottom: 1px solid var(--line); padding: .8rem .25rem; }
+  .queue .queue-head { display: flex; align-items: baseline; gap: 1rem; }
+  /* Fixed width so the kinds line up down the column and the eye can skip
+     them: which job is a render and which a separation matters less than what
+     order they are in. */
+  /* Clipped rather than allowed to push the title along: `kind` is the one
+     field on a job that is a plain string rather than a closed union, so a kind
+     this build has never heard of is shown verbatim and could be any length. */
+  .queue .queue-kind { flex: 0 0 5.5rem; min-width: 0; color: var(--dim);
+                       font-size: .9rem; letter-spacing: .02em;
+                       overflow: hidden; text-overflow: ellipsis;
+                       white-space: nowrap; }
+  .queue .queue-title { flex: 1; min-width: 0; font-weight: 600;
+                        letter-spacing: .02em; overflow: hidden;
+                        text-overflow: ellipsis; white-space: nowrap; }
+  .queue .queue-status { color: var(--dim); white-space: nowrap; }
+  /* Its own class rather than reusing `.error`, for the reason `.render-bad`
+     gives: both would be single-class selectors and the last one stated would
+     win, so a failed job would read in the same grey as a waiting one. */
+  .queue .queue-bad { color: #f7768e; }
+  .queue .queue-when { color: var(--dim); font-variant-numeric: tabular-nums;
+                       font-size: .9rem; white-space: nowrap; }
+  /* The cancel button is absent rather than disabled on a job that has ended,
+     so this row is often just the sentence — it wraps, and carries no height
+     of its own beyond what is in it. */
+  .queue .queue-actions { display: flex; align-items: center; gap: .75rem;
+                          flex-wrap: wrap; margin: .4rem 0 0; }
 
   /* Emitted inside `.render-actions` today and deliberately left unscoped:
      these describe a kind of action rather than a screen, and the next screen

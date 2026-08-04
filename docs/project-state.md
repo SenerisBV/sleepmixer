@@ -287,8 +287,22 @@ presets — those stay in the present tense because they still are.
   imports instantly and then queues a separation that takes a very long time
   and holds several gigabytes — measured at 6.2 GB resident for one such job.
   Jobs run one at a time by design, so a single large file blocks every
-  smaller one behind it, and the interface shows neither an estimate nor the
-  queue depth. `GET /api/jobs` lists them, but no view renders it.
+  smaller one behind it, and the interface shows no estimate of how long that
+  will be.
+
+  **The queue depth half of this is closed** by Plan 3c's Task 7: `Page.Queue`
+  renders `GET /api/jobs` as what is running, what is waiting behind it and
+  what recently ended, with a Cancel button on everything still stoppable —
+  reached from the library's nav strip. That is the escape hatch the operator
+  previously had to use `kill` for. What is still missing is the *estimate*:
+  the screen can say a job is 15% done, but nothing anywhere predicts how long
+  a separation will take from the file's duration, so an accidental
+  seventy-minute import still gives no warning before it is submitted.
+
+  Note also what the queue screen structurally cannot show: `JobManager` holds
+  its jobs in memory and keeps fifty terminal ones, so the screen is empty
+  after every server restart and forgets old finished work. It says so on the
+  screen rather than looking broken.
 
 - **No loop region on the waveform, and no route that could draw one — closed
   by Plan 3b's Task 2.** The spec's Song view asked for the detected loop
