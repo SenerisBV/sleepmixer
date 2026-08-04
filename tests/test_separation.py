@@ -1,8 +1,20 @@
+import os
+
 import numpy as np
 import pytest
 
 from sleepmix.audio import AudioBuffer, save_audio
-from sleepmix.separation import SeparationResult, separate, separate_detailed
+from sleepmix.separation import (
+    SeparationResult, _cache_key, _load_cache, _load_fallback_reason,
+    _write_cache, separate, separate_detailed,
+)
+
+
+def _stems(n: int) -> dict[str, AudioBuffer]:
+    return {
+        f"stem{i}": AudioBuffer(np.zeros((100, 2), dtype=np.float32), 44100)
+        for i in range(n)
+    }
 
 
 def _song(path, sr=22050, secs=2.0):
@@ -71,16 +83,16 @@ def test_a_marker_without_stems_does_not_masquerade_as_success(tmp_path, monkeyp
 
     monkeypatch.setattr(sep, "_demucs_separate", failing)
 
-    real_save_cache = sep._save_cache
+    real_write_cache = sep._write_cache
 
     def boom(*_a, **_k):
         raise OSError("disk full")
 
-    monkeypatch.setattr(sep, "_save_cache", boom)
+    monkeypatch.setattr(sep, "_write_cache", boom)
     with pytest.raises(OSError):
         separate_detailed(str(song), cache_dir=cache)
 
-    monkeypatch.setattr(sep, "_save_cache", real_save_cache)
+    monkeypatch.setattr(sep, "_write_cache", real_write_cache)
     result = separate_detailed(str(song), cache_dir=cache)
     assert len(calls) == 2, "the second call must have re-run separation"
     assert result.fallback_reason is not None
@@ -176,3 +188,60 @@ def test_a_successful_rerun_clears_the_stale_marker(tmp_path, monkeypatch):
     result = separate_detailed(str(song), cache_dir=cache)
     assert result.fallback_reason is None
     assert set(result.stems) == {"vocals", "drums", "bass", "other"}
+
+
+def test_a_write_interrupted_partway_leaves_no_cache_at_all(tmp_path, monkeypatch):
+    """The failure this exists to prevent: half a separation reading back as a
+    whole one. _load_cache returns whatever .wav files it finds, so a directory
+    with two of four stems is indistinguishable from a genuine two-stem result."""
+    import sleepmix.separation as sep
+
+    calls = {"n": 0}
+    real_save = sep.save_audio
+
+    def explode_on_the_third(buf, path):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("disk went away")
+        real_save(buf, path)
+
+    monkeypatch.setattr(sep, "save_audio", explode_on_the_third)
+
+    with pytest.raises(OSError):
+        _write_cache(str(tmp_path), "k", _stems(4), None)
+
+    assert _load_cache(str(tmp_path), "k") is None, (
+        "a partial write must be invisible, not a smaller valid separation")
+
+
+def test_an_interrupted_write_does_not_destroy_the_previous_cache(tmp_path, monkeypatch):
+    import sleepmix.separation as sep
+
+    _write_cache(str(tmp_path), "k", _stems(4), None)
+    before = sorted(_load_cache(str(tmp_path), "k"))
+
+    def always_explode(buf, path):
+        raise OSError("disk went away")
+
+    monkeypatch.setattr(sep, "save_audio", always_explode)
+    with pytest.raises(OSError):
+        _write_cache(str(tmp_path), "k", _stems(2), None)
+
+    assert sorted(_load_cache(str(tmp_path), "k")) == before
+
+
+def test_the_fallback_marker_lands_with_the_stems(tmp_path):
+    _write_cache(str(tmp_path), "k", {"mix": _stems(1)["stem0"]}, "demucs missing")
+    assert _load_fallback_reason(str(tmp_path), "k") == "demucs missing"
+    assert sorted(_load_cache(str(tmp_path), "k")) == ["mix"]
+
+
+def test_writing_without_a_reason_clears_a_stale_marker(tmp_path):
+    _write_cache(str(tmp_path), "k", _stems(1), "old reason")
+    _write_cache(str(tmp_path), "k", _stems(2), None)
+    assert _load_fallback_reason(str(tmp_path), "k") is None
+
+
+def test_no_staging_directories_are_left_behind(tmp_path):
+    _write_cache(str(tmp_path), "k", _stems(2), None)
+    assert sorted(os.listdir(tmp_path)) == ["k"]

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import tempfile
 import warnings
 from dataclasses import dataclass
 
@@ -20,6 +22,17 @@ from .audio import AudioBuffer, load_audio, save_audio
 STEM_NAMES = ("vocals", "drums", "bass", "other")
 
 _FALLBACK_MARKER = "fallback.txt"
+
+
+class SeparationFailed(RuntimeError):
+    """The separation did not run to completion for a reason that is not a
+    cancellation and not Demucs being unavailable.
+
+    Distinct from the unavailable-fallback on purpose. ``separate_detailed``
+    answers "demucs is not installed" with the whole song as a single ``mix``
+    stem, which is the right answer to that question and the wrong answer to
+    every other one — a crashed or killed worker must not quietly become a
+    one-stem mix that then renders and plays without complaining."""
 
 
 @dataclass
@@ -67,8 +80,7 @@ def separate_detailed(
         warnings.warn(reason, stacklevel=2)
         stems = {"mix": load_audio(input_path)}
 
-    _save_fallback_reason(cache_dir, key, reason)
-    _save_cache(cache_dir, key, stems)
+    _write_cache(cache_dir, key, stems, reason)
     return SeparationResult(stems, reason)
 
 
@@ -114,32 +126,43 @@ def _load_cache(cache_dir: str, key: str) -> dict[str, AudioBuffer] | None:
     return stems or None
 
 
-def _save_cache(cache_dir: str, key: str, stems: dict[str, AudioBuffer]) -> None:
-    d = _cache_path(cache_dir, key)
-    os.makedirs(d, exist_ok=True)
-    for name, buf in stems.items():
-        save_audio(buf, os.path.join(d, f"{name}.wav"))
+def _write_cache(cache_dir: str, key: str, stems: dict[str, AudioBuffer],
+                  reason: str | None) -> None:
+    """Publish a separation: the fallback marker and every stem, together.
+
+    Everything is written into a sibling staging directory and renamed into
+    place once it is all on disk, so an interrupted write leaves either the
+    previous cache or nothing — never a subset. ``_load_cache`` returns
+    whatever ``.wav`` files it finds, so a subset would read back as a smaller
+    but perfectly valid separation, and the song would render missing half its
+    content with nothing to say so.
+
+    This supersedes an earlier arrangement where the marker was written first
+    and the stems second, chosen so that a failure between them left no stems
+    and a stale marker (recoverable) rather than fallback stems and no marker
+    (which reads as a successful separation). That ordering was the best
+    available while the write could not be made atomic. It can be now."""
+    final = _cache_path(cache_dir, key)
+    os.makedirs(cache_dir, exist_ok=True)
+    staging = tempfile.mkdtemp(prefix=f".{key}.", dir=cache_dir)
+    try:
+        if reason is not None:
+            with open(os.path.join(staging, _FALLBACK_MARKER), "w") as fh:
+                fh.write(reason)
+        for name, buf in stems.items():
+            save_audio(buf, os.path.join(staging, f"{name}.wav"))
+        # rename() onto a non-empty directory fails, so the old one goes first.
+        # A crash in this window leaves no cache, which recomputes — the one
+        # outcome that is always safe.
+        shutil.rmtree(final, ignore_errors=True)
+        os.replace(staging, final)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 def _fallback_marker_path(cache_dir: str, key: str) -> str:
     return os.path.join(_cache_path(cache_dir, key), _FALLBACK_MARKER)
-
-
-def _save_fallback_reason(cache_dir: str, key: str, reason: str | None) -> None:
-    """Persist why we fell back, so a later cache hit still knows.
-
-    Written before the stems on purpose: if this succeeds and the stems do not,
-    the next call finds no ``.wav`` files, recomputes, and overwrites the stale
-    marker. The reverse order would leave cached fallback stems with no marker,
-    which reads as a successful separation."""
-    os.makedirs(_cache_path(cache_dir, key), exist_ok=True)
-    path = _fallback_marker_path(cache_dir, key)
-    if reason is None:
-        if os.path.exists(path):
-            os.remove(path)
-        return
-    with open(path, "w") as fh:
-        fh.write(reason)
 
 
 def _load_fallback_reason(cache_dir: str, key: str) -> str | None:
@@ -162,8 +185,6 @@ def invalidate_cache(
     a successful separation and wrong for a fallback: without this, a track
     separated before the ``separation`` extra was installed would report itself
     as a fallback forever."""
-    import shutil
-
     directory = _cache_path(cache_dir, _cache_key(input_path, model))
     if not os.path.isdir(directory):
         return False
