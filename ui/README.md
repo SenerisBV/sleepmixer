@@ -61,11 +61,13 @@ asynchronous and JSON-only — nothing but a JSON value crosses that boundary in
 either direction. `ui/ports/events.js` owns the actual `EventSource`
 connection to `/api/jobs/{id}/events`; Elm sends a job id out over the
 `watchJob` port and receives parsed job events back over `jobEvent`, decoded
-immediately by `Api.job`. Elm never touches audio bytes and never will —
-that's the same reason a later addition (Plan 3b's Web Audio playback) is
-planned as another hand-written JS port module rather than an Elm package:
-decoding and playing audio isn't something ports can carry incrementally, only
-handed off to wholesale.
+immediately by `Api.job`. Elm never touches audio bytes and never will — for
+the same reason, preview playback is `ui/ports/audio.js`, another
+hand-written JS port module rather than an Elm package: decoding and playing
+audio isn't something ports can carry incrementally, only handed off to
+wholesale. `ui/src/Preview.elm` decides *when* to ask for a preview — that's
+the part worth testing, and `elm-test` reaches it — while `audio.js` fetches
+`/api/preview`, decodes the response, and plays it, deciding nothing itself.
 
 ### Strict decoders
 
@@ -90,16 +92,17 @@ make ui
 ```
 
 This runs `elm make src/Main.elm --optimize` from `ui/`, writes the result to
-`sleepmix/static/app.js`, copies `ui/ports/events.js` to
-`sleepmix/static/events.js`, and records a content hash to
-`sleepmix/static/app.js.sha256` via `ui/hash_sources.py`. The hash covers
-everything that fed the build — every `.elm` file under `ui/src`,
-`ui/elm.json`, and `ui/ports/events.js` — *and* both files that came out of it,
-`app.js` and `sleepmix/static/events.js`. The outputs are in there because
-hashing inputs alone let two real mistakes through unnoticed: a `make ui-dev`
-`--debug` bundle (which changes no input at all, so the recorded hash still
-matched) and an edit made to the served copy of `events.js` instead of to
-`ui/ports/events.js`.
+`sleepmix/static/app.js`, copies `ui/ports/events.js` and `ui/ports/audio.js`
+to `sleepmix/static/events.js` and `sleepmix/static/audio.js`, and records a
+content hash to `sleepmix/static/app.js.sha256` via `ui/hash_sources.py`. The
+hash covers everything that fed the build — every `.elm` file under
+`ui/src`, `ui/elm.json`, and both `ui/ports/events.js` and
+`ui/ports/audio.js` — *and* every file that came out of it: `app.js`,
+`sleepmix/static/events.js`, and `sleepmix/static/audio.js`. The outputs are
+in there because hashing inputs alone let two real mistakes through
+unnoticed: a `make ui-dev` `--debug` bundle (which changes no input at all,
+so the recorded hash still matched) and an edit made to a served copy — of
+either port module — instead of to its source under `ui/ports/`.
 
 The target rebuilds every time rather than checking mtimes. `make ui-dev`
 writes to the same `app.js`, which then looks newer than every source, so an
@@ -113,8 +116,9 @@ regenerates for you.** `pip install sleepmix` — and `pipx install`, and every
 other install path — must not need Node or Elm on the machine running it, so
 the compiled bundle has to already be sitting in the package when it's built.
 That means: **whenever anything under `ui/` changes, run `make ui` and commit
-the resulting `sleepmix/static/app.js`, `sleepmix/static/events.js`, and
-`sleepmix/static/app.js.sha256` alongside it.**
+the resulting `sleepmix/static/app.js`, `sleepmix/static/events.js`,
+`sleepmix/static/audio.js`, and `sleepmix/static/app.js.sha256` alongside
+it.**
 
 The Python test suite catches a forgotten rebuild
 (`tests/test_static_bundle.py::test_the_bundle_is_not_stale_relative_to_the_sources`)

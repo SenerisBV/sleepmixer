@@ -75,6 +75,13 @@ export function wire(app) {
         const bytes = await response.arrayBuffer();
         const ctx = ensureContext();
         const buffer = await ctx.decodeAudioData(bytes);
+        // `inFlight` only moves to a different controller (or to null) via
+        // `stopPreview`, which already treats this fetch as abandoned and
+        // expects no further reply — so dropping a successfully decoded
+        // buffer here without reporting is correct, not an oversight. Any
+        // other path that could land here would have to send `previewReady`
+        // or `previewFailed` instead, or Elm would sit in `InFlight` forever
+        // waiting on a reply that already happened and was thrown away.
         if (controller !== inFlight) return; // superseded while decoding
         play(ctx, buffer);
         app.ports.previewReady.send({ durationS: buffer.duration });
