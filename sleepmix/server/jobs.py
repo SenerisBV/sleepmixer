@@ -109,11 +109,20 @@ class JobManager:
 
         Flipping the status now is the honest answer rather than an optimistic
         one, because ``_run``'s opening guard means that job will never do any
-        work. The lock serialises this against ``_update``, so the two
-        orderings are the only two there are: this wins and ``_run`` later
+        work. The lock serialises this against ``_update``, so there are two
+        orderings this is guaranteed to see: this wins and ``_run`` later
         short-circuits into its own ``cancelled`` update, or ``_run`` wins and
         this sees ``"running"`` and leaves the status alone for the work
-        function's own ``check()`` to honour.
+        function's own ``check()`` to honour. A third, narrower ordering also
+        exists and is not covered by this lock: ``_run`` reads
+        ``token.cancelled`` *before* acquiring it, so a worker that reads
+        ``False`` a few microseconds before this method sets the token and
+        takes the lock can still go on to write ``status="running"`` over the
+        ``"cancelled"`` just written here. It self-heals rather than sticking —
+        the token is already set by the time that write lands, so the work
+        function's own ``check()`` raises almost immediately afterwards and its
+        ``except Cancelled`` restores ``"cancelled"`` — but it is a real,
+        if vanishingly narrow, third ordering, not one this method prevents.
 
         Returns False for a job that is already terminal — including one this
         method itself finished on an earlier call — so the caller can tell "it

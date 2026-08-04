@@ -1,24 +1,218 @@
 # Project state
 
-Status as of the end of the `feat/mixer` branch (Plan 3b of the spec, all 7
-tasks complete), on top of `feat/elm-shell` (Plan 3a of the spec, all
-6 tasks complete), on top of `feat/interactive-server` (Plan 2b, all 8 tasks
-complete), `feat/server-foundation` (Plan 2a, all 7 tasks complete), and
-`feat/core-hooks` (Plan 1, all 10 tasks complete). Plan 1 gave the pipeline the
-hooks a local web UI needs — session staging, cheap preview, structured
-progress, stable data paths, a config schema — without building the UI itself.
-Plan 2a put an HTTP server in front of that: a FastAPI app, a SQLite library
-store, and enough of a songs API to import a file and draw its waveform.
-Plan 2b built the rest of the API: preview, background jobs with live progress
-and cancellation, renders, and presets. Plan 3a is the first real frontend —
-an Elm application replacing the placeholder `index.html` — and it is scoped
-to *browsing and separating*, not yet to mixing or rendering. Plan 3b adds the
-mixer: controls generated from the config schema, a scrubber over the decay
-arc, and audio that plays while you shape it. Rendering still has no screen.
-Read
+Status as of the end of the `feat/render-queue` branch (Plan 3c of the spec,
+all 9 tasks complete), on top of `feat/mixer` (Plan 3b, all 7 tasks complete),
+on top of `feat/elm-shell` (Plan 3a of the spec, all 6 tasks complete), on top
+of `feat/interactive-server` (Plan 2b, all 8 tasks complete),
+`feat/server-foundation` (Plan 2a, all 7 tasks complete), and `feat/core-hooks`
+(Plan 1, all 10 tasks complete). Plan 1 gave the pipeline the hooks a local web
+UI needs — session staging, cheap preview, structured progress, stable data
+paths, a config schema — without building the UI itself. Plan 2a put an HTTP
+server in front of that: a FastAPI app, a SQLite library store, and enough of a
+songs API to import a file and draw its waveform. Plan 2b built the rest of the
+API: preview, background jobs with live progress and cancellation, renders, and
+presets. Plan 3a is the first real frontend — an Elm application replacing the
+placeholder `index.html` — and it is scoped to *browsing and separating*, not
+yet to mixing or rendering. Plan 3b adds the mixer: controls generated from the
+config schema, a scrubber over the decay arc, and audio that plays while you
+shape it. Plan 3c is the subject of this section: it makes a running
+separation genuinely stoppable (previously only a render could be cancelled
+mid-flight; Demucs's own call was a single opaque block nothing could
+interrupt), and it gives the interface the three things Plan 3b's own closing
+section named as still missing — a render screen, a queue screen, and a
+warning before a job large enough to block everything behind it. Read
 `docs/architecture.md` first for how the pieces fit together; this document is
 about what's true right now, what was traded off to get here, and what's
 explicitly not done yet.
+
+## Plan 3c: jobs you can watch and stop
+
+The incident this plan exists to fix: a seventy-minute file, imported by
+accident, that the operator wanted to test a smaller one instead of — and had
+to kill the server by hand to get at, because nothing running could be
+stopped and nothing on screen showed what was queued behind it. It turned out
+to be suspended (`Ctrl-Z`) rather than dead, and was found still holding
+6.2 GB resident. Plan 3c closes every part of that: separation can now be
+cancelled mid-run, a queue screen shows what the one worker is doing and
+what's waiting, and both the mixer's Render button and the song screen's
+Separate button say so before a long source file is submitted.
+
+**Separation is killable now, and the mechanism is a subprocess.**
+`demucs.apply_model` is one opaque call that never looks at a cancel token, so
+making it interruptible meant moving it out of the request-serving process
+entirely: `separation_process.run_separation` runs `python -m
+sleepmix.separation_worker` as a child, reads its phase progress off stdout,
+and kills it (`SIGTERM`, escalating to `SIGKILL`) the moment a cancel token
+fires. See `docs/architecture.md`'s new section on this for the phase
+protocol and — the part that mattered most in review — how the three ways a
+child process can end (cancelled, crashed, "demucs isn't installed") are kept
+from being read as each other. This task's own verification confirmed it
+against a real 246.6 s track and a real Demucs run: cancelling partway through
+(at `fraction=0.15`, mid-"Separating stems") left the song back at `pending`
+with no reason recorded, no worker process still running, and **nothing at
+all** in the cache directory — not a partial stem, not a staging directory.
+
+**The stem cache write became atomic as a consequence, not a separate
+goal.** A subprocess that can be killed can be killed mid-write, and the old
+two-step cache write (marker, then stems, straight into the final directory)
+had no atomic "finished" to interrupt. `separation._write_cache` now builds
+everything in a sibling staging directory and renames it into place in one
+step, so a kill lands either before the rename (nothing changes) or after it
+(the new cache is already complete) — never in between. See
+`docs/architecture.md` for the full reasoning, including why the old ordering
+was right for the write that used to exist and stopped being relevant once
+that write did.
+
+**The render screen (`Page.Renders`)** shows every render — queued, running,
+done, cancelled, failed — with a config summary (duration, which stems,
+where the decay ends up) read from whatever was actually `POST`ed rather than
+inventing a value for fields the server defaulted silently. It plays a
+finished render through a plain `<audio controls>` element rather than the
+Web Audio port the mixer uses, deliberately: the port decodes a whole buffer
+into memory to loop it on a musical seam, which is the wrong trade for half an
+hour of audio a browser will happily stream instead. A render still running
+gets a Cancel button and a progress bar fed by the same job machinery
+separation uses; a finished one gets a download link and a Delete button, and
+deleting removes both the database row and the file on disk, verified this
+task by watching both actually disappear.
+
+**The one bug this screen shipped with and caught in its own review is worth
+keeping the story of.** The first version paired a render with its progress
+job by *song and timestamp*, a heuristic standing in for a real key — and a
+render row stranded at `"running"` by a server restart (rows are in SQLite,
+jobs are only ever in memory) would silently adopt the *next* render's job the
+next time that song was rendered. Clicking Cancel on the dead row would then
+kill the live render underneath it, and `_abandon` would delete its partial
+file — the wrong render, stopped, invisibly. The fix was a real key:
+`Job.render_id`, three server lines, flowing through `GET /api/jobs`, the SSE
+stream and the render POST response, with the heuristic deleted outright
+rather than kept as a fallback — a fallback that silently mispairs is the bug,
+not a safety net for it.
+
+**The queue screen (`Page.Queue`)** answers "what is the one worker doing, and
+what's stacked up behind it" — running first, then queued, then what recently
+finished, oldest first within each group because that is the order the worker
+will actually take them in. It is live-only and says so: `JobManager` keeps
+jobs in memory, so a restart empties this screen, and an empty screen is then
+the truth rather than a failure to load. It polls `GET /api/jobs` every four
+seconds rather than streaming, because ten rows streaming one worker's
+progress each would be ten connections answering the same question `Page.Queue`
+already asks once. Every non-terminal row has a Cancel button, including a job
+still *queued* — which, on this project's one worker, might mean waiting
+behind a separation that runs for many minutes, and used to mean nothing
+visibly happened when you clicked it (below). Cancelling a queued render
+settles its row immediately rather than leaving it to a work function that
+will now never run (see the note on `JobManager.cancel` below); the same
+route settles a render cancelled while queued even if nothing else ever
+touches its row again, which is what makes it deletable afterwards instead of
+stuck forever at a status `DELETE` refuses.
+
+**A cancel on a queued job used to be completely silent, in exactly the
+scenario this plan exists for.** `JobManager.cancel` only set the token;
+the status only flipped once the pool actually reached that job, which on one
+worker means after whatever is running ahead of it finishes. Seventy-minute
+separation running, a render queued behind it, operator clicks Cancel: the
+response said `cancelled: true`, and the row went on reading "waiting" for
+seventy minutes, because nothing was wrong with the cancel — it had just not
+had a chance to matter yet. The fix flips a **queued** job's status to
+`cancelled` synchronously, inside the same lock, the moment `cancel()` is
+called, since `_run`'s own guard means that job will never do any real work
+regardless. A **running** job is left for its own work function to settle,
+because settling it from the request thread as well would race the worker —
+the case that would hurt is a render finishing a moment after the token was
+set, where the request thread's write could land "cancelled" over a row the
+pipeline had just, correctly, marked "done".
+
+**`Warn` is one module, not a sentence written twice.** The mixer's Render
+button and the song screen's Separate button both put work on the same
+single worker, and a warning written once in each place is a warning that can
+drift into disagreeing about the same queue. `Warn.forSource` names a
+duration (rounded to the nearest minute, with "roughly" doing the work of not
+claiming a precision that isn't there) once source audio passes fifteen
+minutes — a judgement call, not a measurement: roughly three times an ordinary
+album track, and nowhere near either side of the incident it exists to catch.
+It warns; it does not block, because a long file is a legitimate thing to
+render and the threshold exists to catch the accident, not to have an opinion
+about long songs.
+
+**`Warn.forSource` keys on the source file's length, and that is a real gap a
+render's own timing now makes concrete.** A render's wall-clock cost is
+dominated by `output.duration_min`, not by how long the source track is — this
+task's own measurement found a 246.6 s source with its stems already cached
+rendering to the default 20-minute (1200 s) mix in roughly 11–14 s (measured
+twice, 11.0 s and 13.6 s; see `docs/architecture.md`),
+because the cost that scales with output length (`build_disintegrating_stream`
+iterating roughly seventy times for that loop) is cheap per iteration, while
+the cost that would actually make a render slow — separation, which does scale
+with source length — has usually already been paid by the time the mixer's
+Render button is reachable at all. Read backwards, that means the warning is
+watching the wrong number for what it is nominally about: a four-minute source
+rendered to a **sixty-minute** mix (`output.duration_min = 60`, a config change
+away, not a different file) would iterate roughly three times as many loops as
+the measurement above and block the one worker for a correspondingly longer
+stretch, and nothing would warn, because the source is nowhere near fifteen
+minutes. The warning was written before anyone had a render-timing number to
+design a better one from; it now exists, and extending `Warn.forSource` (or
+splitting it) to also look at the configured output length is the natural next
+move, not attempted here because this task writes no application code.
+
+**Known gaps, carried forward rather than fixed:**
+
+- **A sub-millisecond TOCTOU race survives in the duplicate-separation
+  guard.** `separate_song` checks `jobs.list()` for an in-flight separation on
+  the same song before submitting a new one, but Starlette dispatches sync
+  routes on a threadpool and nothing locks read-decide-submit as one
+  operation. Two genuinely simultaneous `POST /separate` requests could still
+  both pass the check and stack two jobs. Ruled not worth fixing: the guard
+  exists for a job sitting queued for *minutes* behind a render, a window any
+  request landing anywhere inside easily sees, and the residual worst case —
+  two duplicate jobs — is exactly the pre-fix status quo rather than a new
+  failure mode.
+- **`terminate()`/`kill()` only signal the direct child**, so a grandchild
+  process would survive being orphaned if Demucs ever spawned one. It doesn't
+  today — this project's `apply_model` call passes no worker processes — and
+  `start_new_session=True` plus `os.killpg` carries platform nuance not worth
+  adding speculatively against a case that doesn't exist yet. Revisit if
+  Demucs configuration ever gains worker processes of its own.
+- **No automated test asserts that a cached *fallback* separation still
+  reports itself as a fallback through the supervisor's warm path** — only a
+  manual spot-check does. If that behaviour ever regressed, a song separated
+  before Demucs was installed would silently read as properly separated the
+  next time its cache was loaded, with per-stem controls implying a separation
+  that never happened.
+- **No `update`-level test covers the renders fetch flow** —
+  `GotRenders`, `GotRenderJobs`, `OpenRenders` and `refreshRenders` appear
+  nowhere in `ui/tests`, so the fetch-ordering fix described above (and the
+  stale-jobs handling around it) is verified by reading the code, not by a
+  test that would fail if it regressed. Relatedly, `keepStreamed` pins the
+  held copy of a streamed job unconditionally, so a poll can never correct it
+  once it's set — safe today only because every server-side update publishes
+  to every subscriber, so the held copy and a poll's copy never actually
+  disagree in practice.
+- **The download filename is the render's hex id.** `Page/Renders.elm`'s own
+  docstring opens by naming this as the very problem the screen exists to
+  solve — finding a render afterwards used to mean `ls` and a filename that
+  says nothing — and the downloaded file still has one, even though the
+  screen has the song title sitting right next to the Download link. A
+  deliberate UX call parked rather than a defect: fixing it is a `Content-
+  Disposition` filename away, not attempted here.
+- **`.queue-head` overflows horizontally below roughly 400px.** `.queue-kind`
+  carries an unshrinkable `flex: 0 0 5.5rem` and the status and timestamp are
+  `nowrap`. Cosmetic on a desktop-only local tool — `.renders` already has the
+  same class of thing — and not fixed here.
+- **`JobManager.cancel`'s docstring used to claim only two orderings were
+  possible** between a cancel and the worker starting the same job — this one
+  wins and `_run` short-circuits into its own cancelled update, or `_run` wins
+  and this sees `"running"` and defers to the work function's own `check()`.
+  There is a third: `_run` reads `token.cancelled` without holding the lock,
+  so a worker that read `False` a few microseconds before `cancel()` acquires
+  the lock can still go on to write `status="running"` over the `"cancelled"`
+  that was just set. It self-heals — the token is already set by the time
+  that happens, so the work function's own `check()` raises almost
+  immediately and `except Cancelled` restores the status — and it needs the
+  previous job to finish inside that same handful of microseconds, so no
+  permanent inconsistency results. The docstring is corrected to not claim an
+  exhaustiveness it doesn't have; the behaviour itself is unchanged.
 
 ## Plan 3b: the mixer
 
@@ -164,12 +358,15 @@ What it does not do yet, and what to know before changing it:
   an object at runtime with a port error Elm cannot catch — the screen would sit
   at "Preparing…" forever with audio playing underneath. The payload is decoded
   leniently and shown as the length of the loop now playing.
-- Presets and the render screen are still not built; that is Plan 3c, and it
-  is specifically **the render screen (start, watch, cancel, download), the
-  presets UI, queue visibility, and a warning before importing a file large
-  enough to block everything behind it** — the four things this plan's own
-  closing section names as out of scope, carried over unchanged because
-  nothing in this task changed any of them.
+- This plan's own closing section named four things out of scope: **the
+  render screen (start, watch, cancel, download), the presets UI, queue
+  visibility, and a warning before importing a file large enough to block
+  everything behind it.** Plan 3c has since closed three of the four — the
+  render screen, queue visibility, and the warning, plus, not asked for by
+  this list but the same shape of gap, the ability to cancel a *separation*
+  once it has started. Presets are the one that remains; see the Plan 3c
+  section above and Plan 3d, not yet started, which is presets and per-song
+  config memory.
 - The parked defect from Plan 3a is untouched: reloading mid-separation shows an
   enabled button reading "Separating…", because the disable comes from client
   state and the label from the server's status. The mixer's own gate reads the
@@ -283,21 +480,32 @@ presets — those stay in the present tense because they still are.
   and nothing else could still be tracking it. See `docs/architecture.md`'s
   server section for where this sits.
 
-- **No warning about how long a large import will take.** A 70-minute file
-  imports instantly and then queues a separation that takes a very long time
-  and holds several gigabytes — measured at 6.2 GB resident for one such job.
-  Jobs run one at a time by design, so a single large file blocks every
-  smaller one behind it, and the interface shows no estimate of how long that
-  will be.
+- **No warning about how long a large import would take, and no way to stop
+  a separation once it had started — both closed by Plan 3c.** A 70-minute
+  file used to import instantly and then queue a separation that ran for a
+  very long time and held several gigabytes — measured at 6.2 GB resident for
+  one such job — with nothing to do about it but kill the server by hand,
+  because the only worker in the process was already inside a single opaque
+  `demucs.apply_model` call nothing could interrupt. That is the incident Plan
+  3c exists to close, and it closes all three parts of it: `Warn.forSource`
+  names the file's length and the single-worker constraint before either the
+  Separate or Render button is pressed, once source audio passes fifteen
+  minutes; `separation_process.py` moves Demucs into a killable subprocess, so
+  a separation started by accident can now be cancelled and the song comes
+  back to `pending` with nothing left in the cache; and the queue screen
+  (below) makes the wait itself visible instead of a silent hang.
 
-  **The queue depth half of this is closed** by Plan 3c's Task 7: `Page.Queue`
-  renders `GET /api/jobs` as what is running, what is waiting behind it and
-  what recently ended, with a Cancel button on everything still stoppable —
-  reached from the library's nav strip. That is the escape hatch the operator
-  previously had to use `kill` for. What is still missing is the *estimate*:
-  the screen can say a job is 15% done, but nothing anywhere predicts how long
-  a separation will take from the file's duration, so an accidental
-  seventy-minute import still gives no warning before it is submitted.
+  **The queue depth half of this is closed** by Plan 3c's queue screen:
+  `Page.Queue` renders `GET /api/jobs` as what is running, what is waiting
+  behind it and what recently ended, with a Cancel button on everything still
+  stoppable — reached from the library's nav strip. That is the escape hatch
+  the operator previously had to use `kill` for. What is still missing is an
+  *estimate*: the screen can say a job is 15% done, but nothing anywhere
+  predicts how long a separation will take from the file's duration, so
+  `Warn.forSource`'s fifteen-minute line is a judgement call rather than a
+  derived number — and, per the render-timing measurement in the Plan 3c
+  section above, it is a warning that watches source length while a render's
+  own cost is dominated by the configured output length instead.
 
   Note also what the queue screen structurally cannot show: `JobManager` holds
   its jobs in memory and keeps fifty terminal ones, so the screen is empty
@@ -357,11 +565,13 @@ presets — those stay in the present tense because they still are.
   `config.config_schema()` — bounds, labels, and help text for every
   `MixConfig` field — was not consumed anywhere in `ui/`. `Schema.elm` and
   `Config.elm` consume it now, and generate the mixer's controls from it.
-- **No render screen.** Starting, watching, cancelling, or downloading a full
-  render (`server/api/renders.py`, all built in Plan 2b) still has no
-  frontend at all. Open — Plan 3c.
+- **No render screen — closed by Plan 3c.** Starting, watching, cancelling, or
+  downloading a full render (`server/api/renders.py`, all built in Plan 2b)
+  had no frontend at all. `Page/Renders.elm` is that screen now; see the Plan
+  3c section above for what it does and the pairing bug its own review found
+  and fixed.
 - **No presets.** `server/api/presets.py`'s CRUD still has no corresponding
-  screen. Open — Plan 3c.
+  screen. Open — Plan 3d, along with per-song config memory.
 
 **What the final whole-branch review changed.** Six things, all of which had
 shipped looking finished. (1) `sleepmix/static/index.html`'s stylesheet was
@@ -793,24 +1003,36 @@ by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
   them — they remain advisory metadata for a UI to build controls from. A
   config posted with `tempo.speed: 50` is still accepted and rendered.
 
-- **`_save_fallback_reason`'s `reason is None → os.remove(path)` branch is
-  reachable — an earlier version of this document said otherwise.** The
-  original claim was that anything reaching this branch with a stale marker
-  on disk would already have returned from `_load_cache`'s cache hit first.
-  That reasoning missed the case its own docstring names: if the marker is
-  written but `_save_cache` then fails or is interrupted before any `.wav`
-  file lands, the next call finds a marker with no cached stems.
-  `_load_cache` requires at least one `.wav` file to report a hit, so it
-  returns `None` — the call recomputes rather than trusting the directory
-  (`tests/test_separation.py::test_a_marker_without_stems_does_not_masquerade_as_success`
-  proves the recompute happens; it just doesn't happen to succeed in that
-  test). If a recompute in that state *does* succeed, `_save_fallback_reason`
-  is called with `reason=None` and finds the earlier run's marker still on
-  disk, and removes it. `separation.invalidate_cache` (added this plan) does
-  not add a second route to this same line — it deletes the whole cache
-  directory, marker included, so a forced re-separation never finds a marker
-  left over to remove; it sidesteps the branch rather than exercising it. The
-  original conclusion — keep the branch — was right regardless.
+- **The cache write is a single atomic rename now, superseding a two-step
+  ordering this document used to describe as current.** `separation._write_cache`
+  builds the fallback marker (if any) and every stem into a sibling staging
+  directory and renames the whole thing into place in one step
+  (`docs/architecture.md` has the full mechanism and why Plan 3c's killable
+  separation is what forced it). An interrupted write, from any cause, now
+  leaves either the complete previous cache or no cache at all — never a
+  marker with no stems, and never stems with no marker.
+
+  **The old two-step version, and the reasoning that justified its ordering,
+  is worth keeping as history rather than deleting outright.** Before this,
+  `_save_fallback_reason` wrote the marker and a separate `_save_cache` wrote
+  the stems, in that order, directly into the final cache directory, on
+  purpose: a failure between the two steps left a stale marker with no stems
+  (which `_load_cache` — requiring at least one `.wav` file to report a hit —
+  correctly read as a miss and recomputed) rather than stems with an
+  unrecorded fallback, which would have read as a properly separated song
+  that happened to have one stem. `_load_cache`'s cache-hit check does not
+  save a caller from that branch, because it fires *before* the branch is
+  ever reached, on the *next* call — an earlier version of this document
+  claimed otherwise and was wrong to. If the marker survived and a later
+  recompute succeeded without a fallback, `_save_fallback_reason` was called
+  with `reason=None` and removed the stale marker it found still sitting
+  there — the one route to that branch that mattered, and the reason it was
+  kept rather than deleted despite looking like dead code.
+  `tests/test_separation.py::test_a_marker_without_stems_does_not_masquerade_as_success`
+  still exercises the same shape of failure — a write that does not complete
+  must not be trusted on the next call — against the current atomic
+  `_write_cache`, by forcing it to raise outright; the two-step ordering it
+  used to exercise no longer exists to test.
 
 - **`Store` is locked now — and the reason the earlier deferral was wrong is
   worth keeping.** An earlier version of this document claimed "every request

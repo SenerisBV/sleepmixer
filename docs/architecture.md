@@ -197,6 +197,141 @@ catches every exception from the real Demucs call and warns via
 `docs/project-state.md` for why that's flagged as unfinished rather than
 accepted.
 
+## Separation runs in a subprocess, so it can be killed
+
+`demucs.apply_model` is a single opaque call: it returns when it returns, and
+nothing inside it ever looks at a cancel token. Before this branch, "cancel a
+running separation" set a flag nothing would read until that call finished —
+which meant it did nothing at all, in practice, for the file long enough to
+matter. That is the incident this branch exists to fix: a seventy-minute file,
+imported by accident, that suspended the server (`Ctrl-Z`, not a kill) rather
+than dying when the operator tried to stop it, and was found still holding
+6.2 GB resident.
+
+`separation_process.run_separation` spawns `python -m
+sleepmix.separation_worker <input> <model> <cache_dir>` as a child process and
+owns exactly three things: forwarding its progress, killing it on request, and
+being exact about how it ended. **The handoff between parent and child is the
+stem cache that already existed** for `separate_detailed` — the worker writes
+it, the parent reads it back with `_load_cache`, and no audio array ever
+crosses the process boundary. That is deliberate, not incidental: a
+multi-hundred-megabyte-per-stem buffer would be slower to pickle through a pipe
+than the disk round-trip it replaces, and the cache was going to exist either
+way.
+
+**The phase protocol is three flushed lines on stdout.**
+`separation_worker._phase` prints `sleepmix-phase <fraction> <message>` at
+three fixed points — "Loading the model" (0.05), "Separating stems" (0.15),
+"Writing stems" (0.90) — flushed per line rather than buffered, because a
+buffered phase is a progress bar that sits still for the whole length of a
+separation and then jumps straight to done. The parent reads these on a
+background thread (`_pump`, feeding a `queue.Queue`) so its own poll loop never
+blocks waiting on the pipe. A second background thread (`_StderrTail`) drains
+stderr for an unrelated reason: torch and demucs both write warnings there, an
+OS pipe has a bounded buffer, and a child that fills it with nobody reading is
+a separation that hangs rather than one that finishes or fails — silently, with
+no error anywhere to explain why.
+
+**The three ways a child can end map to three different outcomes, and
+conflating any two of them would be silent.**
+
+1. **Cancelled.** The parent's poll loop notices the token is set, sends
+   `SIGTERM`, waits, and escalates to `SIGKILL` if the child ignores it (a
+   torch process declining to die tidily is not a reason to keep the operator
+   waiting) — then raises `Cancelled`, **unconditionally, and checked before
+   either the exit code or the cache**. That ordering is what
+   `test_cancelling_after_the_cache_is_already_written_still_raises` pins down:
+   a child that reached `_write_cache` a moment before it was killed — the
+   worst case in this task's own table — must not have that cache read back as
+   a quiet success just because the bytes happen to be sitting on disk. The
+   caller (`server/api/songs.py`'s `separate_song`) catches `Cancelled` and
+   puts the song back to `pending` with no reason recorded: the operator asked
+   to stop, and nothing about the song should read as broken.
+2. **Crashed.** A nonzero exit code, or a clean exit that wrote no stems at
+   all (`test_a_nonzero_exit_is_a_failure_not_a_fallback`,
+   `test_exiting_cleanly_without_writing_a_cache_is_a_failure`), both raise
+   `SeparationFailed`, and the caller writes `separation_status="failed"` with
+   the reason. An external OOM kill falls into this case too — from the
+   parent's point of view a killed child looks the same whether the killer was
+   a cancel or the kernel, and the only thing that tells them apart is the
+   cancel token: if it was never set, the death was not requested, and it must
+   not read as anything gentler than a failure.
+3. **Demucs genuinely isn't installed.** This is decided entirely *inside* the
+   child, before the parent ever sees an exit code: `separate_detailed`'s own
+   `except Exception` around the `_demucs_separate` call is what answers "is
+   Demucs importable" by writing the whole song as one `mix` stem plus a
+   fallback marker, and exiting 0 having done so. It is the right answer to
+   that one question, and it is answered nowhere else — the parent's own
+   exception handling never re-derives "demucs isn't installed" from a process
+   outcome; it only ever sees exit code and cache state.
+
+**Why conflating them would be silent.** `separate_detailed`'s fallback exists
+to answer one question well, and answering it well is exactly what makes it
+the wrong answer to the other two: a killed child taking that path would
+quietly convert the song to a one-stem `mix` that then renders and plays
+without complaining, discarding every per-stem decay setting the operator had
+already tuned, with nothing on screen to say why the stems are suddenly gone.
+That is why `separation_process.py` exists as its own module with its own
+interpretation of a process outcome, rather than folding into
+`separation.py`'s existing broad catch — process-level outcomes (cancelled,
+crashed) are decided by the parent from the child's returncode and the cancel
+token; only the "is the dependency importable" question is left to the
+child's own catch, because that is the one question a broad catch answers
+correctly.
+
+`tests/test_separation_process.py`'s slow test builds a stub worker that
+writes a one-stem fallback cache and then sleeps, cancels it mid-flight, and
+confirms `Cancelled` is raised with the child reaped (`returncode -15`) and no
+result returned — the failure taxonomy holding on the path this task's own
+review ranked as worst. This task's own manual verification reproduced the
+same shape against the real worker and a real 246.6 s track: cancelling a
+genuine Demucs run partway through (`fraction=0.15`, "Separating stems") left
+the song back at `pending` with `separation_reason: null`, no worker process
+still running, and — checked directly against the cache directory — nothing
+in it at all, not even a staging directory. `_write_cache`'s per-key sweep
+(below) exists for the case where a kill lands mid-write; this run's kill
+landed before any write started, so there was nothing to sweep.
+
+## The stem cache is written atomically, and that is what makes killing the writer safe
+
+`separation._write_cache` builds the fallback marker (if any) and every stem
+into a sibling staging directory (`tempfile.mkdtemp(prefix=f".{key}.",
+dir=cache_dir)`) and renames the whole thing into place — `os.replace` twice,
+old cache to a doomed name and staging to the real one — only once everything
+is on disk. An interrupted write, from any cause, leaves either the previous
+complete cache or no cache at all; it can never leave a subset of stems, and
+it can never leave a marker with no stems behind it either, because the marker
+and the stems are written into the same staging directory and renamed
+together as one unit.
+
+**This used to be two separate writes, in a deliberately chosen order, and the
+reasoning behind that order is worth keeping even though the order itself is
+gone.** Before this branch, the fallback marker was written first and the
+stems second, directly into the final cache directory, specifically so that a
+failure between them left a stale marker with no stems (which `_load_cache`
+correctly treats as a miss and recomputes) rather than stems with an
+unrecorded fallback (which would have read as a properly separated song that
+happened to only have one stem). That was the best available ordering while
+the write could not be made atomic — the two-step version has no atomic
+"finish" to interrupt, only "wrote the marker" and "wrote the stems", so *some*
+ordering had to be chosen and defended. It stopped being the relevant question
+the moment the write became a single staging-directory rename: there is no
+window between "the marker exists" and "the stems exist" for a crash to land
+in, because both are written to a location nothing else looks at until the
+rename makes them appear together, atomically, or not at all. The old ordering
+mattered only because the write used to lack exactly the property this one
+was built to have.
+
+A killed writer — which this branch's subprocess separation makes routine
+rather than a rare crash — can still leave an orphaned staging directory
+behind, with no process left to clean it up: a full stem set, hundreds of
+megabytes. `_write_cache` sweeps these itself, at the top of its own run,
+scoped to the one cache key it is about to write (`prefix = f".{key}."`) —
+sweeping the whole cache directory would race a concurrent write of a
+*different* song, but a single worker only ever has one write in flight for a
+given key at a time, so a leftover staging directory under that key can only
+be an orphan from an earlier, killed attempt at the same separation.
+
 ## The `RenderSession` staging table
 
 `RenderSession` exists because a preview needs the results of separation,
@@ -721,6 +856,31 @@ follows, and `request` refuses to send anything while `Cold`. `Preview.warm`
 is the one function that does — see "Entering the mixer costs one long
 request and says so" in `ui/README.md` for the reasoning about that specific
 request.
+
+**A full render, measured beside those same preview figures.** All of the
+above is about the cost of *entering* the mixer; nobody had measured the cost
+of the render the mixer's own button starts. Task 9's own verification did,
+against a track measured at 246.6 s — coincidentally (or not; the file is not
+named in either report) the same length as the one this section's 180.55 s
+cold-preview figure was measured on — with its stems already separated and
+cached, so, unlike that cold-preview number, this pays nothing for Demucs.
+`POST /api/renders`
+at the default `output.duration_min` (20 minutes, i.e. a 1200 s mix from a
+246.6 s source) was watched start to finish over its own `GET
+/api/jobs/{id}/events` stream and finished in **13.6 s** wall-clock, corroborated
+by a second run's file `Last-Modified` timestamp against its job's
+`created_at` (**11.0 s**). Both are three orders of magnitude below the
+180.55 s cold-preview figure two paragraphs up, and that gap is not a
+coincidence: a render pays for loop detection and per-stem time-stretching
+exactly once regardless of the output length, then iterates
+`build_disintegrating_stream` roughly seventy times (a ~17.6 s loop filling
+1200 s) at the tens-of-milliseconds-per-stem cost `preview.render_window`
+already established — there is no separation call in this path at all once
+the cache is warm, which every render started from an already-open mixer's
+Render button is. See `docs/project-state.md`'s note on `Warn.forSource` for
+what this measurement implies about that warning's own threshold, which keys
+on source length rather than the output length that actually drives a
+render's cost.
 
 **Gapless swapping at loop boundaries.** A preview buffer is one loop
 iteration, played on a loop; changing a control mid-playback produces a new

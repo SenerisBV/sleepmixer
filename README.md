@@ -136,8 +136,10 @@ sleepmix ui
 Starts a local server on `127.0.0.1:8765`, opens a browser tab, and serves a
 small [Elm](https://elm-lang.org/) application — compiled and committed into
 the package, so running this needs nothing beyond the `ui` extra. It's a
-library browser, a song screen, and — since this branch — a mixer you can
-hear while you shape it.
+library browser, a song screen, a mixer you can hear while you shape it, and —
+since this branch — a way to actually finish with what you've been shaping:
+start a full render, watch it and the rest of the job queue, stop either one
+if you need to, and download the result.
 
 What it does today: import a song by filesystem path, and the server decodes
 it, registers it in a local SQLite library, and hands back a waveform, drawn
@@ -146,7 +148,13 @@ its detected loop region and tempo, and its separation status. Kick off stem
 separation (vocals/drums/bass/other, via Demucs, with a plain-mix fallback if
 you haven't installed it) and watch it progress live over server-sent events,
 with the reason shown in place if it fell back or failed rather than just
-going quiet.
+going quiet. Change your mind partway through and cancel it — Demucs now runs
+in a subprocess just so this can be killed cleanly, and cancelling puts the
+song back to not-yet-separated with nothing partial left in the cache. Before
+you start a separation (or a render) on a source file long enough to matter,
+the screen says so: past roughly fifteen minutes of source audio, a line above
+the button names the file's length and the fact that everything here runs on
+one worker, so whatever you start behind it waits its turn.
 
 Once a song is separated, open the mixer. Every control on it — per-stem
 enable, gain, reverb send, and every decay parameter (the lowpass sweep,
@@ -169,15 +177,28 @@ percentage it doesn't have. Every preview after that answers in well under a
 second, because the built session stays warm for as long as the song stays
 open.
 
-What it still doesn't do: there is no render screen — starting, cancelling,
-or downloading a full render has no page at all yet, though the API
-underneath it (see below) already does all three. There are no presets, no
-page shows the background job queue, and nothing warns before importing a
-file large enough to block every job behind it. All of that already exists
-and is tested at the API level and reachable from a shell with `curl` for
-whatever doesn't yet have a screen; building the rest of the frontend is the
-next piece of work. Nothing about the API is expected to change to make room
-for it.
+The mixer's Render button starts a full mix as a background job — the exact
+config you've been previewing, not whatever the soloed stem happens to be —
+and takes you to the renders screen, where you watch it the same way
+separation reports progress, cancel it if you want to, and download the
+finished WAV once it's done, or delete it to reclaim the disk space (both the
+database row and the file go together). A queue screen, reached from the
+library's own navigation, shows everything the one background worker is
+currently doing or about to do — what's running, what's waiting behind it,
+what recently finished — with a Cancel button on anything still stoppable.
+That screen is the answer to the incident that started this: a seventy-minute
+file imported by accident, with nothing to do about it short of killing the
+server by hand.
+
+What it still doesn't do: there are no presets yet — `server/api/presets.py`'s
+CRUD has no screen, though it's reachable the same way with `curl` in the
+meantime — and there is no *estimate* of how long a render or separation will
+take, only the warning above that names the source file's length. Nothing in
+this project measures the ratio between a track's length and how long
+rendering or separating it takes closely enough to state a number rather than
+invent one, so the interface says what's queued and lets you watch it rather
+than promising a time. Nothing about the API is expected to change to make
+room for presets when they arrive.
 
 Ask the API directly for a preview — any single point in the decay arc, by a
 `progress` value from 0 to 1 and an optional list of stems to solo — and get

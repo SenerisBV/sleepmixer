@@ -69,6 +69,15 @@ around watching a single job and `JobManager` fans out per subscriber, so ten
 rows would mean ten connections reporting one worker's progress. Polling a list
 is the right shape for a list.
 
+**It is also the only way to stop a separation, and `Page.Song` says so
+directly above its own nav link.** `Page.Song` has no cancel path of its own —
+nothing on that screen can stop the job it is watching — so a `Queue` button
+sits immediately under the separation panel, right where the operator is
+already looking at a bar crawl and deciding they picked the wrong file. It used
+to be reachable only from the library's own nav strip, which meant backing out
+of the song you were watching separate before you could get to the one screen
+that could stop it.
+
 The timer is `Process.sleep` re-armed from `update` rather than `Time.every`,
 and that is a dependency constraint rather than a preference: `elm/time` is an
 *indirect* dependency here, so `import Time` does not compile, and promoting it
