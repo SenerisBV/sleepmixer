@@ -43,6 +43,13 @@ class Job:
     error: str | None = None
     result: dict | None = None
     song_id: str | None = None
+    # The row this job is producing, for the kinds of job that produce one.
+    # Only renders do today. Without it the only way to tell which render a job
+    # belongs to is the song it came from and when it started, and that pairing
+    # is wrong exactly when it matters: a render row left at "running" by a
+    # restart has no job of its own, so it matches the *next* render of the same
+    # song and offers a Cancel button that stops a different render.
+    render_id: str | None = None
     created_at: str = ""
 
     def as_event(self) -> dict:
@@ -64,8 +71,10 @@ class JobManager:
         self._keep_terminal = keep_terminal
 
     # -- lifecycle ------------------------------------------------------
-    def submit(self, kind: str, fn: JobFn, song_id: str | None = None) -> Job:
+    def submit(self, kind: str, fn: JobFn, song_id: str | None = None,
+               render_id: str | None = None) -> Job:
         job = Job(id=uuid.uuid4().hex, kind=kind, song_id=song_id,
+                  render_id=render_id,
                   created_at=datetime.now(timezone.utc).isoformat())
         token = CancelToken()
         with self._lock:

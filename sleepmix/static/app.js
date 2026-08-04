@@ -784,11 +784,11 @@ function _Debug_crash_UNUSED(identifier, fact1, fact2, fact3, fact4)
 
 function _Debug_regionToString(region)
 {
-	if (region.a6.aC === region.bo.aC)
+	if (region.a7.aC === region.bq.aC)
 	{
-		return 'on line ' + region.a6.aC;
+		return 'on line ' + region.a7.aC;
 	}
-	return 'on lines ' + region.a6.aC + ' through ' + region.bo.aC;
+	return 'on lines ' + region.a7.aC + ' through ' + region.bq.aC;
 }
 
 
@@ -1861,9 +1861,9 @@ var _Platform_worker = F4(function(impl, flagDecoder, debugMetadata, args)
 	return _Platform_initialize(
 		flagDecoder,
 		args,
-		impl.cE,
-		impl.dA,
-		impl.ds,
+		impl.cG,
+		impl.dD,
+		impl.dv,
 		function() { return function() {} }
 	);
 });
@@ -2727,9 +2727,9 @@ var _VirtualDom_mapEventTuple = F2(function(func, tuple)
 var _VirtualDom_mapEventRecord = F2(function(func, record)
 {
 	return {
-		cK: func(record.cK),
-		a8: record.a8,
-		a4: record.a4
+		cM: func(record.cM),
+		a9: record.a9,
+		a5: record.a5
 	}
 });
 
@@ -2997,11 +2997,11 @@ function _VirtualDom_makeCallback(eventNode, initialHandler)
 		// 3 = Custom
 
 		var value = result.a;
-		var message = !tag ? value : tag < 3 ? value.a : value.cK;
-		var stopPropagation = tag == 1 ? value.b : tag == 3 && value.a8;
+		var message = !tag ? value : tag < 3 ? value.a : value.cM;
+		var stopPropagation = tag == 1 ? value.b : tag == 3 && value.a9;
 		var currentEventNode = (
 			stopPropagation && event.stopPropagation(),
-			(tag == 2 ? value.b : tag == 3 && value.a4) && event.preventDefault(),
+			(tag == 2 ? value.b : tag == 3 && value.a5) && event.preventDefault(),
 			eventNode
 		);
 		var tagger;
@@ -3951,11 +3951,11 @@ var _Browser_element = _Debugger_element || F4(function(impl, flagDecoder, debug
 	return _Platform_initialize(
 		flagDecoder,
 		args,
-		impl.cE,
-		impl.dA,
-		impl.ds,
+		impl.cG,
+		impl.dD,
+		impl.dv,
 		function(sendToApp, initialModel) {
-			var view = impl.dC;
+			var view = impl.dF;
 			/**/
 			var domNode = args['node'];
 			//*/
@@ -3987,12 +3987,12 @@ var _Browser_document = _Debugger_document || F4(function(impl, flagDecoder, deb
 	return _Platform_initialize(
 		flagDecoder,
 		args,
-		impl.cE,
-		impl.dA,
-		impl.ds,
+		impl.cG,
+		impl.dD,
+		impl.dv,
 		function(sendToApp, initialModel) {
-			var divertHrefToApp = impl.a5 && impl.a5(sendToApp)
-			var view = impl.dC;
+			var divertHrefToApp = impl.a6 && impl.a6(sendToApp)
+			var view = impl.dF;
 			var title = _VirtualDom_doc.title;
 			var bodyNode = _VirtualDom_doc.body;
 			var currNode = _VirtualDom_virtualize(bodyNode);
@@ -4005,7 +4005,7 @@ var _Browser_document = _Debugger_document || F4(function(impl, flagDecoder, deb
 				bodyNode = _VirtualDom_applyPatches(bodyNode, currNode, patches, sendToApp);
 				currNode = nextNode;
 				_VirtualDom_divertHrefToApp = 0;
-				(title !== doc.dx) && (_VirtualDom_doc.title = title = doc.dx);
+				(title !== doc.dA) && (_VirtualDom_doc.title = title = doc.dA);
 			});
 		}
 	);
@@ -4061,12 +4061,12 @@ function _Browser_makeAnimator(model, draw)
 
 function _Browser_application(impl)
 {
-	var onUrlChange = impl.c6;
-	var onUrlRequest = impl.c7;
+	var onUrlChange = impl.c8;
+	var onUrlRequest = impl.c9;
 	var key = function() { key.a(onUrlChange(_Browser_getUrl())); };
 
 	return _Browser_document({
-		a5: function(sendToApp)
+		a6: function(sendToApp)
 		{
 			key.a = sendToApp;
 			_Browser_window.addEventListener('popstate', key);
@@ -4082,9 +4082,9 @@ function _Browser_application(impl)
 					var next = $elm$url$Url$fromString(href).a;
 					sendToApp(onUrlRequest(
 						(next
-							&& curr.bN === next.bN
-							&& curr.bu === next.bu
-							&& curr.bK.a === next.bK.a
+							&& curr.bP === next.bP
+							&& curr.bw === next.bw
+							&& curr.bM.a === next.bM.a
 						)
 							? $elm$browser$Browser$Internal(next)
 							: $elm$browser$Browser$External(href)
@@ -4092,13 +4092,13 @@ function _Browser_application(impl)
 				}
 			});
 		},
-		cE: function(flags)
+		cG: function(flags)
 		{
-			return A3(impl.cE, flags, _Browser_getUrl(), key);
+			return A3(impl.cG, flags, _Browser_getUrl(), key);
 		},
-		dC: impl.dC,
-		dA: impl.dA,
-		ds: impl.ds
+		dF: impl.dF,
+		dD: impl.dD,
+		dv: impl.dv
 	});
 }
 
@@ -4164,17 +4164,17 @@ var _Browser_decodeEvent = F2(function(decoder, event)
 function _Browser_visibilityInfo()
 {
 	return (typeof _VirtualDom_doc.hidden !== 'undefined')
-		? { cB: 'hidden', ch: 'visibilitychange' }
+		? { cD: 'hidden', cj: 'visibilitychange' }
 		:
 	(typeof _VirtualDom_doc.mozHidden !== 'undefined')
-		? { cB: 'mozHidden', ch: 'mozvisibilitychange' }
+		? { cD: 'mozHidden', cj: 'mozvisibilitychange' }
 		:
 	(typeof _VirtualDom_doc.msHidden !== 'undefined')
-		? { cB: 'msHidden', ch: 'msvisibilitychange' }
+		? { cD: 'msHidden', cj: 'msvisibilitychange' }
 		:
 	(typeof _VirtualDom_doc.webkitHidden !== 'undefined')
-		? { cB: 'webkitHidden', ch: 'webkitvisibilitychange' }
-		: { cB: 'hidden', ch: 'visibilitychange' };
+		? { cD: 'webkitHidden', cj: 'webkitvisibilitychange' }
+		: { cD: 'hidden', cj: 'visibilitychange' };
 }
 
 
@@ -4255,12 +4255,12 @@ var _Browser_call = F2(function(functionName, id)
 function _Browser_getViewport()
 {
 	return {
-		bU: _Browser_getScene(),
-		b6: {
-			bb: _Browser_window.pageXOffset,
-			bc: _Browser_window.pageYOffset,
-			dD: _Browser_doc.documentElement.clientWidth,
-			cA: _Browser_doc.documentElement.clientHeight
+		bW: _Browser_getScene(),
+		b8: {
+			bc: _Browser_window.pageXOffset,
+			bd: _Browser_window.pageYOffset,
+			dG: _Browser_doc.documentElement.clientWidth,
+			cC: _Browser_doc.documentElement.clientHeight
 		}
 	};
 }
@@ -4270,8 +4270,8 @@ function _Browser_getScene()
 	var body = _Browser_doc.body;
 	var elem = _Browser_doc.documentElement;
 	return {
-		dD: Math.max(body.scrollWidth, body.offsetWidth, elem.scrollWidth, elem.offsetWidth, elem.clientWidth),
-		cA: Math.max(body.scrollHeight, body.offsetHeight, elem.scrollHeight, elem.offsetHeight, elem.clientHeight)
+		dG: Math.max(body.scrollWidth, body.offsetWidth, elem.scrollWidth, elem.offsetWidth, elem.clientWidth),
+		cC: Math.max(body.scrollHeight, body.offsetHeight, elem.scrollHeight, elem.offsetHeight, elem.clientHeight)
 	};
 }
 
@@ -4294,15 +4294,15 @@ function _Browser_getViewportOf(id)
 	return _Browser_withNode(id, function(node)
 	{
 		return {
-			bU: {
-				dD: node.scrollWidth,
-				cA: node.scrollHeight
+			bW: {
+				dG: node.scrollWidth,
+				cC: node.scrollHeight
 			},
-			b6: {
-				bb: node.scrollLeft,
-				bc: node.scrollTop,
-				dD: node.clientWidth,
-				cA: node.clientHeight
+			b8: {
+				bc: node.scrollLeft,
+				bd: node.scrollTop,
+				dG: node.clientWidth,
+				cC: node.clientHeight
 			}
 		};
 	});
@@ -4332,18 +4332,18 @@ function _Browser_getElement(id)
 		var x = _Browser_window.pageXOffset;
 		var y = _Browser_window.pageYOffset;
 		return {
-			bU: _Browser_getScene(),
-			b6: {
-				bb: x,
-				bc: y,
-				dD: _Browser_doc.documentElement.clientWidth,
-				cA: _Browser_doc.documentElement.clientHeight
+			bW: _Browser_getScene(),
+			b8: {
+				bc: x,
+				bd: y,
+				dG: _Browser_doc.documentElement.clientWidth,
+				cC: _Browser_doc.documentElement.clientHeight
 			},
-			cq: {
-				bb: x + rect.left,
-				bc: y + rect.top,
-				dD: rect.width,
-				cA: rect.height
+			cs: {
+				bc: x + rect.left,
+				bd: y + rect.top,
+				dG: rect.width,
+				cC: rect.height
 			}
 		};
 	});
@@ -4388,19 +4388,19 @@ var _Http_toTask = F3(function(router, toTask, request)
 	return _Scheduler_binding(function(callback)
 	{
 		function done(response) {
-			callback(toTask(request.ct.a(response)));
+			callback(toTask(request.cv.a(response)));
 		}
 
 		var xhr = new XMLHttpRequest();
 		xhr.addEventListener('error', function() { done($elm$http$Http$NetworkError_); });
 		xhr.addEventListener('timeout', function() { done($elm$http$Http$Timeout_); });
-		xhr.addEventListener('load', function() { done(_Http_toResponse(request.ct.b, xhr)); });
-		$elm$core$Maybe$isJust(request.dy) && _Http_track(router, xhr, request.dy.a);
+		xhr.addEventListener('load', function() { done(_Http_toResponse(request.cv.b, xhr)); });
+		$elm$core$Maybe$isJust(request.dB) && _Http_track(router, xhr, request.dB.a);
 
 		try {
-			xhr.open(request.cL, request.dB, true);
+			xhr.open(request.cN, request.dE, true);
 		} catch (e) {
-			return done($elm$http$Http$BadUrl_(request.dB));
+			return done($elm$http$Http$BadUrl_(request.dE));
 		}
 
 		_Http_configureRequest(xhr, request);
@@ -4417,13 +4417,13 @@ var _Http_toTask = F3(function(router, toTask, request)
 
 function _Http_configureRequest(xhr, request)
 {
-	for (var headers = request.cz; headers.b; headers = headers.b) // WHILE_CONS
+	for (var headers = request.cB; headers.b; headers = headers.b) // WHILE_CONS
 	{
 		xhr.setRequestHeader(headers.a.a, headers.a.b);
 	}
-	xhr.timeout = request.dw.a || 0;
-	xhr.responseType = request.ct.d;
-	xhr.withCredentials = request.cb;
+	xhr.timeout = request.dz.a || 0;
+	xhr.responseType = request.cv.d;
+	xhr.withCredentials = request.cd;
 }
 
 
@@ -4444,10 +4444,10 @@ function _Http_toResponse(toBody, xhr)
 function _Http_toMetadata(xhr)
 {
 	return {
-		dB: xhr.responseURL,
-		dp: xhr.status,
-		dq: xhr.statusText,
-		cz: _Http_parseHeaders(xhr.getAllResponseHeaders())
+		dE: xhr.responseURL,
+		ds: xhr.status,
+		dt: xhr.statusText,
+		cB: _Http_parseHeaders(xhr.getAllResponseHeaders())
 	};
 }
 
@@ -4542,15 +4542,15 @@ function _Http_track(router, xhr, tracker)
 	xhr.upload.addEventListener('progress', function(event) {
 		if (xhr.c) { return; }
 		_Scheduler_rawSpawn(A2($elm$core$Platform$sendToSelf, router, _Utils_Tuple2(tracker, $elm$http$Http$Sending({
-			dk: event.loaded,
-			bX: event.total
+			dn: event.loaded,
+			bZ: event.total
 		}))));
 	});
 	xhr.addEventListener('progress', function(event) {
 		if (xhr.c) { return; }
 		_Scheduler_rawSpawn(A2($elm$core$Platform$sendToSelf, router, _Utils_Tuple2(tracker, $elm$http$Http$Receiving({
-			dc: event.loaded,
-			bX: event.lengthComputable ? $elm$core$Maybe$Just(event.total) : $elm$core$Maybe$Nothing
+			de: event.loaded,
+			bZ: event.lengthComputable ? $elm$core$Maybe$Just(event.total) : $elm$core$Maybe$Nothing
 		}))));
 	});
 }
@@ -5111,7 +5111,7 @@ var $elm$url$Url$Http = 0;
 var $elm$url$Url$Https = 1;
 var $elm$url$Url$Url = F6(
 	function (protocol, host, port_, path, query, fragment) {
-		return {bq: fragment, bu: host, bI: path, bK: port_, bN: protocol, bO: query};
+		return {bs: fragment, bw: host, bK: path, bM: port_, bP: protocol, bQ: query};
 	});
 var $elm$core$String$contains = _String_contains;
 var $elm$core$String$length = _String_length;
@@ -5997,7 +5997,7 @@ var $elm$http$Http$resolve = F2(
 			case 3:
 				var metadata = response.a;
 				return $elm$core$Result$Err(
-					$elm$http$Http$BadStatus(metadata.dp));
+					$elm$http$Http$BadStatus(metadata.ds));
 			default:
 				var body = response.b;
 				return A2(
@@ -6026,7 +6026,7 @@ var $elm$http$Http$Request = function (a) {
 };
 var $elm$http$Http$State = F2(
 	function (reqs, subs) {
-		return {bQ: reqs, b3: subs};
+		return {bS: reqs, b5: subs};
 	});
 var $elm$http$Http$init = $elm$core$Task$succeed(
 	A2($elm$http$Http$State, $elm$core$Dict$empty, _List_Nil));
@@ -6070,7 +6070,7 @@ var $elm$http$Http$updateReqs = F3(
 					return A2(
 						$elm$core$Task$andThen,
 						function (pid) {
-							var _v4 = req.dy;
+							var _v4 = req.dB;
 							if (_v4.$ === 1) {
 								return A3($elm$http$Http$updateReqs, router, otherCmds, reqs);
 							} else {
@@ -6100,7 +6100,7 @@ var $elm$http$Http$onEffects = F4(
 				return $elm$core$Task$succeed(
 					A2($elm$http$Http$State, reqs, subs));
 			},
-			A3($elm$http$Http$updateReqs, router, cmds, state.bQ));
+			A3($elm$http$Http$updateReqs, router, cmds, state.bS));
 	});
 var $elm$core$List$maybeCons = F3(
 	function (f, mx, xs) {
@@ -6143,7 +6143,7 @@ var $elm$http$Http$onSelfMsg = F3(
 				A2(
 					$elm$core$List$filterMap,
 					A3($elm$http$Http$maybeSend, router, tracker, progress),
-					state.b3)));
+					state.b5)));
 	});
 var $elm$http$Http$Cancel = function (a) {
 	return {$: 0, a: a};
@@ -6157,14 +6157,14 @@ var $elm$http$Http$cmdMap = F2(
 			var r = cmd.a;
 			return $elm$http$Http$Request(
 				{
-					cb: r.cb,
+					cd: r.cd,
 					ay: r.ay,
-					ct: A2(_Http_mapExpect, func, r.ct),
-					cz: r.cz,
-					cL: r.cL,
-					dw: r.dw,
-					dy: r.dy,
-					dB: r.dB
+					cv: A2(_Http_mapExpect, func, r.cv),
+					cB: r.cB,
+					cN: r.cN,
+					dz: r.dz,
+					dB: r.dB,
+					dE: r.dE
 				});
 		}
 	});
@@ -6187,11 +6187,11 @@ var $elm$http$Http$subscription = _Platform_leaf('Http');
 var $elm$http$Http$request = function (r) {
 	return $elm$http$Http$command(
 		$elm$http$Http$Request(
-			{cb: false, ay: r.ay, ct: r.ct, cz: r.cz, cL: r.cL, dw: r.dw, dy: r.dy, dB: r.dB}));
+			{cd: false, ay: r.ay, cv: r.cv, cB: r.cB, cN: r.cN, dz: r.dz, dB: r.dB, dE: r.dE}));
 };
 var $elm$http$Http$get = function (r) {
 	return $elm$http$Http$request(
-		{ay: $elm$http$Http$emptyBody, ct: r.ct, cz: _List_Nil, cL: 'GET', dw: $elm$core$Maybe$Nothing, dy: $elm$core$Maybe$Nothing, dB: r.dB});
+		{ay: $elm$http$Http$emptyBody, cv: r.cv, cB: _List_Nil, cN: 'GET', dz: $elm$core$Maybe$Nothing, dB: $elm$core$Maybe$Nothing, dE: r.dE});
 };
 var $elm$url$Url$Builder$toQueryPair = function (_v0) {
 	var key = _v0.a;
@@ -6214,7 +6214,7 @@ var $elm$url$Url$Builder$absolute = F2(
 	});
 var $author$project$Schema$Schema = F2(
 	function (fields, sections) {
-		return {A: fields, V: sections};
+		return {C: fields, W: sections};
 	});
 var $elm$core$Dict$fromList = function (assocs) {
 	return A3(
@@ -6256,7 +6256,7 @@ var $author$project$Schema$TextField = function (a) {
 var $elm$json$Json$Decode$andThen = _Json_andThen;
 var $author$project$Schema$BoolSpec = F3(
 	function (label, help, _default) {
-		return {al: _default, u: help, v: label};
+		return {al: _default, w: help, x: label};
 	});
 var $elm$json$Json$Decode$bool = _Json_decodeBool;
 var $elm$json$Json$Decode$map3 = _Json_map3;
@@ -6282,7 +6282,7 @@ var $author$project$Schema$boolSpec = A4(
 	A2($elm$json$Json$Decode$field, 'default', $elm$json$Json$Decode$bool));
 var $author$project$Schema$ChoiceSpec = F4(
 	function (label, help, _default, choices) {
-		return {bi: choices, al: _default, u: help, v: label};
+		return {bj: choices, al: _default, w: help, x: label};
 	});
 var $elm$json$Json$Decode$list = _Json_decodeList;
 var $elm$json$Json$Decode$map4 = _Json_map4;
@@ -6316,7 +6316,7 @@ var $elm$json$Json$Decode$maybe = function (decoder) {
 };
 var $author$project$Schema$NumberSpec = F7(
 	function (label, help, _default, min, max, step, unit) {
-		return {al: _default, u: help, v: label, bA: max, bB: min, b0: step, aL: unit};
+		return {al: _default, w: help, x: label, bC: max, bD: min, b2: step, aL: unit};
 	});
 var $elm$json$Json$Decode$float = _Json_decodeFloat;
 var $elm$json$Json$Decode$map7 = _Json_map7;
@@ -6346,7 +6346,7 @@ var $elm$core$Tuple$pair = F2(
 	});
 var $author$project$Schema$TextSpec = F3(
 	function (label, help, _default) {
-		return {al: _default, u: help, v: label};
+		return {al: _default, w: help, x: label};
 	});
 var $author$project$Schema$textSpec = A4(
 	$elm$json$Json$Decode$map3,
@@ -6404,7 +6404,7 @@ var $author$project$Schema$field = A2(
 		$elm$json$Json$Decode$maybe(
 			A2($elm$json$Json$Decode$field, 'choices', $elm$json$Json$Decode$value))));
 var $author$project$Schema$Section = function (fields) {
-	return {A: fields};
+	return {C: fields};
 };
 var $author$project$Schema$section = A2(
 	$elm$json$Json$Decode$map,
@@ -6427,8 +6427,8 @@ var $author$project$Schema$decoder = A3(
 var $author$project$Request$schema = function (toMsg) {
 	return $elm$http$Http$get(
 		{
-			ct: A2($elm$http$Http$expectJson, toMsg, $author$project$Schema$decoder),
-			dB: A2(
+			cv: A2($elm$http$Http$expectJson, toMsg, $author$project$Schema$decoder),
+			dE: A2(
 				$elm$url$Url$Builder$absolute,
 				_List_fromArray(
 					['api', 'schema']),
@@ -6437,7 +6437,7 @@ var $author$project$Request$schema = function (toMsg) {
 };
 var $author$project$Api$Song = F8(
 	function (id, path, title, durationS, sampleRate, separationStatus, stems, addedAt) {
-		return {ca: addedAt, cp: durationS, aY: id, bI: path, di: sampleRate, dm: separationStatus, dr: stems, dx: title};
+		return {cc: addedAt, cr: durationS, aY: id, bK: path, dl: sampleRate, dp: separationStatus, du: stems, dA: title};
 	});
 var $NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$custom = $elm$json$Json$Decode$map2($elm$core$Basics$apR);
 var $elm$json$Json$Decode$at = F2(
@@ -6591,14 +6591,14 @@ var $author$project$Api$song = A3(
 var $author$project$Request$songs = function (toMsg) {
 	return $elm$http$Http$get(
 		{
-			ct: A2(
+			cv: A2(
 				$elm$http$Http$expectJson,
 				toMsg,
 				A2(
 					$elm$json$Json$Decode$field,
 					'songs',
 					$elm$json$Json$Decode$list($author$project$Api$song))),
-			dB: A2(
+			dE: A2(
 				$elm$url$Url$Builder$absolute,
 				_List_fromArray(
 					['api', 'songs']),
@@ -6607,17 +6607,17 @@ var $author$project$Request$songs = function (toMsg) {
 };
 var $author$project$Main$init = function (_v0) {
 	return _Utils_Tuple2(
-		{_: $elm$core$Maybe$Nothing, ab: $elm$core$Maybe$Nothing, aA: $author$project$Main$Checking, aB: $elm$core$Maybe$Nothing, M: false, ao: $author$project$Page$Library$Loading, N: $elm$core$Maybe$Nothing, ae: $elm$core$Maybe$Nothing, aD: 0, O: $elm$core$Maybe$Nothing, y: $elm$core$Maybe$Nothing, aF: 1, Q: '', R: _List_Nil, ap: $elm$core$Maybe$Nothing, aO: 0, n: $author$project$Preview$Cold, I: $elm$core$Maybe$Nothing, T: _List_Nil, U: $elm$core$Maybe$Nothing, E: $elm$core$Maybe$Nothing, W: $elm$core$Maybe$Nothing, aq: $elm$core$Maybe$Nothing, d: $author$project$Main$Idle, X: $author$project$Main$SettingsLoading, ah: $elm$core$Maybe$Nothing, aG: 0, K: $elm$core$Maybe$Nothing},
+		{aa: $elm$core$Maybe$Nothing, I: $elm$core$Maybe$Nothing, aA: $author$project$Main$Checking, aB: $elm$core$Maybe$Nothing, O: false, ao: $author$project$Page$Library$Loading, P: $elm$core$Maybe$Nothing, ae: $elm$core$Maybe$Nothing, aD: 0, Q: $elm$core$Maybe$Nothing, A: $elm$core$Maybe$Nothing, aF: 1, S: '', T: _List_Nil, ap: $elm$core$Maybe$Nothing, aO: 0, o: $author$project$Preview$Cold, K: $elm$core$Maybe$Nothing, L: _List_Nil, V: $elm$core$Maybe$Nothing, p: $elm$core$Maybe$Nothing, X: $elm$core$Maybe$Nothing, aq: $elm$core$Maybe$Nothing, c: $author$project$Main$Idle, Y: $author$project$Main$SettingsLoading, ah: $elm$core$Maybe$Nothing, aG: 0, k: $elm$core$Maybe$Nothing},
 		$elm$core$Platform$Cmd$batch(
 			_List_fromArray(
 				[
 					$elm$http$Http$get(
 					{
-						ct: A2(
+						cv: A2(
 							$elm$http$Http$expectJson,
 							$author$project$Main$GotHealth,
 							A2($elm$json$Json$Decode$field, 'version', $elm$json$Json$Decode$string)),
-						dB: '/api/health'
+						dE: '/api/health'
 					}),
 					$author$project$Request$songs($author$project$Main$GotSongs),
 					$author$project$Request$schema($author$project$Main$GotSchema)
@@ -6636,9 +6636,28 @@ var $author$project$Main$PreviewPlaying = function (a) {
 	return {$: 22, a: a};
 };
 var $elm$core$Platform$Sub$batch = _Platform_batch;
-var $author$project$Api$Job = F7(
-	function (id, kind, status, fraction, message, songId, createdAt) {
-		return {bk: createdAt, cy: fraction, aY: id, cH: kind, cK: message, b_: songId, b$: status};
+var $author$project$Main$jobEvent = _Platform_incomingPort('jobEvent', $elm$json$Json$Decode$value);
+var $author$project$Main$jobStreamFailed = _Platform_incomingPort('jobStreamFailed', $elm$json$Json$Decode$string);
+var $elm$core$Result$toMaybe = function (result) {
+	if (!result.$) {
+		var v = result.a;
+		return $elm$core$Maybe$Just(v);
+	} else {
+		return $elm$core$Maybe$Nothing;
+	}
+};
+var $author$project$Main$playingLoopSeconds = function (value) {
+	return $elm$core$Result$toMaybe(
+		A2(
+			$elm$json$Json$Decode$decodeValue,
+			A2($elm$json$Json$Decode$field, 'durationS', $elm$json$Json$Decode$float),
+			value));
+};
+var $author$project$Main$previewFailed = _Platform_incomingPort('previewFailed', $elm$json$Json$Decode$string);
+var $author$project$Main$previewReady = _Platform_incomingPort('previewReady', $elm$json$Json$Decode$value);
+var $author$project$Api$Job = F8(
+	function (id, kind, status, fraction, message, songId, renderId, createdAt) {
+		return {bl: createdAt, cA: fraction, aY: id, cJ: kind, cM: message, dg: renderId, b0: songId, b1: status};
 	});
 var $author$project$Api$Cancelled = {$: 3};
 var $author$project$Api$Done = {$: 2};
@@ -6684,56 +6703,56 @@ var $author$project$Api$job = A3(
 	$elm$json$Json$Decode$string,
 	A3(
 		$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
-		'song_id',
+		'render_id',
 		$elm$json$Json$Decode$nullable($elm$json$Json$Decode$string),
 		A3(
 			$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
-			'message',
-			$elm$json$Json$Decode$string,
+			'song_id',
+			$elm$json$Json$Decode$nullable($elm$json$Json$Decode$string),
 			A3(
 				$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
-				'fraction',
-				$elm$json$Json$Decode$float,
-				A2(
-					$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$custom,
-					$author$project$Api$jobStatus,
-					A3(
-						$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
-						'kind',
-						$elm$json$Json$Decode$string,
+				'message',
+				$elm$json$Json$Decode$string,
+				A3(
+					$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+					'fraction',
+					$elm$json$Json$Decode$float,
+					A2(
+						$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$custom,
+						$author$project$Api$jobStatus,
 						A3(
 							$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
-							'id',
+							'kind',
 							$elm$json$Json$Decode$string,
-							$elm$json$Json$Decode$succeed($author$project$Api$Job))))))));
-var $author$project$Main$jobEvent = _Platform_incomingPort('jobEvent', $elm$json$Json$Decode$value);
-var $author$project$Main$jobStreamFailed = _Platform_incomingPort('jobStreamFailed', $elm$json$Json$Decode$string);
-var $elm$core$Result$toMaybe = function (result) {
-	if (!result.$) {
-		var v = result.a;
-		return $elm$core$Maybe$Just(v);
+							A3(
+								$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+								'id',
+								$elm$json$Json$Decode$string,
+								$elm$json$Json$Decode$succeed($author$project$Api$Job)))))))));
+var $author$project$Main$readEvent = function (value) {
+	var _v0 = A2($elm$json$Json$Decode$decodeValue, $author$project$Api$job, value);
+	if (!_v0.$) {
+		var job = _v0.a;
+		return $elm$core$Result$Ok(job);
 	} else {
-		return $elm$core$Maybe$Nothing;
+		var err = _v0.a;
+		return $elm$core$Result$Err(
+			{
+				aW: $elm$json$Json$Decode$errorToString(err),
+				a_: $elm$core$Result$toMaybe(
+					A2(
+						$elm$json$Json$Decode$decodeValue,
+						A2($elm$json$Json$Decode$field, 'id', $elm$json$Json$Decode$string),
+						value))
+			});
 	}
 };
-var $author$project$Main$playingLoopSeconds = function (value) {
-	return $elm$core$Result$toMaybe(
-		A2(
-			$elm$json$Json$Decode$decodeValue,
-			A2($elm$json$Json$Decode$field, 'durationS', $elm$json$Json$Decode$float),
-			value));
-};
-var $author$project$Main$previewFailed = _Platform_incomingPort('previewFailed', $elm$json$Json$Decode$string);
-var $author$project$Main$previewReady = _Platform_incomingPort('previewReady', $elm$json$Json$Decode$value);
 var $author$project$Main$subscriptions = function (_v0) {
 	return $elm$core$Platform$Sub$batch(
 		_List_fromArray(
 			[
 				$author$project$Main$jobEvent(
-				A2(
-					$elm$core$Basics$composeR,
-					$elm$json$Json$Decode$decodeValue($author$project$Api$job),
-					$author$project$Main$JobEventReceived)),
+				A2($elm$core$Basics$composeR, $author$project$Main$readEvent, $author$project$Main$JobEventReceived)),
 				$author$project$Main$jobStreamFailed($author$project$Main$JobStreamFailed),
 				$author$project$Main$previewReady(
 				A2($elm$core$Basics$composeR, $author$project$Main$playingLoopSeconds, $author$project$Main$PreviewPlaying)),
@@ -6754,6 +6773,9 @@ var $author$project$Main$GotPeaks = F2(
 	function (a, b) {
 		return {$: 9, a: a, b: b};
 	});
+var $author$project$Main$GotRenderJobs = function (a) {
+	return {$: 27, a: a};
+};
 var $author$project$Main$GotSongDetail = F2(
 	function (a, b) {
 		return {$: 8, a: a, b: b};
@@ -6816,6 +6838,34 @@ var $elm$core$List$head = function (list) {
 		return $elm$core$Maybe$Nothing;
 	}
 };
+var $author$project$Page$Renders$keepStreamed = F3(
+	function (streaming, held, polled) {
+		var streamedCopy = function () {
+			if (!streaming.$) {
+				var id = streaming.a;
+				return $elm$core$List$head(
+					A2(
+						$elm$core$List$filter,
+						function (existing) {
+							return _Utils_eq(existing.aY, id);
+						},
+						held));
+			} else {
+				return $elm$core$Maybe$Nothing;
+			}
+		}();
+		if (streamedCopy.$ === 1) {
+			return polled;
+		} else {
+			var streamed = streamedCopy.a;
+			return A2(
+				$elm$core$List$map,
+				function (fresh) {
+					return _Utils_eq(fresh.aY, streamed.aY) ? streamed : fresh;
+				},
+				polled);
+		}
+	});
 var $author$project$Api$isFinished = function (status) {
 	switch (status.$) {
 		case 0:
@@ -6836,18 +6886,18 @@ var $author$project$Page$Renders$liveRenderJob = function (jobs) {
 	var live = A2(
 		$elm$core$List$sortBy,
 		function ($) {
-			return $.bk;
+			return $.bl;
 		},
 		A2(
 			$elm$core$List$filter,
 			function (aJob) {
-				return (aJob.cH === 'render') && (!$author$project$Api$isFinished(aJob.b$));
+				return (aJob.cJ === 'render') && (!$author$project$Api$isFinished(aJob.b1));
 			},
 			jobs));
 	var _v0 = A2(
 		$elm$core$List$filter,
 		function (aJob) {
-			return _Utils_eq(aJob.b$, $author$project$Api$Running);
+			return _Utils_eq(aJob.b1, $author$project$Api$Running);
 		},
 		live);
 	if (_v0.b) {
@@ -6873,24 +6923,26 @@ var $author$project$Main$adoptRenderJob = F2(
 	function (jobs, model) {
 		var updated = _Utils_update(
 			model,
-			{T: jobs});
+			{
+				L: A3($author$project$Page$Renders$keepStreamed, model.k, model.L, jobs)
+			});
 		var _v0 = $author$project$Page$Renders$liveRenderJob(jobs);
 		if (_v0.$ === 1) {
 			return _Utils_Tuple2(updated, $elm$core$Platform$Cmd$none);
 		} else {
 			var live = _v0.a;
 			return _Utils_eq(
-				model.K,
+				model.k,
 				$elm$core$Maybe$Just(live.aY)) ? _Utils_Tuple2(updated, $elm$core$Platform$Cmd$none) : _Utils_Tuple2(
 				_Utils_update(
 					updated,
 					{
-						K: $elm$core$Maybe$Just(live.aY)
+						k: $elm$core$Maybe$Just(live.aY)
 					}),
 				$elm$core$Platform$Cmd$batch(
 					_List_fromArray(
 						[
-							$author$project$Main$stopWatching(model.K),
+							$author$project$Main$stopWatching(model.k),
 							$author$project$Main$watchJob(live.aY)
 						])));
 		}
@@ -6928,18 +6980,18 @@ var $author$project$Preview$arrived = function (state) {
 };
 var $elm$http$Http$post = function (r) {
 	return $elm$http$Http$request(
-		{ay: r.ay, ct: r.ct, cz: _List_Nil, cL: 'POST', dw: $elm$core$Maybe$Nothing, dy: $elm$core$Maybe$Nothing, dB: r.dB});
+		{ay: r.ay, cv: r.cv, cB: _List_Nil, cN: 'POST', dz: $elm$core$Maybe$Nothing, dB: $elm$core$Maybe$Nothing, dE: r.dE});
 };
 var $author$project$Request$cancelJob = F2(
 	function (jobId, toMsg) {
 		return $elm$http$Http$post(
 			{
 				ay: $elm$http$Http$emptyBody,
-				ct: A2(
+				cv: A2(
 					$elm$http$Http$expectJson,
 					toMsg,
 					A2($elm$json$Json$Decode$field, 'job', $author$project$Api$job)),
-				dB: A2(
+				dE: A2(
 					$elm$url$Url$Builder$absolute,
 					_List_fromArray(
 						['api', 'jobs', jobId, 'cancel']),
@@ -6987,12 +7039,12 @@ var $author$project$Request$deleteRender = F2(
 		return $elm$http$Http$request(
 			{
 				ay: $elm$http$Http$emptyBody,
-				ct: $elm$http$Http$expectWhatever(toMsg),
-				cz: _List_Nil,
-				cL: 'DELETE',
-				dw: $elm$core$Maybe$Nothing,
-				dy: $elm$core$Maybe$Nothing,
-				dB: A2(
+				cv: $elm$http$Http$expectWhatever(toMsg),
+				cB: _List_Nil,
+				cN: 'DELETE',
+				dz: $elm$core$Maybe$Nothing,
+				dB: $elm$core$Maybe$Nothing,
+				dE: A2(
 					$elm$url$Url$Builder$absolute,
 					_List_fromArray(
 						['api', 'renders', renderId]),
@@ -7055,8 +7107,8 @@ var $author$project$Request$importSong = F2(
 								'path',
 								$elm$json$Json$Encode$string(path))
 							]))),
-				ct: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$song),
-				dB: A2(
+				cv: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$song),
+				dE: A2(
 					$elm$url$Url$Builder$absolute,
 					_List_fromArray(
 						['api', 'songs']),
@@ -7223,31 +7275,31 @@ var $author$project$Config$sectionFields = F2(
 			A2(
 				$elm$core$Maybe$map,
 				function ($) {
-					return $.A;
+					return $.C;
 				},
-				A2($elm$core$Dict$get, name, schema.V)));
+				A2($elm$core$Dict$get, name, schema.W)));
 	});
 var $author$project$Config$stemFor = F2(
 	function (schema, name) {
 		return {
 			ak: $author$project$Config$defaults(
 				A2($author$project$Config$sectionFields, 'stem_decay', schema)),
-			A: A2(
+			C: A2(
 				$elm$core$Dict$remove,
 				'name',
 				$author$project$Config$defaults(
 					A2($author$project$Config$sectionFields, 'stem', schema))),
-			a0: name
+			a1: name
 		};
 	});
 var $author$project$Config$fromSchema = F2(
 	function (schema, stemNames) {
 		return {
-			V: A2(
+			W: A2(
 				$elm$core$Dict$map,
 				F2(
 					function (_v1, aSection) {
-						return $author$project$Config$defaults(aSection.A);
+						return $author$project$Config$defaults(aSection.C);
 					}),
 				A2(
 					$elm$core$Dict$filter,
@@ -7255,21 +7307,21 @@ var $author$project$Config$fromSchema = F2(
 						function (name, _v0) {
 							return !A2($elm$core$List$member, name, $author$project$Config$perStemSections);
 						}),
-					schema.V)),
-			dr: A2(
+					schema.W)),
+			du: A2(
 				$elm$core$List$map,
 				$author$project$Config$stemFor(schema),
 				stemNames),
-			as: $author$project$Config$defaults(schema.A)
+			as: $author$project$Config$defaults(schema.C)
 		};
 	});
 var $author$project$Page$Mixer$init = F3(
 	function (songId, schema, stemNames) {
 		return {
-			cj: A2($author$project$Config$fromSchema, schema, stemNames),
-			db: 0,
-			F: $elm$core$Maybe$Nothing,
-			b_: songId
+			cl: A2($author$project$Config$fromSchema, schema, stemNames),
+			dd: 0,
+			G: $elm$core$Maybe$Nothing,
+			b0: songId
 		};
 	});
 var $elm$core$List$isEmpty = function (xs) {
@@ -7308,11 +7360,28 @@ var $author$project$Main$jobOutcome = F2(
 	function (incoming, separation) {
 		if (separation.$ === 2) {
 			var current = separation.a;
-			return (!_Utils_eq(incoming.aY, current.aY)) ? $author$project$Main$Ignored : ($author$project$Api$isFinished(incoming.b$) ? $author$project$Main$Finished(incoming) : $author$project$Main$Tracking(incoming));
+			return (!_Utils_eq(incoming.aY, current.aY)) ? $author$project$Main$Ignored : ($author$project$Api$isFinished(incoming.b1) ? $author$project$Main$Finished(incoming) : $author$project$Main$Tracking(incoming));
 		} else {
 			return $author$project$Main$Ignored;
 		}
 	});
+var $author$project$Request$jobs = function (toMsg) {
+	return $elm$http$Http$get(
+		{
+			cv: A2(
+				$elm$http$Http$expectJson,
+				toMsg,
+				A2(
+					$elm$json$Json$Decode$field,
+					'jobs',
+					$elm$json$Json$Decode$list($author$project$Api$job))),
+			dE: A2(
+				$elm$url$Url$Builder$absolute,
+				_List_fromArray(
+					['api', 'jobs']),
+				_List_Nil)
+		});
+};
 var $elm$json$Json$Encode$null = _Json_encodeNull;
 var $author$project$Main$stopPreview = _Platform_outgoingPort(
 	'stopPreview',
@@ -7320,14 +7389,14 @@ var $author$project$Main$stopPreview = _Platform_outgoingPort(
 		return $elm$json$Json$Encode$null;
 	});
 var $author$project$Main$leaveMixer = function (model) {
-	var _v0 = model.y;
+	var _v0 = model.A;
 	if (_v0.$ === 1) {
 		return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 	} else {
 		return _Utils_Tuple2(
 			_Utils_update(
 				model,
-				{O: $elm$core$Maybe$Nothing, y: $elm$core$Maybe$Nothing, n: $author$project$Preview$Cold, I: $elm$core$Maybe$Nothing}),
+				{Q: $elm$core$Maybe$Nothing, A: $elm$core$Maybe$Nothing, o: $author$project$Preview$Cold, K: $elm$core$Maybe$Nothing}),
 			$author$project$Main$stopPreview(0));
 	}
 };
@@ -7339,7 +7408,7 @@ var $elm$core$Basics$composeL = F3(
 var $elm$core$String$fromFloat = _String_fromNumber;
 var $author$project$Api$LoopRegion = F3(
 	function (startS, endS, tempo) {
-		return {cr: endS, $7: startS, dv: tempo};
+		return {ct: endS, dr: startS, dy: tempo};
 	});
 var $author$project$Api$loopRegion = A4(
 	$elm$json$Json$Decode$map3,
@@ -7363,8 +7432,8 @@ var $author$project$Request$loop = F3(
 	function (songId, override, toMsg) {
 		return $elm$http$Http$get(
 			{
-				ct: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$loopRegion),
-				dB: A2(
+				cv: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$loopRegion),
+				dE: A2(
 					$elm$url$Url$Builder$absolute,
 					_List_fromArray(
 						['api', 'songs', songId, 'loop']),
@@ -7379,18 +7448,18 @@ var $author$project$Request$loop = F3(
 									$elm$core$Basics$composeL,
 									$elm$url$Url$Builder$string('start_s'),
 									$elm$core$String$fromFloat),
-								override.$7),
+								override.dr),
 								A2(
 								$elm$core$Maybe$map,
 								A2(
 									$elm$core$Basics$composeL,
 									$elm$url$Url$Builder$string('end_s'),
 									$elm$core$String$fromFloat),
-								override.cr)
+								override.ct)
 							])))
 			});
 	});
-var $author$project$Main$noOverride = {cr: $elm$core$Maybe$Nothing, $7: $elm$core$Maybe$Nothing};
+var $author$project$Main$noOverride = {ct: $elm$core$Maybe$Nothing, dr: $elm$core$Maybe$Nothing};
 var $elm$core$List$append = F2(
 	function (xs, ys) {
 		if (!ys.b) {
@@ -7439,9 +7508,9 @@ var $author$project$Config$encodeStem = function (stem) {
 			$elm$core$List$cons,
 			_Utils_Tuple2(
 				'name',
-				$elm$json$Json$Encode$string(stem.a0)),
+				$elm$json$Json$Encode$string(stem.a1)),
 			_Utils_ap(
-				$author$project$Config$pairs(stem.A),
+				$author$project$Config$pairs(stem.C),
 				_List_fromArray(
 					[
 						_Utils_Tuple2(
@@ -7475,17 +7544,17 @@ var $author$project$Config$encode = function (config) {
 							$elm$json$Json$Encode$object(
 								$author$project$Config$pairs(values)));
 					},
-					$elm$core$Dict$toList(config.V)),
+					$elm$core$Dict$toList(config.W)),
 					_List_fromArray(
 					[
 						_Utils_Tuple2(
 						'stems',
-						A2($elm$json$Json$Encode$list, $author$project$Config$encodeStem, config.dr))
+						A2($elm$json$Json$Encode$list, $author$project$Config$encodeStem, config.du))
 					])
 				])));
 };
 var $author$project$Page$Mixer$soloedStems = function (state) {
-	var _v0 = state.F;
+	var _v0 = state.G;
 	if (!_v0.$) {
 		var name = _v0.a;
 		return _List_fromArray(
@@ -7496,10 +7565,10 @@ var $author$project$Page$Mixer$soloedStems = function (state) {
 };
 var $author$project$Page$Mixer$params = function (state) {
 	return {
-		cj: $author$project$Config$encode(state.cj),
-		db: state.db,
-		b_: state.b_,
-		dr: $author$project$Page$Mixer$soloedStems(state)
+		cl: $author$project$Config$encode(state.cl),
+		dd: state.dd,
+		b0: state.b0,
+		du: $author$project$Page$Mixer$soloedStems(state)
 	};
 };
 var $author$project$Main$peakBuckets = 200;
@@ -7515,7 +7584,7 @@ var $author$project$Request$peaks = F3(
 	function (songId, buckets, toMsg) {
 		return $elm$http$Http$get(
 			{
-				ct: A2(
+				cv: A2(
 					$elm$http$Http$expectJson,
 					toMsg,
 					A2(
@@ -7527,7 +7596,7 @@ var $author$project$Request$peaks = F3(
 								$elm$core$Tuple$pair,
 								A2($elm$json$Json$Decode$index, 0, $elm$json$Json$Decode$float),
 								A2($elm$json$Json$Decode$index, 1, $elm$json$Json$Decode$float))))),
-				dB: A2(
+				dE: A2(
 					$elm$url$Url$Builder$absolute,
 					_List_fromArray(
 						['api', 'songs', songId, 'peaks']),
@@ -7541,8 +7610,8 @@ var $author$project$Request$song = F2(
 	function (songId, toMsg) {
 		return $elm$http$Http$get(
 			{
-				ct: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$song),
-				dB: A2(
+				cv: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$song),
+				dE: A2(
 					$elm$url$Url$Builder$absolute,
 					_List_fromArray(
 						['api', 'songs', songId]),
@@ -7551,11 +7620,11 @@ var $author$project$Request$song = F2(
 	});
 var $author$project$Main$refetchAfter = F2(
 	function (job, model) {
-		var _v0 = job.b_;
+		var _v0 = job.b0;
 		if (!_v0.$) {
 			var jobSongId = _v0.a;
 			if (_Utils_eq(
-				model.W,
+				model.X,
 				$elm$core$Maybe$Just(jobSongId))) {
 				var _v1 = $author$project$Main$issue(model);
 				var request = _v1.a;
@@ -7652,7 +7721,7 @@ var $elm$core$List$drop = F2(
 var $author$project$Config$stemAt = F2(
 	function (index, config) {
 		return $elm$core$List$head(
-			A2($elm$core$List$drop, index, config.dr));
+			A2($elm$core$List$drop, index, config.du));
 	});
 var $author$project$Config$valuesAt = F2(
 	function (target, config) {
@@ -7664,7 +7733,7 @@ var $author$project$Config$valuesAt = F2(
 				return A2(
 					$elm$core$Maybe$withDefault,
 					$elm$core$Dict$empty,
-					A2($elm$core$Dict$get, name, config.V));
+					A2($elm$core$Dict$get, name, config.W));
 			case 2:
 				var index = target.a;
 				return A2(
@@ -7673,7 +7742,7 @@ var $author$project$Config$valuesAt = F2(
 					A2(
 						$elm$core$Maybe$map,
 						function ($) {
-							return $.A;
+							return $.C;
 						},
 						A2($author$project$Config$stemAt, index, config)));
 			default:
@@ -7704,19 +7773,19 @@ var $author$project$Page$Mixer$loopOverride = function (state) {
 			A2(
 				$author$project$Config$valueAt,
 				A2($author$project$Config$InSection, 'loop', key),
-				state.cj));
+				state.cl));
 	};
 	return {
-		cr: secondsAt('end_s'),
-		$7: secondsAt('start_s')
+		ct: secondsAt('end_s'),
+		dr: secondsAt('start_s')
 	};
 };
 var $author$project$Main$refetchLoopFor = F2(
 	function (target, model) {
 		var _v0 = _Utils_Tuple3(
 			$author$project$Main$isLoopRegion(target),
-			model.W,
-			model.y);
+			model.X,
+			model.A);
 		if ((_v0.a && (!_v0.b.$)) && (!_v0.c.$)) {
 			var songId = _v0.b.a;
 			var state = _v0.c.a;
@@ -7736,32 +7805,12 @@ var $author$project$Main$refetchLoopFor = F2(
 			return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 		}
 	});
-var $author$project$Main$GotRenderJobs = function (a) {
-	return {$: 27, a: a};
-};
 var $author$project$Main$GotRenders = function (a) {
 	return {$: 26, a: a};
 };
-var $author$project$Request$jobs = function (toMsg) {
-	return $elm$http$Http$get(
-		{
-			ct: A2(
-				$elm$http$Http$expectJson,
-				toMsg,
-				A2(
-					$elm$json$Json$Decode$field,
-					'jobs',
-					$elm$json$Json$Decode$list($author$project$Api$job))),
-			dB: A2(
-				$elm$url$Url$Builder$absolute,
-				_List_fromArray(
-					['api', 'jobs']),
-				_List_Nil)
-		});
-};
 var $author$project$Api$Render = F7(
 	function (id, songId, status, path, durationMin, config, createdAt) {
-		return {cj: config, bk: createdAt, co: durationMin, aY: id, bI: path, b_: songId, b$: status};
+		return {cl: config, bl: createdAt, cq: durationMin, aY: id, bK: path, b0: songId, b1: status};
 	});
 var $author$project$Api$RenderCancelled = 4;
 var $author$project$Api$RenderDone = 2;
@@ -7819,28 +7868,23 @@ var $author$project$Api$render = A3(
 var $author$project$Request$renders = function (toMsg) {
 	return $elm$http$Http$get(
 		{
-			ct: A2(
+			cv: A2(
 				$elm$http$Http$expectJson,
 				toMsg,
 				A2(
 					$elm$json$Json$Decode$field,
 					'renders',
 					$elm$json$Json$Decode$list($author$project$Api$render))),
-			dB: A2(
+			dE: A2(
 				$elm$url$Url$Builder$absolute,
 				_List_fromArray(
 					['api', 'renders']),
 				_List_Nil)
 		});
 };
-var $author$project$Main$refreshRenders = $elm$core$Platform$Cmd$batch(
-	_List_fromArray(
-		[
-			$author$project$Request$renders($author$project$Main$GotRenders),
-			$author$project$Request$jobs($author$project$Main$GotRenderJobs)
-		]));
+var $author$project$Main$refreshRenders = $author$project$Request$renders($author$project$Main$GotRenders);
 var $author$project$Main$refreshRendersIfOpen = function (model) {
-	var _v0 = model.U;
+	var _v0 = model.V;
 	if (!_v0.$) {
 		return $author$project$Main$refreshRenders;
 	} else {
@@ -7867,19 +7911,19 @@ var $author$project$Page$Renders$replaceJob = F2(
 var $author$project$Main$renderJobEvent = F2(
 	function (incoming, model) {
 		if (!_Utils_eq(
-			model.K,
+			model.k,
 			$elm$core$Maybe$Just(incoming.aY))) {
 			return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 		} else {
 			var updated = _Utils_update(
 				model,
 				{
-					T: A2($author$project$Page$Renders$replaceJob, incoming, model.T)
+					L: A2($author$project$Page$Renders$replaceJob, incoming, model.L)
 				});
-			return $author$project$Api$isFinished(incoming.b$) ? _Utils_Tuple2(
+			return $author$project$Api$isFinished(incoming.b1) ? _Utils_Tuple2(
 				_Utils_update(
 					updated,
-					{K: $elm$core$Maybe$Nothing}),
+					{k: $elm$core$Maybe$Nothing}),
 				$elm$core$Platform$Cmd$batch(
 					_List_fromArray(
 						[
@@ -7939,17 +7983,17 @@ var $author$project$Preview$encode = function (params) {
 				[
 					_Utils_Tuple2(
 					'song_id',
-					$elm$json$Json$Encode$string(params.b_)),
+					$elm$json$Json$Encode$string(params.b0)),
 					_Utils_Tuple2(
 					'progress',
-					$elm$json$Json$Encode$float(params.db)),
-					_Utils_Tuple2('config', params.cj)
+					$elm$json$Json$Encode$float(params.dd)),
+					_Utils_Tuple2('config', params.cl)
 				]),
-			$elm$core$List$isEmpty(params.dr) ? _List_Nil : _List_fromArray(
+			$elm$core$List$isEmpty(params.du) ? _List_Nil : _List_fromArray(
 				[
 					_Utils_Tuple2(
 					'stems',
-					A2($elm$json$Json$Encode$list, $elm$json$Json$Encode$string, params.dr))
+					A2($elm$json$Json$Encode$list, $elm$json$Json$Encode$string, params.du))
 				])));
 };
 var $author$project$Main$requestPreview = _Platform_outgoingPort('requestPreview', $elm$core$Basics$identity);
@@ -7964,7 +8008,7 @@ var $author$project$Main$sendPreview = function (toSend) {
 };
 var $author$project$Main$separatingNow = F2(
 	function (song, model) {
-		return $author$project$Main$isSeparating(model.d) || _Utils_eq(song.dm, $author$project$Api$Separating);
+		return $author$project$Main$isSeparating(model.c) || _Utils_eq(song.dp, $author$project$Api$Separating);
 	});
 var $author$project$Main$separationSongId = function (separation) {
 	switch (separation.$) {
@@ -7972,10 +8016,10 @@ var $author$project$Main$separationSongId = function (separation) {
 			return $elm$core$Maybe$Nothing;
 		case 1:
 			var pending = separation.a;
-			return $elm$core$Maybe$Just(pending.b_);
+			return $elm$core$Maybe$Just(pending.b0);
 		default:
 			var job = separation.a;
-			return job.b_;
+			return job.b0;
 	}
 };
 var $author$project$Main$watchedJobId = function (separation) {
@@ -7990,8 +8034,8 @@ var $author$project$Main$separationOnSelect = F2(
 	function (songId, separation) {
 		return _Utils_eq(
 			$author$project$Main$separationSongId(separation),
-			$elm$core$Maybe$Just(songId)) ? {d: separation, aS: $elm$core$Maybe$Nothing} : {
-			d: $author$project$Main$Idle,
+			$elm$core$Maybe$Just(songId)) ? {c: separation, aS: $elm$core$Maybe$Nothing} : {
+			c: $author$project$Main$Idle,
 			aS: $author$project$Main$watchedJobId(separation)
 		};
 	});
@@ -8017,35 +8061,35 @@ var $author$project$Config$alter = F3(
 				return _Utils_update(
 					config,
 					{
-						V: A3(
+						W: A3(
 							$elm$core$Dict$update,
 							name,
 							$elm$core$Maybe$map(f),
-							config.V)
+							config.W)
 					});
 			case 2:
 				var index = target.a;
 				return _Utils_update(
 					config,
 					{
-						dr: A3(
+						du: A3(
 							$author$project$Config$updateStem,
 							index,
 							function (s) {
 								return _Utils_update(
 									s,
 									{
-										A: f(s.A)
+										C: f(s.C)
 									});
 							},
-							config.dr)
+							config.du)
 					});
 			default:
 				var index = target.a;
 				return _Utils_update(
 					config,
 					{
-						dr: A3(
+						du: A3(
 							$author$project$Config$updateStem,
 							index,
 							function (s) {
@@ -8055,7 +8099,7 @@ var $author$project$Config$alter = F3(
 										ak: f(s.ak)
 									});
 							},
-							config.dr)
+							config.du)
 					});
 		}
 	});
@@ -8097,7 +8141,7 @@ var $author$project$Config$parse = F2(
 					$elm$core$Maybe$map,
 					A2(
 						$elm$core$Basics$composeR,
-						A2($author$project$Config$clampTo, spec.bB, spec.bA),
+						A2($author$project$Config$clampTo, spec.bD, spec.bC),
 						$author$project$Config$FloatValue),
 					$elm$core$String$toFloat(trimmed));
 			case 1:
@@ -8106,7 +8150,7 @@ var $author$project$Config$parse = F2(
 					$elm$core$Maybe$map,
 					A2(
 						$elm$core$Basics$composeR,
-						A2($author$project$Config$clampTo, spec.bB, spec.bA),
+						A2($author$project$Config$clampTo, spec.bD, spec.bC),
 						A2($elm$core$Basics$composeR, $elm$core$Basics$round, $author$project$Config$IntValue)),
 					$elm$core$String$toFloat(trimmed));
 			case 2:
@@ -8131,14 +8175,14 @@ var $author$project$Config$parse = F2(
 					$author$project$Config$IntValue,
 					A2(
 						$elm$core$Maybe$andThen,
-						$author$project$Config$memberOf(spec.bi),
+						$author$project$Config$memberOf(spec.bj),
 						$elm$core$String$toInt(trimmed)));
 			default:
 				var spec = aField.a;
 				return A2(
 					$elm$core$Maybe$map,
 					$author$project$Config$StringValue,
-					A2($author$project$Config$memberOf, spec.bi, trimmed));
+					A2($author$project$Config$memberOf, spec.bj, trimmed));
 		}
 	});
 var $author$project$Config$specAt = F2(
@@ -8146,7 +8190,7 @@ var $author$project$Config$specAt = F2(
 		switch (target.$) {
 			case 0:
 				var key = target.a;
-				return A2($elm$core$Dict$get, key, schema.A);
+				return A2($elm$core$Dict$get, key, schema.C);
 			case 1:
 				var name = target.a;
 				var key = target.b;
@@ -8201,7 +8245,7 @@ var $author$project$Page$Mixer$setField = F4(
 		return _Utils_update(
 			state,
 			{
-				cj: A4($author$project$Config$set, schema, target, raw, state.cj)
+				cl: A4($author$project$Config$set, schema, target, raw, state.cl)
 			});
 	});
 var $elm$core$Basics$clamp = F3(
@@ -8216,7 +8260,7 @@ var $author$project$Page$Mixer$setProgress = F2(
 			return _Utils_update(
 				state,
 				{
-					db: A3($elm$core$Basics$clamp, 0, 1, position)
+					dd: A3($elm$core$Basics$clamp, 0, 1, position)
 				});
 		} else {
 			return state;
@@ -8227,8 +8271,8 @@ var $author$project$Request$startSeparation = F3(
 		return $elm$http$Http$post(
 			{
 				ay: $elm$http$Http$emptyBody,
-				ct: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$job),
-				dB: A2(
+				cv: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$job),
+				dE: A2(
 					$elm$url$Url$Builder$absolute,
 					_List_fromArray(
 						['api', 'songs', songId, 'separate']),
@@ -8257,10 +8301,10 @@ var $author$project$Page$Mixer$stemNameAt = F2(
 		return A2(
 			$elm$core$Maybe$map,
 			function ($) {
-				return $.a0;
+				return $.a1;
 			},
 			$elm$core$List$head(
-				A2($elm$core$List$drop, index, state.cj.dr)));
+				A2($elm$core$List$drop, index, state.cl.du)));
 	});
 var $author$project$Page$Mixer$soloAfter = F3(
 	function (target, on, state) {
@@ -8269,10 +8313,10 @@ var $author$project$Page$Mixer$soloAfter = F3(
 			var _v1 = _v0.a;
 			var index = _v1.a;
 			return _Utils_eq(
-				state.F,
-				A2($author$project$Page$Mixer$stemNameAt, index, state)) ? $elm$core$Maybe$Nothing : state.F;
+				state.G,
+				A2($author$project$Page$Mixer$stemNameAt, index, state)) ? $elm$core$Maybe$Nothing : state.G;
 		} else {
-			return state.F;
+			return state.G;
 		}
 	});
 var $author$project$Config$toggle = F3(
@@ -8291,12 +8335,12 @@ var $author$project$Page$Mixer$toggleField = F3(
 		var updated = _Utils_update(
 			state,
 			{
-				cj: A3($author$project$Config$toggle, target, on, state.cj)
+				cl: A3($author$project$Config$toggle, target, on, state.cl)
 			});
 		return _Utils_update(
 			updated,
 			{
-				F: A3($author$project$Page$Mixer$soloAfter, target, on, updated)
+				G: A3($author$project$Page$Mixer$soloAfter, target, on, updated)
 			});
 	});
 var $author$project$Page$Mixer$toggleSolo = F2(
@@ -8304,10 +8348,67 @@ var $author$project$Page$Mixer$toggleSolo = F2(
 		return _Utils_update(
 			state,
 			{
-				F: _Utils_eq(
-					state.F,
+				G: _Utils_eq(
+					state.G,
 					$elm$core$Maybe$Just(name)) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just(name)
 			});
+	});
+var $author$project$Main$unreadableEvent = F2(
+	function (bad, model) {
+		var lost = function (subject) {
+			return 'Lost track of ' + (subject + (' — a progress event could not be read: ' + (bad.aW + ('.' + $author$project$Main$stillRunningNote))));
+		};
+		var endSeparation = _Utils_Tuple2(
+			_Utils_update(
+				model,
+				{
+					I: $elm$core$Maybe$Just(
+						lost('the separation')),
+					c: $author$project$Main$Idle
+				}),
+			$author$project$Main$stopWatching(
+				$author$project$Main$watchedJobId(model.c)));
+		var endRenderWatch = _Utils_Tuple2(
+			_Utils_update(
+				model,
+				{
+					p: $elm$core$Maybe$Just(
+						lost('a render')),
+					k: $elm$core$Maybe$Nothing
+				}),
+			$author$project$Main$stopWatching(model.k));
+		var _v0 = bad.a_;
+		if (!_v0.$) {
+			var jobId = _v0.a;
+			return _Utils_eq(
+				$author$project$Main$watchedJobId(model.c),
+				$elm$core$Maybe$Just(jobId)) ? endSeparation : (_Utils_eq(
+				model.k,
+				$elm$core$Maybe$Just(jobId)) ? endRenderWatch : _Utils_Tuple2(model, $elm$core$Platform$Cmd$none));
+		} else {
+			var watchingSeparation = !_Utils_eq(
+				$author$project$Main$watchedJobId(model.c),
+				$elm$core$Maybe$Nothing);
+			var watchingRender = !_Utils_eq(model.k, $elm$core$Maybe$Nothing);
+			return ((!watchingSeparation) && (!watchingRender)) ? _Utils_Tuple2(model, $elm$core$Platform$Cmd$none) : _Utils_Tuple2(
+				_Utils_update(
+					model,
+					{
+						I: watchingSeparation ? $elm$core$Maybe$Just(
+							lost('the separation')) : model.I,
+						p: watchingRender ? $elm$core$Maybe$Just(
+							lost('a render')) : model.p,
+						c: watchingSeparation ? $author$project$Main$Idle : model.c,
+						k: $elm$core$Maybe$Nothing
+					}),
+				$elm$core$Platform$Cmd$batch(
+					_List_fromArray(
+						[
+							$author$project$Main$stopWatching(
+							$author$project$Main$watchedJobId(model.c)),
+							$author$project$Main$stopWatching(model.k)
+						])));
+		}
 	});
 var $author$project$Preview$warmed = function (state) {
 	if (state.$ === 1) {
@@ -8339,17 +8440,17 @@ var $author$project$Page$Mixer$stemEnabled = function (stem) {
 		A2(
 			$elm$core$Maybe$andThen,
 			$author$project$Config$asBool,
-			A2($elm$core$Dict$get, 'enabled', stem.A)));
+			A2($elm$core$Dict$get, 'enabled', stem.C)));
 };
 var $author$project$Page$Mixer$everyStemDisabled = function (state) {
-	return (!$elm$core$List$isEmpty(state.cj.dr)) && A2(
+	return (!$elm$core$List$isEmpty(state.cl.du)) && A2(
 		$elm$core$List$all,
 		A2($elm$core$Basics$composeR, $author$project$Page$Mixer$stemEnabled, $elm$core$Basics$not),
-		state.cj.dr);
+		state.cl.du);
 };
 var $author$project$Main$withMixer = F2(
 	function (change, model) {
-		var _v0 = model.y;
+		var _v0 = model.A;
 		if (_v0.$ === 1) {
 			return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 		} else {
@@ -8360,22 +8461,22 @@ var $author$project$Main$withMixer = F2(
 					_Utils_update(
 						model,
 						{
-							y: $elm$core$Maybe$Just(updated)
+							A: $elm$core$Maybe$Just(updated)
 						}),
 					$elm$core$Platform$Cmd$none);
 			} else {
 				var _v1 = A2(
 					$author$project$Preview$request,
 					$author$project$Page$Mixer$params(updated),
-					model.n);
+					model.o);
 				var preview = _v1.a;
 				var toSend = _v1.b;
 				return _Utils_Tuple2(
 					_Utils_update(
 						model,
 						{
-							y: $elm$core$Maybe$Just(updated),
-							n: preview
+							A: $elm$core$Maybe$Just(updated),
+							o: preview
 						}),
 					$author$project$Main$sendPreview(toSend));
 			}
@@ -8433,7 +8534,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								X: $author$project$Main$SettingsReady(schema)
+								Y: $author$project$Main$SettingsReady(schema)
 							}),
 						$elm$core$Platform$Cmd$none);
 				} else {
@@ -8442,7 +8543,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								X: $author$project$Main$SettingsUnavailable(
+								Y: $author$project$Main$SettingsUnavailable(
 									$author$project$Main$httpErrorToString(err))
 							}),
 						$elm$core$Platform$Cmd$none);
@@ -8452,20 +8553,20 @@ var $author$project$Main$update = F2(
 				return _Utils_Tuple2(
 					_Utils_update(
 						model,
-						{Q: path}),
+						{S: path}),
 					$elm$core$Platform$Cmd$none);
 			case 4:
-				return (model.M || $elm$core$String$isEmpty(model.Q)) ? _Utils_Tuple2(model, $elm$core$Platform$Cmd$none) : _Utils_Tuple2(
+				return (model.O || $elm$core$String$isEmpty(model.S)) ? _Utils_Tuple2(model, $elm$core$Platform$Cmd$none) : _Utils_Tuple2(
 					_Utils_update(
 						model,
-						{aB: $elm$core$Maybe$Nothing, M: true}),
-					A2($author$project$Request$importSong, model.Q, $author$project$Main$Imported));
+						{aB: $elm$core$Maybe$Nothing, O: true}),
+					A2($author$project$Request$importSong, model.S, $author$project$Main$Imported));
 			case 5:
 				if (!msg.a.$) {
 					return _Utils_Tuple2(
 						_Utils_update(
 							model,
-							{M: false, Q: ''}),
+							{O: false, S: ''}),
 						$author$project$Request$songs($author$project$Main$GotSongs));
 				} else {
 					var err = msg.a.a;
@@ -8475,13 +8576,13 @@ var $author$project$Main$update = F2(
 							{
 								aB: $elm$core$Maybe$Just(
 									$author$project$Main$httpErrorToString(err)),
-								M: false
+								O: false
 							}),
 						$elm$core$Platform$Cmd$none);
 				}
 			case 6:
 				var songId = msg.a;
-				var outcome = A2($author$project$Main$separationOnSelect, songId, model.d);
+				var outcome = A2($author$project$Main$separationOnSelect, songId, model.c);
 				var _v1 = $author$project$Main$issue(model);
 				var songRequest = _v1.a;
 				var withSong = _v1.b;
@@ -8498,17 +8599,17 @@ var $author$project$Main$update = F2(
 					_Utils_update(
 						closed,
 						{
-							_: $elm$core$Maybe$Nothing,
-							ab: $elm$core$Maybe$Nothing,
-							N: $elm$core$Maybe$Nothing,
+							aa: $elm$core$Maybe$Nothing,
+							I: $elm$core$Maybe$Nothing,
+							P: $elm$core$Maybe$Nothing,
 							ae: $elm$core$Maybe$Nothing,
 							aD: loopRequest,
-							R: _List_Nil,
+							T: _List_Nil,
 							ap: $elm$core$Maybe$Nothing,
 							aO: peaksRequest,
-							W: $elm$core$Maybe$Just(songId),
+							X: $elm$core$Maybe$Just(songId),
 							aq: $elm$core$Maybe$Nothing,
-							d: outcome.d,
+							c: outcome.c,
 							ah: $elm$core$Maybe$Nothing,
 							aG: songRequest
 						}),
@@ -8539,7 +8640,7 @@ var $author$project$Main$update = F2(
 				return _Utils_Tuple2(
 					_Utils_update(
 						closed,
-						{W: $elm$core$Maybe$Nothing}),
+						{X: $elm$core$Maybe$Nothing}),
 					stopped);
 			case 8:
 				var request = msg.a;
@@ -8553,7 +8654,7 @@ var $author$project$Main$update = F2(
 							_Utils_update(
 								model,
 								{
-									_: $elm$core$Maybe$Just(song),
+									aa: $elm$core$Maybe$Just(song),
 									ah: $elm$core$Maybe$Nothing
 								}),
 							$elm$core$Platform$Cmd$none);
@@ -8580,7 +8681,7 @@ var $author$project$Main$update = F2(
 						return _Utils_Tuple2(
 							_Utils_update(
 								model,
-								{R: peaks, ap: $elm$core$Maybe$Nothing}),
+								{T: peaks, ap: $elm$core$Maybe$Nothing}),
 							$elm$core$Platform$Cmd$none);
 					} else {
 						var err = result.a;
@@ -8606,7 +8707,7 @@ var $author$project$Main$update = F2(
 							_Utils_update(
 								model,
 								{
-									N: $elm$core$Maybe$Just(region),
+									P: $elm$core$Maybe$Just(region),
 									ae: $elm$core$Maybe$Nothing
 								}),
 							$elm$core$Platform$Cmd$none);
@@ -8624,12 +8725,12 @@ var $author$project$Main$update = F2(
 				}
 			case 11:
 				var force = msg.a;
-				var _v9 = model.W;
+				var _v9 = model.X;
 				if (_v9.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
 					var songId = _v9.a;
-					if ($author$project$Main$isSeparating(model.d)) {
+					if ($author$project$Main$isSeparating(model.c)) {
 						return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 					} else {
 						var _v10 = $author$project$Main$issue(model);
@@ -8639,10 +8740,10 @@ var $author$project$Main$update = F2(
 							_Utils_update(
 								issued,
 								{
-									ab: $elm$core$Maybe$Nothing,
+									I: $elm$core$Maybe$Nothing,
 									aq: $elm$core$Maybe$Nothing,
-									d: $author$project$Main$Starting(
-										{bR: request, b_: songId})
+									c: $author$project$Main$Starting(
+										{bT: request, b0: songId})
 								}),
 							A3(
 								$author$project$Request$startSeparation,
@@ -8654,10 +8755,10 @@ var $author$project$Main$update = F2(
 			case 12:
 				var request = msg.a;
 				var result = msg.b;
-				var _v11 = model.d;
+				var _v11 = model.c;
 				if (_v11.$ === 1) {
 					var pending = _v11.a;
-					if (!_Utils_eq(pending.bR, request)) {
+					if (!_Utils_eq(pending.bT, request)) {
 						return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 					} else {
 						if (!result.$) {
@@ -8666,7 +8767,7 @@ var $author$project$Main$update = F2(
 								_Utils_update(
 									model,
 									{
-										d: $author$project$Main$Watching(job)
+										c: $author$project$Main$Watching(job)
 									}),
 								$author$project$Main$watchJob(job.aY));
 						} else {
@@ -8677,7 +8778,7 @@ var $author$project$Main$update = F2(
 									{
 										aq: $elm$core$Maybe$Just(
 											$author$project$Main$httpErrorToString(err)),
-										d: $author$project$Main$Idle
+										c: $author$project$Main$Idle
 									}),
 								$elm$core$Platform$Cmd$none);
 						}
@@ -8688,7 +8789,7 @@ var $author$project$Main$update = F2(
 			case 13:
 				if (!msg.a.$) {
 					var incoming = msg.a.a;
-					var _v13 = A2($author$project$Main$jobOutcome, incoming, model.d);
+					var _v13 = A2($author$project$Main$jobOutcome, incoming, model.c);
 					switch (_v13.$) {
 						case 0:
 							return A2($author$project$Main$renderJobEvent, incoming, model);
@@ -8698,7 +8799,7 @@ var $author$project$Main$update = F2(
 								_Utils_update(
 									model,
 									{
-										d: $author$project$Main$Watching(job)
+										c: $author$project$Main$Watching(job)
 									}),
 								$elm$core$Platform$Cmd$none);
 						default:
@@ -8709,7 +8810,7 @@ var $author$project$Main$update = F2(
 							return _Utils_Tuple2(
 								_Utils_update(
 									refetched,
-									{d: $author$project$Main$Idle}),
+									{c: $author$project$Main$Idle}),
 								$elm$core$Platform$Cmd$batch(
 									_List_fromArray(
 										[
@@ -8718,30 +8819,21 @@ var $author$project$Main$update = F2(
 										])));
 					}
 				} else {
-					var decodeErr = msg.a.a;
-					return _Utils_Tuple2(
-						_Utils_update(
-							model,
-							{
-								ab: $elm$core$Maybe$Just(
-									'Lost track of the separation — a progress event could not be read: ' + ($elm$json$Json$Decode$errorToString(decodeErr) + ('.' + $author$project$Main$stillRunningNote))),
-								d: $author$project$Main$Idle
-							}),
-						$author$project$Main$stopWatching(
-							$author$project$Main$watchedJobId(model.d)));
+					var bad = msg.a.a;
+					return A2($author$project$Main$unreadableEvent, bad, model);
 				}
 			case 14:
 				var jobId = msg.a;
-				var _v15 = A2($author$project$Main$streamFailureFor, jobId, model.d);
+				var _v15 = A2($author$project$Main$streamFailureFor, jobId, model.c);
 				if (!_v15.$) {
 					return _Utils_eq(
-						model.K,
+						model.k,
 						$elm$core$Maybe$Just(jobId)) ? _Utils_Tuple2(
 						_Utils_update(
 							model,
 							{
-								E: $elm$core$Maybe$Just('Lost the progress stream for a render — it stopped reporting before it finished.' + $author$project$Main$stillRunningNote),
-								K: $elm$core$Maybe$Nothing
+								p: $elm$core$Maybe$Just('Lost the progress stream for a render — it stopped reporting before it finished.' + $author$project$Main$stillRunningNote),
+								k: $elm$core$Maybe$Nothing
 							}),
 						$elm$core$Platform$Cmd$none) : _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -8749,34 +8841,34 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								ab: $elm$core$Maybe$Just('Lost track of the separation — the progress stream closed before it reported finishing.' + $author$project$Main$stillRunningNote),
-								d: $author$project$Main$Idle
+								I: $elm$core$Maybe$Just('Lost track of the separation — the progress stream closed before it reported finishing.' + $author$project$Main$stillRunningNote),
+								c: $author$project$Main$Idle
 							}),
 						$elm$core$Platform$Cmd$none);
 				}
 			case 15:
-				var _v16 = _Utils_Tuple2(model._, model.X);
+				var _v16 = _Utils_Tuple2(model.aa, model.Y);
 				if ((!_v16.a.$) && (_v16.b.$ === 1)) {
 					var song = _v16.a.a;
 					var schema = _v16.b.a;
-					if ($elm$core$List$isEmpty(song.dr) || A2($author$project$Main$separatingNow, song, model)) {
+					if ($elm$core$List$isEmpty(song.du) || A2($author$project$Main$separatingNow, song, model)) {
 						return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 					} else {
-						var state = A3($author$project$Page$Mixer$init, song.aY, schema, song.dr);
+						var state = A3($author$project$Page$Mixer$init, song.aY, schema, song.du);
 						var _v17 = A2(
 							$author$project$Preview$warm,
 							$author$project$Page$Mixer$params(state),
-							model.n);
+							model.o);
 						var preview = _v17.a;
 						var toSend = _v17.b;
 						return _Utils_Tuple2(
 							_Utils_update(
 								model,
 								{
-									O: $elm$core$Maybe$Nothing,
-									y: $elm$core$Maybe$Just(state),
-									n: preview,
-									I: $elm$core$Maybe$Nothing
+									Q: $elm$core$Maybe$Nothing,
+									A: $elm$core$Maybe$Just(state),
+									o: preview,
+									K: $elm$core$Maybe$Nothing
 								}),
 							$author$project$Main$sendPreview(toSend));
 					}
@@ -8807,7 +8899,7 @@ var $author$project$Main$update = F2(
 			case 19:
 				var target = msg.a;
 				var raw = msg.b;
-				var _v18 = model.X;
+				var _v18 = model.Y;
 				if (_v18.$ === 1) {
 					var schema = _v18.a;
 					return A2(
@@ -8821,7 +8913,7 @@ var $author$project$Main$update = F2(
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				}
 			case 21:
-				var _v19 = model.y;
+				var _v19 = model.A;
 				if (_v19.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -8829,38 +8921,38 @@ var $author$project$Main$update = F2(
 					var _v20 = A2(
 						$author$project$Preview$retry,
 						$author$project$Page$Mixer$params(state),
-						model.n);
+						model.o);
 					var preview = _v20.a;
 					var toSend = _v20.b;
 					return _Utils_Tuple2(
 						_Utils_update(
 							model,
-							{n: preview, I: $elm$core$Maybe$Nothing}),
+							{o: preview, K: $elm$core$Maybe$Nothing}),
 						$author$project$Main$sendPreview(toSend));
 				}
 			case 22:
 				var seconds = msg.a;
 				var _v21 = $author$project$Preview$arrived(
-					$author$project$Preview$warmed(model.n));
+					$author$project$Preview$warmed(model.o));
 				var preview = _v21.a;
 				var toSend = _v21.b;
 				return _Utils_Tuple2(
 					_Utils_update(
 						model,
-						{O: seconds, n: preview, I: $elm$core$Maybe$Nothing}),
+						{Q: seconds, o: preview, K: $elm$core$Maybe$Nothing}),
 					$author$project$Main$sendPreview(toSend));
 			case 23:
 				var reason = msg.a;
-				var _v22 = $author$project$Preview$failed(model.n);
+				var _v22 = $author$project$Preview$failed(model.o);
 				var preview = _v22.a;
 				var toSend = _v22.b;
 				return _Utils_Tuple2(
 					_Utils_update(
 						model,
 						{
-							O: $elm$core$Maybe$Nothing,
-							n: preview,
-							I: $elm$core$Maybe$Just(reason)
+							Q: $elm$core$Maybe$Nothing,
+							o: preview,
+							K: $elm$core$Maybe$Just(reason)
 						}),
 					$author$project$Main$sendPreview(toSend));
 			case 24:
@@ -8871,8 +8963,8 @@ var $author$project$Main$update = F2(
 					_Utils_update(
 						closed,
 						{
-							U: $elm$core$Maybe$Just($author$project$Page$Renders$Loading),
-							E: $elm$core$Maybe$Nothing
+							V: $elm$core$Maybe$Just($author$project$Page$Renders$Loading),
+							p: $elm$core$Maybe$Nothing
 						}),
 					$elm$core$Platform$Cmd$batch(
 						_List_fromArray(
@@ -8881,7 +8973,7 @@ var $author$project$Main$update = F2(
 				return _Utils_Tuple2(
 					_Utils_update(
 						model,
-						{U: $elm$core$Maybe$Nothing, E: $elm$core$Maybe$Nothing}),
+						{V: $elm$core$Maybe$Nothing, p: $elm$core$Maybe$Nothing}),
 					$elm$core$Platform$Cmd$none);
 			case 26:
 				if (!msg.a.$) {
@@ -8890,17 +8982,17 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								U: $elm$core$Maybe$Just(
+								V: $elm$core$Maybe$Just(
 									$author$project$Page$Renders$Loaded(renders))
 							}),
-						$elm$core$Platform$Cmd$none);
+						$author$project$Request$jobs($author$project$Main$GotRenderJobs));
 				} else {
 					var err = msg.a.a;
 					return _Utils_Tuple2(
 						_Utils_update(
 							model,
 							{
-								U: $elm$core$Maybe$Just(
+								V: $elm$core$Maybe$Just(
 									$author$project$Page$Renders$Failed(
 										$author$project$Main$httpErrorToString(err)))
 							}),
@@ -8914,19 +9006,27 @@ var $author$project$Main$update = F2(
 						A2(
 							$elm$core$List$filter,
 							function (job) {
-								return job.cH === 'render';
+								return job.cJ === 'render';
 							},
 							jobs),
 						model);
 				} else {
-					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
+					var err = msg.a.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{
+								p: $elm$core$Maybe$Just(
+									'Could not refresh what is running — ' + ($author$project$Main$httpErrorToString(err) + ('. Progress and Cancel on this screen are from an ' + ('older snapshot until it succeeds; leave and come ' + 'back to try again.'))))
+							}),
+						$elm$core$Platform$Cmd$none);
 				}
 			case 28:
 				var renderId = msg.a;
 				return _Utils_Tuple2(
 					_Utils_update(
 						model,
-						{E: $elm$core$Maybe$Nothing}),
+						{p: $elm$core$Maybe$Nothing}),
 					A2($author$project$Request$deleteRender, renderId, $author$project$Main$RenderDeleted));
 			case 29:
 				if (!msg.a.$) {
@@ -8937,7 +9037,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								E: $elm$core$Maybe$Just(
+								p: $elm$core$Maybe$Just(
 									A2(
 										$author$project$Page$Renders$deleteMessage,
 										err,
@@ -8950,7 +9050,7 @@ var $author$project$Main$update = F2(
 				return _Utils_Tuple2(
 					_Utils_update(
 						model,
-						{E: $elm$core$Maybe$Nothing}),
+						{p: $elm$core$Maybe$Nothing}),
 					A2($author$project$Request$cancelJob, jobId, $author$project$Main$RenderCancelSent));
 			default:
 				if (!msg.a.$) {
@@ -8959,7 +9059,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								T: A2($author$project$Page$Renders$replaceJob, job, model.T)
+								L: A2($author$project$Page$Renders$replaceJob, job, model.L)
 							}),
 						$author$project$Main$refreshRenders);
 				} else {
@@ -8968,7 +9068,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								E: $elm$core$Maybe$Just(
+								p: $elm$core$Maybe$Just(
 									'Could not cancel that render — ' + $author$project$Main$httpErrorToString(err))
 							}),
 						$author$project$Main$refreshRenders);
@@ -9144,7 +9244,7 @@ var $author$project$Page$Library$songRow = F2(
 						]),
 					_List_fromArray(
 						[
-							$elm$html$Html$text(s.dx)
+							$elm$html$Html$text(s.dA)
 						])),
 					A2(
 					$elm$html$Html$span,
@@ -9155,7 +9255,7 @@ var $author$project$Page$Library$songRow = F2(
 					_List_fromArray(
 						[
 							$elm$html$Html$text(
-							$author$project$Page$Library$duration(s.cp))
+							$author$project$Page$Library$duration(s.cr))
 						])),
 					A2(
 					$elm$html$Html$span,
@@ -9166,7 +9266,7 @@ var $author$project$Page$Library$songRow = F2(
 					_List_fromArray(
 						[
 							$elm$html$Html$text(
-							$author$project$Api$statusLabel(s.dm))
+							$author$project$Api$statusLabel(s.dp))
 						]))
 				]));
 	});
@@ -9212,7 +9312,7 @@ var $author$project$Page$Library$view = function (config) {
 				_List_fromArray(
 					[
 						$elm$html$Html$text(
-						$author$project$Page$Library$summary(config.a7))
+						$author$project$Page$Library$summary(config.a8))
 					])),
 				A2(
 				$elm$html$Html$div,
@@ -9227,26 +9327,26 @@ var $author$project$Page$Library$view = function (config) {
 						_List_fromArray(
 							[
 								$elm$html$Html$Attributes$placeholder('/path/to/song.flac'),
-								$elm$html$Html$Attributes$value(config.Q),
-								$elm$html$Html$Events$onInput(config.c$)
+								$elm$html$Html$Attributes$value(config.S),
+								$elm$html$Html$Events$onInput(config.c1)
 							]),
 						_List_Nil),
 						A2(
 						$elm$html$Html$button,
 						_List_fromArray(
 							[
-								$elm$html$Html$Events$onClick(config.cZ),
+								$elm$html$Html$Events$onClick(config.c$),
 								$elm$html$Html$Attributes$disabled(
-								config.M || $elm$core$String$isEmpty(config.Q))
+								config.O || $elm$core$String$isEmpty(config.S))
 							]),
 						_List_fromArray(
 							[
 								$elm$html$Html$text(
-								config.M ? 'Importing…' : 'Import')
+								config.O ? 'Importing…' : 'Import')
 							]))
 					])),
 				function () {
-				var _v0 = config.a7;
+				var _v0 = config.a8;
 				if (_v0.$ === 1) {
 					var songs = _v0.a;
 					return A2(
@@ -9257,7 +9357,7 @@ var $author$project$Page$Library$view = function (config) {
 							]),
 						A2(
 							$elm$core$List$map,
-							$author$project$Page$Library$songRow(config.c2),
+							$author$project$Page$Library$songRow(config.c4),
 							songs));
 				} else {
 					return $elm$html$Html$text('');
@@ -9291,7 +9391,7 @@ var $author$project$Main$libraryView = function (model) {
 							]))
 					])),
 				$author$project$Page$Library$view(
-				{M: model.M, cZ: $author$project$Main$ImportClicked, c$: $author$project$Main$PathChanged, c2: $author$project$Main$SelectedSong, Q: model.Q, a7: model.ao}),
+				{O: model.O, c$: $author$project$Main$ImportClicked, c1: $author$project$Main$PathChanged, c4: $author$project$Main$SelectedSong, S: model.S, a8: model.ao}),
 				A2(
 				$author$project$Main$errorLine,
 				function (reason) {
@@ -9343,7 +9443,7 @@ var $author$project$Page$Mixer$nothingToPlay = function (state) {
 			])) : $elm$html$Html$text('');
 };
 var $author$project$Page$Mixer$playingLine = function (config) {
-	var _v0 = config.O;
+	var _v0 = config.Q;
 	if (!_v0.$) {
 		var seconds = _v0.a;
 		return A2(
@@ -9405,7 +9505,7 @@ var $author$project$Page$Mixer$preparing = A2(
 				]))
 		]));
 var $author$project$Page$Mixer$previewProblem = function (config) {
-	var _v0 = config.I;
+	var _v0 = config.K;
 	if (_v0.$ === 1) {
 		return $elm$html$Html$text('');
 	} else {
@@ -9432,7 +9532,7 @@ var $author$project$Page$Mixer$previewProblem = function (config) {
 					$elm$html$Html$button,
 					_List_fromArray(
 						[
-							$elm$html$Html$Events$onClick(config.c1)
+							$elm$html$Html$Events$onClick(config.c3)
 						]),
 					_List_fromArray(
 						[
@@ -9443,15 +9543,15 @@ var $author$project$Page$Mixer$previewProblem = function (config) {
 };
 var $author$project$Page$Mixer$arcPosition = function (state) {
 	var percent = $elm$core$String$fromInt(
-		$elm$core$Basics$round(state.db * 100)) + '%';
+		$elm$core$Basics$round(state.dd * 100)) + '%';
 	var _v0 = A2(
 		$author$project$Config$valueAt,
 		A2($author$project$Config$InSection, 'output', 'duration_min'),
-		state.cj);
+		state.cl);
 	if ((!_v0.$) && (!_v0.a.$)) {
 		var minutes = _v0.a.a;
 		return percent + (' · ' + ($elm$core$String$fromInt(
-			$elm$core$Basics$round(state.db * minutes)) + (' min into a ' + ($elm$core$String$fromInt(
+			$elm$core$Basics$round(state.dd * minutes)) + (' min into a ' + ($elm$core$String$fromInt(
 			$elm$core$Basics$round(minutes)) + ' min mix'))));
 	} else {
 		return percent;
@@ -9492,8 +9592,8 @@ var $author$project$Page$Mixer$scrubber = function (config) {
 						$elm$html$Html$Attributes$max('1'),
 						$elm$html$Html$Attributes$step('0.005'),
 						$elm$html$Html$Attributes$value(
-						$elm$core$String$fromFloat(config.a7.db)),
-						$elm$html$Html$Events$onInput(config.c0)
+						$elm$core$String$fromFloat(config.a8.dd)),
+						$elm$html$Html$Events$onInput(config.c2)
 					]),
 				_List_Nil),
 				A2(
@@ -9505,7 +9605,7 @@ var $author$project$Page$Mixer$scrubber = function (config) {
 				_List_fromArray(
 					[
 						$elm$html$Html$text(
-						$author$project$Page$Mixer$arcPosition(config.a7))
+						$author$project$Page$Mixer$arcPosition(config.a8))
 					]))
 			]));
 };
@@ -9527,16 +9627,16 @@ var $author$project$Page$Mixer$arcPanel = function (config) {
 				$elm$html$Html$Attributes$class('arc')
 			]),
 		function () {
-			if ($author$project$Preview$isPlayable(config.n)) {
+			if ($author$project$Preview$isPlayable(config.o)) {
 				return _List_fromArray(
 					[
 						$author$project$Page$Mixer$scrubber(config),
 						$author$project$Page$Mixer$playingLine(config),
-						$author$project$Page$Mixer$nothingToPlay(config.a7),
+						$author$project$Page$Mixer$nothingToPlay(config.a8),
 						$author$project$Page$Mixer$previewProblem(config)
 					]);
 			} else {
-				var _v0 = config.I;
+				var _v0 = config.K;
 				if (!_v0.$) {
 					return _List_fromArray(
 						[
@@ -9576,9 +9676,9 @@ var $author$project$Waveform$caption = function (region) {
 			_List_fromArray(
 				[
 					$elm$html$Html$text(
-					'Loop ' + ($author$project$Waveform$clock(loop.$7) + (' – ' + ($author$project$Waveform$clock(loop.cr) + (' · ' + ($elm$core$String$fromInt(
-						$elm$core$Basics$round(loop.cr - loop.$7)) + (' s · ' + ($elm$core$String$fromInt(
-						$elm$core$Basics$round(loop.dv)) + ' BPM'))))))))
+					'Loop ' + ($author$project$Waveform$clock(loop.dr) + (' – ' + ($author$project$Waveform$clock(loop.ct) + (' · ' + ($elm$core$String$fromInt(
+						$elm$core$Basics$round(loop.ct - loop.dr)) + (' s · ' + ($elm$core$String$fromInt(
+						$elm$core$Basics$round(loop.dy)) + ' BPM'))))))))
 				]));
 	}
 };
@@ -9587,7 +9687,7 @@ var $author$project$Config$Top = function (a) {
 	return {$: 0, a: a};
 };
 var $author$project$Page$Mixer$mixFields = function (schema) {
-	return A2($elm$core$Dict$remove, 'separation_model', schema.A);
+	return A2($elm$core$Dict$remove, 'separation_model', schema.C);
 };
 var $elm$html$Html$Attributes$checked = $elm$html$Html$Attributes$boolProperty('checked');
 var $elm$html$Html$Attributes$title = $elm$html$Html$Attributes$stringProperty('title');
@@ -9615,13 +9715,13 @@ var $author$project$Page$Mixer$checkbox = F4(
 			A2(
 				$elm$core$Maybe$andThen,
 				$author$project$Config$asBool,
-				A2($author$project$Config$valueAt, target, state.cj)));
+				A2($author$project$Config$valueAt, target, state.cl)));
 		return A2(
 			$elm$html$Html$label,
 			_List_fromArray(
 				[
 					$elm$html$Html$Attributes$class('field field-check'),
-					$author$project$Page$Mixer$help(spec.u)
+					$author$project$Page$Mixer$help(spec.w)
 				]),
 			_List_fromArray(
 				[
@@ -9632,8 +9732,8 @@ var $author$project$Page$Mixer$checkbox = F4(
 							$elm$html$Html$Attributes$type_('checkbox'),
 							$elm$html$Html$Attributes$checked(on),
 							$elm$html$Html$Events$onCheck(
-							wiring.c5(target)),
-							$elm$html$Html$Attributes$disabled(!wiring.aa)
+							wiring.c7(target)),
+							$elm$html$Html$Attributes$disabled(!wiring.ab)
 						]),
 					_List_Nil),
 					A2(
@@ -9644,7 +9744,7 @@ var $author$project$Page$Mixer$checkbox = F4(
 						]),
 					_List_fromArray(
 						[
-							$elm$html$Html$text(spec.v)
+							$elm$html$Html$text(spec.x)
 						]))
 				]));
 	});
@@ -9676,7 +9776,7 @@ var $author$project$Page$Mixer$reading = F2(
 			A2(
 				$elm$core$Maybe$map,
 				$author$project$Config$valueString,
-				A2($author$project$Config$valueAt, target, state.cj)));
+				A2($author$project$Config$valueAt, target, state.cl)));
 	});
 var $elm$html$Html$select = _VirtualDom_node('select');
 var $elm$html$Html$Attributes$selected = $elm$html$Html$Attributes$boolProperty('selected');
@@ -9688,7 +9788,7 @@ var $author$project$Page$Mixer$chooser = F5(
 			_List_fromArray(
 				[
 					$elm$html$Html$Attributes$class('field'),
-					$author$project$Page$Mixer$help(spec.u)
+					$author$project$Page$Mixer$help(spec.w)
 				]),
 			_List_fromArray(
 				[
@@ -9700,7 +9800,7 @@ var $author$project$Page$Mixer$chooser = F5(
 						]),
 					_List_fromArray(
 						[
-							$elm$html$Html$text(spec.v)
+							$elm$html$Html$text(spec.x)
 						])),
 					A2(
 					$elm$html$Html$select,
@@ -9708,8 +9808,8 @@ var $author$project$Page$Mixer$chooser = F5(
 						[
 							$elm$html$Html$Attributes$class('field-select'),
 							$elm$html$Html$Events$onInput(
-							wiring.cY(target)),
-							$elm$html$Html$Attributes$disabled(!wiring.aa)
+							wiring.c_(target)),
+							$elm$html$Html$Attributes$disabled(!wiring.ab)
 						]),
 					A2(
 						$elm$core$List$map,
@@ -9751,7 +9851,7 @@ var $author$project$Page$Mixer$typedBox = F6(
 			_List_fromArray(
 				[
 					$elm$html$Html$Attributes$class('field'),
-					$author$project$Page$Mixer$help(spec.u)
+					$author$project$Page$Mixer$help(spec.w)
 				]),
 			_List_fromArray(
 				[
@@ -9765,7 +9865,7 @@ var $author$project$Page$Mixer$typedBox = F6(
 						[
 							$elm$html$Html$text(
 							_Utils_ap(
-								spec.v,
+								spec.x,
 								$author$project$Page$Mixer$unitSuffix(spec.aL)))
 						])),
 					A2(
@@ -9783,10 +9883,10 @@ var $author$project$Page$Mixer$typedBox = F6(
 								A2(
 									$elm$core$List$cons,
 									$author$project$Page$Mixer$onCommit(
-										wiring.cY(target)),
+										wiring.c_(target)),
 									A2(
 										$elm$core$List$cons,
-										$elm$html$Html$Attributes$disabled(!wiring.aa),
+										$elm$html$Html$Attributes$disabled(!wiring.ab),
 										bounds))))),
 					_List_Nil)
 				]));
@@ -9801,24 +9901,24 @@ var $author$project$Page$Mixer$number = F4(
 					A2(
 					$elm$core$Maybe$map,
 					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$min, $elm$core$String$fromFloat),
-					spec.bB),
+					spec.bD),
 					A2(
 					$elm$core$Maybe$map,
 					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$max, $elm$core$String$fromFloat),
-					spec.bA),
+					spec.bC),
 					A2(
 					$elm$core$Maybe$map,
 					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$step, $elm$core$String$fromFloat),
-					spec.b0)
+					spec.b2)
 				]));
-		var _v0 = _Utils_Tuple3(spec.bB, spec.bA, spec.b0);
+		var _v0 = _Utils_Tuple3(spec.bD, spec.bC, spec.b2);
 		if (((!_v0.a.$) && (!_v0.b.$)) && (!_v0.c.$)) {
 			return A2(
 				$elm$html$Html$div,
 				_List_fromArray(
 					[
 						$elm$html$Html$Attributes$class('field'),
-						$author$project$Page$Mixer$help(spec.u)
+						$author$project$Page$Mixer$help(spec.w)
 					]),
 				_List_fromArray(
 					[
@@ -9830,7 +9930,7 @@ var $author$project$Page$Mixer$number = F4(
 							]),
 						_List_fromArray(
 							[
-								$elm$html$Html$text(spec.v)
+								$elm$html$Html$text(spec.x)
 							])),
 						A2(
 						$elm$html$Html$input,
@@ -9847,10 +9947,10 @@ var $author$project$Page$Mixer$number = F4(
 									A2(
 										$elm$core$List$cons,
 										$elm$html$Html$Events$onInput(
-											wiring.cY(target)),
+											wiring.c_(target)),
 										A2(
 											$elm$core$List$cons,
-											$elm$html$Html$Attributes$disabled(!wiring.aa),
+											$elm$html$Html$Attributes$disabled(!wiring.ab),
 											bounds))))),
 						_List_Nil),
 						A2(
@@ -9873,7 +9973,7 @@ var $author$project$Page$Mixer$number = F4(
 				wiring,
 				state,
 				target,
-				{u: spec.u, v: spec.v, aL: spec.aL},
+				{w: spec.w, x: spec.x, aL: spec.aL},
 				'number',
 				bounds);
 		}
@@ -9897,7 +9997,7 @@ var $author$project$Page$Mixer$control = F4(
 					wiring,
 					state,
 					target,
-					{u: s.u, v: s.v, aL: $elm$core$Maybe$Nothing},
+					{w: s.w, x: s.x, aL: $elm$core$Maybe$Nothing},
 					'text',
 					_List_Nil);
 			case 5:
@@ -9907,8 +10007,8 @@ var $author$project$Page$Mixer$control = F4(
 					wiring,
 					state,
 					target,
-					{u: s.u, v: s.v},
-					s.bi);
+					{w: s.w, x: s.x},
+					s.bj);
 			default:
 				var s = spec.a;
 				return A5(
@@ -9916,8 +10016,8 @@ var $author$project$Page$Mixer$control = F4(
 					wiring,
 					state,
 					target,
-					{u: s.u, v: s.v},
-					A2($elm$core$List$map, $elm$core$String$fromInt, s.bi));
+					{w: s.w, x: s.x},
+					A2($elm$core$List$map, $elm$core$String$fromInt, s.bj));
 		}
 	});
 var $author$project$Page$Mixer$controlsFor = F4(
@@ -10050,7 +10150,7 @@ var $author$project$Page$Mixer$settingsPanel = F3(
 							state,
 							$author$project$Config$InSection(name),
 							name,
-							aSection.A);
+							aSection.C);
 					},
 					A2(
 						$elm$core$List$filter,
@@ -10062,7 +10162,7 @@ var $author$project$Page$Mixer$settingsPanel = F3(
 								_List_fromArray(
 									['stem', 'stem_decay']));
 						},
-						$elm$core$Dict$toList(schema.V)))));
+						$elm$core$Dict$toList(schema.W)))));
 	});
 var $elm$html$Html$h3 = _VirtualDom_node('h3');
 var $author$project$Config$InStem = F2(
@@ -10081,9 +10181,9 @@ var $author$project$Page$Mixer$sectionFields = F2(
 			A2(
 				$elm$core$Maybe$map,
 				function ($) {
-					return $.A;
+					return $.C;
 				},
-				A2($elm$core$Dict$get, name, schema.V)));
+				A2($elm$core$Dict$get, name, schema.W)));
 	});
 var $author$project$Page$Mixer$soloClass = function (soloed) {
 	return soloed ? $elm$html$Html$Attributes$class('solo solo-on') : $elm$html$Html$Attributes$class('solo');
@@ -10097,8 +10197,8 @@ var $author$project$Page$Mixer$stemFields = function (schema) {
 var $author$project$Page$Mixer$stemRow = F6(
 	function (wiring, state, schema, onSolo, index, stem) {
 		var soloed = _Utils_eq(
-			state.F,
-			$elm$core$Maybe$Just(stem.a0));
+			state.G,
+			$elm$core$Maybe$Just(stem.a1));
 		var enabled = $author$project$Page$Mixer$stemEnabled(stem);
 		return A2(
 			$elm$html$Html$div,
@@ -10124,7 +10224,7 @@ var $author$project$Page$Mixer$stemRow = F6(
 								]),
 							_List_fromArray(
 								[
-									$elm$html$Html$text(stem.a0)
+									$elm$html$Html$text(stem.a1)
 								])),
 							A2(
 							$elm$html$Html$button,
@@ -10132,8 +10232,8 @@ var $author$project$Page$Mixer$stemRow = F6(
 								[
 									$author$project$Page$Mixer$soloClass(soloed),
 									$elm$html$Html$Events$onClick(
-									onSolo(stem.a0)),
-									$elm$html$Html$Attributes$disabled((!wiring.aa) || (!enabled))
+									onSolo(stem.a1)),
+									$elm$html$Html$Attributes$disabled((!wiring.ab) || (!enabled))
 								]),
 							_List_fromArray(
 								[
@@ -10212,14 +10312,14 @@ var $author$project$Page$Mixer$stemsPanel = F4(
 				A2(
 					$elm$core$List$indexedMap,
 					A4($author$project$Page$Mixer$stemRow, wiring, state, schema, onSolo),
-					state.cj.dr)));
+					state.cl.du)));
 	});
 var $elm$core$Basics$negate = function (n) {
 	return -n;
 };
 var $author$project$Waveform$barFor = F2(
 	function (_v0, _v1) {
-		var height = _v0.cA;
+		var height = _v0.cC;
 		var low = _v1.a;
 		var high = _v1.b;
 		var clamp = function (value) {
@@ -10236,8 +10336,8 @@ var $author$project$Waveform$barFor = F2(
 		var bottom = toY(
 			clamp(low));
 		return {
-			cA: A2($elm$core$Basics$max, 1.0, bottom - top),
-			bc: top
+			cC: A2($elm$core$Basics$max, 1.0, bottom - top),
+			bd: top
 		};
 	});
 var $elm$svg$Svg$Attributes$class = _VirtualDom_attribute('class');
@@ -10248,16 +10348,16 @@ var $elm$svg$Svg$trustedNode = _VirtualDom_nodeNS('http://www.w3.org/2000/svg');
 var $elm$svg$Svg$rect = $elm$svg$Svg$trustedNode('rect');
 var $author$project$Waveform$regionBox = F2(
 	function (canvas, region) {
-		if ((canvas.cp <= 0) || (_Utils_cmp(region.cr, region.$7) < 1)) {
+		if ((canvas.cr <= 0) || (_Utils_cmp(region.ct, region.dr) < 1)) {
 			return $elm$core$Maybe$Nothing;
 		} else {
 			var toX = function (seconds) {
-				return A3($elm$core$Basics$clamp, 0, canvas.dD, (seconds / canvas.cp) * canvas.dD);
+				return A3($elm$core$Basics$clamp, 0, canvas.dG, (seconds / canvas.cr) * canvas.dG);
 			};
-			var right = toX(region.cr);
-			var left = toX(region.$7);
+			var right = toX(region.ct);
+			var left = toX(region.dr);
 			return (_Utils_cmp(right, left) < 1) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just(
-				{dD: right - left, bb: left});
+				{dG: right - left, bc: left});
 		}
 	});
 var $elm$svg$Svg$Attributes$width = _VirtualDom_attribute('width');
@@ -10267,8 +10367,8 @@ var $author$project$Waveform$loopRegion = function (config) {
 	var _v0 = A2(
 		$elm$core$Maybe$andThen,
 		$author$project$Waveform$regionBox(
-			{cp: config.cp, dD: config.dD}),
-		config.N);
+			{cr: config.cr, dG: config.dG}),
+		config.P);
 	if (_v0.$ === 1) {
 		return _List_Nil;
 	} else {
@@ -10280,12 +10380,12 @@ var $author$project$Waveform$loopRegion = function (config) {
 				_List_fromArray(
 					[
 						$elm$svg$Svg$Attributes$x(
-						$elm$core$String$fromFloat(box.bb)),
+						$elm$core$String$fromFloat(box.bc)),
 						$elm$svg$Svg$Attributes$y('0'),
 						$elm$svg$Svg$Attributes$width(
-						$elm$core$String$fromFloat(box.dD)),
+						$elm$core$String$fromFloat(box.dG)),
 						$elm$svg$Svg$Attributes$height(
-						$elm$core$String$fromFloat(config.cA)),
+						$elm$core$String$fromFloat(config.cC)),
 						$elm$svg$Svg$Attributes$fill('#7aa2f7'),
 						$elm$svg$Svg$Attributes$opacity('0.14')
 					]),
@@ -10296,16 +10396,16 @@ var $author$project$Waveform$loopRegion = function (config) {
 var $elm$svg$Svg$svg = $elm$svg$Svg$trustedNode('svg');
 var $elm$svg$Svg$Attributes$viewBox = _VirtualDom_attribute('viewBox');
 var $author$project$Waveform$view = function (config) {
-	var count = $elm$core$List$length(config.R);
-	var barWidth = (!count) ? 0 : (config.dD / count);
+	var count = $elm$core$List$length(config.T);
+	var barWidth = (!count) ? 0 : (config.dG / count);
 	var bar = F2(
 		function (index, pair) {
 			var _v0 = A2(
 				$author$project$Waveform$barFor,
-				{cA: config.cA},
+				{cC: config.cC},
 				pair);
-			var height = _v0.cA;
-			var y = _v0.bc;
+			var height = _v0.cC;
+			var y = _v0.bd;
 			return A2(
 				$elm$svg$Svg$rect,
 				_List_fromArray(
@@ -10328,21 +10428,21 @@ var $author$project$Waveform$view = function (config) {
 		_List_fromArray(
 			[
 				$elm$svg$Svg$Attributes$viewBox(
-				'0 0 ' + ($elm$core$String$fromFloat(config.dD) + (' ' + $elm$core$String$fromFloat(config.cA)))),
+				'0 0 ' + ($elm$core$String$fromFloat(config.dG) + (' ' + $elm$core$String$fromFloat(config.cC)))),
 				$elm$svg$Svg$Attributes$width('100%'),
 				$elm$svg$Svg$Attributes$height(
-				$elm$core$String$fromFloat(config.cA)),
+				$elm$core$String$fromFloat(config.cC)),
 				$elm$svg$Svg$Attributes$class('waveform')
 			]),
 		_Utils_ap(
 			$author$project$Waveform$loopRegion(config),
-			A2($elm$core$List$indexedMap, bar, config.R)));
+			A2($elm$core$List$indexedMap, bar, config.T)));
 };
 var $author$project$Page$Mixer$view = function (config) {
 	var wiring = {
-		aa: $author$project$Preview$isPlayable(config.n),
-		cY: config.cY,
-		c5: config.c5
+		ab: $author$project$Preview$isPlayable(config.o),
+		c_: config.c_,
+		c7: config.c7
 	};
 	return A2(
 		$elm$html$Html$div,
@@ -10357,7 +10457,7 @@ var $author$project$Page$Mixer$view = function (config) {
 				_List_fromArray(
 					[
 						$elm$html$Html$Attributes$class('back'),
-						$elm$html$Html$Events$onClick(config.a3)
+						$elm$html$Html$Events$onClick(config.a4)
 					]),
 				_List_fromArray(
 					[
@@ -10368,30 +10468,30 @@ var $author$project$Page$Mixer$view = function (config) {
 				_List_Nil,
 				_List_fromArray(
 					[
-						$elm$html$Html$text(config.bZ.dx)
+						$elm$html$Html$text(config.b$.dA)
 					])),
 				$author$project$Waveform$view(
 				{
-					cp: config.bZ.cp,
-					cA: 100,
-					N: A2(
+					cr: config.b$.cr,
+					cC: 100,
+					P: A2(
 						$elm$core$Maybe$map,
 						function (r) {
-							return {cr: r.cr, $7: r.$7};
+							return {ct: r.ct, dr: r.dr};
 						},
-						config.N),
-					R: config.R,
-					dD: 960
+						config.P),
+					T: config.T,
+					dG: 960
 				}),
-				$author$project$Waveform$caption(config.N),
+				$author$project$Waveform$caption(config.P),
 				$author$project$Page$Mixer$arcPanel(config),
-				A4($author$project$Page$Mixer$stemsPanel, wiring, config.a7, config.dj, config.c4),
-				A3($author$project$Page$Mixer$settingsPanel, wiring, config.a7, config.dj)
+				A4($author$project$Page$Mixer$stemsPanel, wiring, config.a8, config.dm, config.c6),
+				A3($author$project$Page$Mixer$settingsPanel, wiring, config.a8, config.dm)
 			]));
 };
 var $author$project$Main$mixerView = F2(
 	function (model, state) {
-		var _v0 = _Utils_Tuple2(model._, model.X);
+		var _v0 = _Utils_Tuple2(model.aa, model.Y);
 		if ((!_v0.a.$) && (_v0.b.$ === 1)) {
 			var song = _v0.a.a;
 			var schema = _v0.b.a;
@@ -10401,7 +10501,7 @@ var $author$project$Main$mixerView = F2(
 				_List_fromArray(
 					[
 						$author$project$Page$Mixer$view(
-						{N: model.N, O: model.O, a3: $author$project$Main$CloseMixer, cY: $author$project$Main$FieldChanged, c0: $author$project$Main$ProgressChanged, c1: $author$project$Main$RetryPreview, c4: $author$project$Main$SoloToggled, c5: $author$project$Main$FieldToggled, R: model.R, n: model.n, I: model.I, dj: schema, bZ: song, a7: state}),
+						{P: model.P, Q: model.Q, a4: $author$project$Main$CloseMixer, c_: $author$project$Main$FieldChanged, c2: $author$project$Main$ProgressChanged, c3: $author$project$Main$RetryPreview, c6: $author$project$Main$SoloToggled, c7: $author$project$Main$FieldToggled, T: model.T, o: model.o, K: model.K, dm: schema, b$: song, a8: state}),
 						A2(
 						$author$project$Main$errorLine,
 						function (reason) {
@@ -10434,7 +10534,7 @@ var $author$project$Page$Renders$newestFirst = function (renders) {
 		A2(
 			$elm$core$List$sortBy,
 			function ($) {
-				return $.bk;
+				return $.bl;
 			},
 			renders));
 };
@@ -10464,27 +10564,21 @@ var $author$project$Page$Renders$configDetails = function (render) {
 				_List_fromArray(
 					[
 						$elm$html$Html$text(
-						A2($elm$json$Json$Encode$encode, 2, render.cj))
+						A2($elm$json$Json$Encode$encode, 2, render.cl))
 					]))
 			]));
 };
-var $elm$core$Basics$ge = _Utils_ge;
 var $author$project$Page$Renders$jobFor = F2(
 	function (jobs, render) {
 		return $elm$core$List$head(
 			A2(
-				$elm$core$List$sortBy,
-				function ($) {
-					return $.bk;
+				$elm$core$List$filter,
+				function (aJob) {
+					return _Utils_eq(
+						aJob.dg,
+						$elm$core$Maybe$Just(render.aY));
 				},
-				A2(
-					$elm$core$List$filter,
-					function (aJob) {
-						return (aJob.cH === 'render') && (_Utils_eq(
-							aJob.b_,
-							$elm$core$Maybe$Just(render.b_)) && (_Utils_cmp(aJob.bk, render.bk) > -1));
-					},
-					jobs)));
+				jobs));
 	});
 var $author$project$Page$Renders$momentOf = function (iso) {
 	var _v0 = A2($elm$core$String$split, 'T', iso);
@@ -10506,7 +10600,7 @@ var $author$project$Page$Renders$reasonFor = F2(
 				var _v1 = A2(
 					$elm$core$Maybe$map,
 					function ($) {
-						return $.b$;
+						return $.b1;
 					},
 					paired);
 				if ((!_v1.$) && (_v1.a.$ === 4)) {
@@ -10532,7 +10626,7 @@ var $author$project$Page$Renders$ended = F3(
 				_List_fromArray(
 					[
 						$elm$html$Html$text(
-						A2($author$project$Page$Renders$reasonFor, render.b$, paired))
+						A2($author$project$Page$Renders$reasonFor, render.b1, paired))
 					])),
 				A2(
 				$elm$html$Html$div,
@@ -10548,7 +10642,7 @@ var $author$project$Page$Renders$ended = F3(
 							[
 								$elm$html$Html$Attributes$class('delete'),
 								$elm$html$Html$Events$onClick(
-								config.cX(render.aY))
+								config.cZ(render.aY))
 							]),
 						_List_fromArray(
 							[
@@ -10570,6 +10664,7 @@ var $elm$html$Html$Attributes$controls = $elm$html$Html$Attributes$boolProperty(
 var $elm$html$Html$Attributes$download = function (fileName) {
 	return A2($elm$html$Html$Attributes$stringProperty, 'download', fileName);
 };
+var $elm$core$Basics$ge = _Utils_ge;
 var $author$project$Page$Renders$minutesLabel = function (minutes) {
 	return (minutes >= 1) ? ($elm$core$String$fromInt(
 		$elm$core$Basics$round(minutes)) + ' min') : ($elm$core$String$fromInt(
@@ -10630,7 +10725,7 @@ var $author$project$Page$Renders$finished = F2(
 						_List_fromArray(
 							[
 								$elm$html$Html$text(
-								$author$project$Page$Renders$durationLabel(render.co) + ' of audio')
+								$author$project$Page$Renders$durationLabel(render.cq) + ' of audio')
 							])),
 						A2(
 						$elm$html$Html$button,
@@ -10638,7 +10733,7 @@ var $author$project$Page$Renders$finished = F2(
 							[
 								$elm$html$Html$Attributes$class('delete'),
 								$elm$html$Html$Events$onClick(
-								config.cX(render.aY))
+								config.cZ(render.aY))
 							]),
 						_List_fromArray(
 							[
@@ -10659,7 +10754,7 @@ var $author$project$Page$Renders$finished = F2(
 			]);
 	});
 var $author$project$Page$Renders$jobLine = function (aJob) {
-	return $elm$core$String$isEmpty(aJob.cK) ? 'Waiting for the worker — one render runs at a time.' : aJob.cK;
+	return $elm$core$String$isEmpty(aJob.cM) ? 'Waiting for the worker — one render runs at a time.' : aJob.cM;
 };
 var $elm$virtual_dom$VirtualDom$style = _VirtualDom_style;
 var $elm$html$Html$Attributes$style = $elm$virtual_dom$VirtualDom$style;
@@ -10712,7 +10807,7 @@ var $author$project$Page$Renders$inFlight = F2(
 			var aJob = paired.a;
 			return _List_fromArray(
 				[
-					$author$project$Page$Renders$progressBar(aJob.cy),
+					$author$project$Page$Renders$progressBar(aJob.cA),
 					A2(
 					$elm$html$Html$div,
 					_List_fromArray(
@@ -10727,7 +10822,7 @@ var $author$project$Page$Renders$inFlight = F2(
 								[
 									$elm$html$Html$Attributes$class('cancel'),
 									$elm$html$Html$Events$onClick(
-									config.cW(aJob.aY))
+									config.cY(aJob.aY))
 								]),
 							_List_fromArray(
 								[
@@ -10757,14 +10852,14 @@ var $author$project$Page$Renders$inFlight = F2(
 						]),
 					_List_fromArray(
 						[
-							$elm$html$Html$text('Still marked as being produced, but nothing is watching a job ' + ('for it — the queue is held in memory, so a render caught by ' + ('a restart stays at this status with no way to cancel it. ' + 'It can be deleted once the server is told it has ended.')))
+							$elm$html$Html$text('Still marked as being produced, but there is no job behind it. ' + ('The queue is held in memory, so a render caught by a server ' + ('restart keeps this status with nothing left to cancel — and ' + ('the server refuses to delete a render at this status, so ' + ('there is nothing this screen can do with the row either. ' + ('The file, if there is one, is in the renders directory; ' + 'render the song again to get a finished one.'))))))
 						]))
 				]);
 		}
 	});
 var $author$project$Page$Renders$outcome = F3(
 	function (config, paired, render) {
-		var _v0 = render.b$;
+		var _v0 = render.b1;
 		switch (_v0) {
 			case 2:
 				return A2($author$project$Page$Renders$finished, config, render);
@@ -10850,7 +10945,7 @@ var $author$project$Page$Renders$range = F2(
 	});
 var $author$project$Page$Renders$StemEntry = F4(
 	function (name, enabled, decaying, lowpassEnd) {
-		return {aV: decaying, aa: enabled, bz: lowpassEnd, a0: name};
+		return {bn: decaying, ab: enabled, bB: lowpassEnd, a1: name};
 	});
 var $author$project$Page$Renders$withDefault = F2(
 	function (fallback, decoder) {
@@ -10899,24 +10994,19 @@ var $author$project$Page$Renders$decaySummary = function (config) {
 		return 'decay not recorded';
 	} else {
 		var entries = _v0.a;
+		var decaying = A2(
+			$elm$core$List$filter,
+			function (entry) {
+				return entry.ab && entry.bn;
+			},
+			entries);
 		var ends = A2(
 			$elm$core$List$filterMap,
 			function ($) {
-				return $.bz;
+				return $.bB;
 			},
-			A2(
-				$elm$core$List$filter,
-				function ($) {
-					return $.aV;
-				},
-				entries));
-		if ($elm$core$List$isEmpty(
-			A2(
-				$elm$core$List$filter,
-				function ($) {
-					return $.aV;
-				},
-				entries))) {
+			decaying);
+		if ($elm$core$List$isEmpty(decaying)) {
 			return 'no decay';
 		} else {
 			var _v1 = _Utils_Tuple2(
@@ -10957,12 +11047,12 @@ var $author$project$Page$Renders$stemSummary = function (config) {
 		var _v1 = A2(
 			$elm$core$List$map,
 			function ($) {
-				return $.a0;
+				return $.a1;
 			},
 			A2(
 				$elm$core$List$filter,
 				function ($) {
-					return $.aa;
+					return $.ab;
 				},
 				entries));
 		if (!_v1.b) {
@@ -10976,12 +11066,12 @@ var $author$project$Page$Renders$stemSummary = function (config) {
 var $author$project$Page$Renders$summarise = function (config) {
 	return {
 		ak: $author$project$Page$Renders$decaySummary(config),
-		a_: $author$project$Page$Renders$lengthSummary(config),
-		dr: $author$project$Page$Renders$stemSummary(config)
+		a$: $author$project$Page$Renders$lengthSummary(config),
+		du: $author$project$Page$Renders$stemSummary(config)
 	};
 };
 var $author$project$Page$Renders$summaryLine = function (render) {
-	var summary = $author$project$Page$Renders$summarise(render.cj);
+	var summary = $author$project$Page$Renders$summarise(render.cl);
 	return A2(
 		$elm$html$Html$p,
 		_List_fromArray(
@@ -10998,7 +11088,7 @@ var $author$project$Page$Renders$summaryLine = function (render) {
 					]),
 				_List_fromArray(
 					[
-						$elm$html$Html$text(summary.a_)
+						$elm$html$Html$text(summary.a$)
 					])),
 				A2(
 				$elm$html$Html$span,
@@ -11008,7 +11098,7 @@ var $author$project$Page$Renders$summaryLine = function (render) {
 					]),
 				_List_fromArray(
 					[
-						$elm$html$Html$text(summary.dr)
+						$elm$html$Html$text(summary.du)
 					])),
 				A2(
 				$elm$html$Html$span,
@@ -11032,14 +11122,14 @@ var $author$project$Page$Renders$titleFor = F2(
 			songs);
 		if (_v0.b) {
 			var found = _v0.a;
-			return found.dx;
+			return found.dA;
 		} else {
 			return songId;
 		}
 	});
 var $author$project$Page$Renders$row = F2(
 	function (config, render) {
-		var paired = A2($author$project$Page$Renders$jobFor, config.cG, render);
+		var paired = A2($author$project$Page$Renders$jobFor, config.cI, render);
 		return A2(
 			$elm$html$Html$div,
 			_List_fromArray(
@@ -11065,15 +11155,15 @@ var $author$project$Page$Renders$row = F2(
 							_List_fromArray(
 								[
 									$elm$html$Html$text(
-									A2($author$project$Page$Renders$titleFor, config.dn, render.b_))
+									A2($author$project$Page$Renders$titleFor, config.dq, render.b0))
 								])),
 							A2(
 							$elm$html$Html$span,
-							$author$project$Page$Renders$statusClass(render.b$),
+							$author$project$Page$Renders$statusClass(render.b1),
 							_List_fromArray(
 								[
 									$elm$html$Html$text(
-									$author$project$Api$renderStatusLabel(render.b$))
+									$author$project$Api$renderStatusLabel(render.b1))
 								])),
 							A2(
 							$elm$html$Html$span,
@@ -11084,7 +11174,7 @@ var $author$project$Page$Renders$row = F2(
 							_List_fromArray(
 								[
 									$elm$html$Html$text(
-									$author$project$Page$Renders$momentOf(render.bk))
+									$author$project$Page$Renders$momentOf(render.bl))
 								]))
 						])),
 				A2(
@@ -11098,7 +11188,7 @@ var $author$project$Page$Renders$row = F2(
 							])))));
 	});
 var $author$project$Page$Renders$body = function (config) {
-	var _v0 = config.a7;
+	var _v0 = config.a8;
 	switch (_v0.$) {
 		case 0:
 			return A2(
@@ -11181,7 +11271,7 @@ var $author$project$Page$Renders$view = function (config) {
 				_List_fromArray(
 					[
 						$elm$html$Html$Attributes$class('back'),
-						$elm$html$Html$Events$onClick(config.a3)
+						$elm$html$Html$Events$onClick(config.a4)
 					]),
 				_List_fromArray(
 					[
@@ -11194,7 +11284,7 @@ var $author$project$Page$Renders$view = function (config) {
 					[
 						$elm$html$Html$text('Renders')
 					])),
-				$author$project$Page$Renders$problemLine(config.da),
+				$author$project$Page$Renders$problemLine(config.dc),
 				$author$project$Page$Renders$body(config)
 			]));
 };
@@ -11202,12 +11292,12 @@ var $author$project$Main$rendersView = F2(
 	function (model, state) {
 		return $author$project$Page$Renders$view(
 			{
-				cG: model.T,
-				a3: $author$project$Main$CloseRenders,
-				cW: $author$project$Main$CancelRenderClicked,
-				cX: $author$project$Main$DeleteRenderClicked,
-				da: model.E,
-				dn: function () {
+				cI: model.L,
+				a4: $author$project$Main$CloseRenders,
+				cY: $author$project$Main$CancelRenderClicked,
+				cZ: $author$project$Main$DeleteRenderClicked,
+				dc: model.p,
+				dq: function () {
 					var _v0 = model.ao;
 					if (_v0.$ === 1) {
 						var songs = _v0.a;
@@ -11216,7 +11306,7 @@ var $author$project$Main$rendersView = F2(
 						return _List_Nil;
 					}
 				}(),
-				a7: state
+				a8: state
 			});
 	});
 var $author$project$Main$Library = {$: 0};
@@ -11230,17 +11320,17 @@ var $author$project$Main$SongView = function (a) {
 	return {$: 2, a: a};
 };
 var $author$project$Main$routeFor = function (model) {
-	var _v0 = model.U;
+	var _v0 = model.V;
 	if (!_v0.$) {
 		var state = _v0.a;
 		return $author$project$Main$RendersView(state);
 	} else {
-		var _v1 = model.y;
+		var _v1 = model.A;
 		if (!_v1.$) {
 			var state = _v1.a;
 			return $author$project$Main$MixerView(state);
 		} else {
-			var _v2 = model.W;
+			var _v2 = model.X;
 			if (_v2.$ === 1) {
 				return $author$project$Main$Library;
 			} else {
@@ -11257,12 +11347,12 @@ var $author$project$Main$SeparateClicked = function (a) {
 };
 var $author$project$Main$progressFor = F2(
 	function (songId, model) {
-		var _v0 = model.d;
+		var _v0 = model.c;
 		if (_v0.$ === 2) {
 			var job = _v0.a;
 			return _Utils_eq(
-				job.b_,
-				$elm$core$Maybe$Just(songId)) ? $elm$core$Maybe$Just(job.cy) : $elm$core$Maybe$Nothing;
+				job.b0,
+				$elm$core$Maybe$Just(songId)) ? $elm$core$Maybe$Just(job.cA) : $elm$core$Maybe$Nothing;
 		} else {
 			return $elm$core$Maybe$Nothing;
 		}
@@ -11285,8 +11375,8 @@ var $author$project$Main$settingsProblem = function (settings) {
 	}
 };
 var $author$project$Page$Song$mixerPanel = function (config) {
-	var running = config.dl || _Utils_eq(config.bZ.dm, $author$project$Api$Separating);
-	var hasStems = !$elm$core$List$isEmpty(config.bZ.dr);
+	var running = config.$7 || _Utils_eq(config.b$.dp, $author$project$Api$Separating);
+	var hasStems = !$elm$core$List$isEmpty(config.b$.du);
 	var reason = (!hasStems) ? $elm$core$Maybe$Just('Separate this song first — the mixer is built out of its stems.') : (running ? $elm$core$Maybe$Just('The mixer opens once this separation finishes.') : $elm$core$Maybe$Nothing);
 	return A2(
 		$elm$html$Html$div,
@@ -11300,7 +11390,7 @@ var $author$project$Page$Song$mixerPanel = function (config) {
 				$elm$html$Html$button,
 				_List_fromArray(
 					[
-						$elm$html$Html$Events$onClick(config.c_),
+						$elm$html$Html$Events$onClick(config.c0),
 						$elm$html$Html$Attributes$disabled(
 						!_Utils_eq(reason, $elm$core$Maybe$Nothing))
 					]),
@@ -11448,7 +11538,7 @@ var $author$project$Page$Song$stemList = function (stems) {
 			]));
 };
 var $author$project$Page$Song$separationPanel = function (config) {
-	var status = config.bZ.dm;
+	var status = config.b$.dp;
 	return A2(
 		$elm$html$Html$div,
 		_List_fromArray(
@@ -11466,21 +11556,21 @@ var $author$project$Page$Song$separationPanel = function (config) {
 						$author$project$Api$statusLabel(status))
 					])),
 				$author$project$Page$Song$reasonFor(status),
-				$author$project$Page$Song$stemList(config.bZ.dr),
-				$author$project$Page$Song$progressBar(config.db),
+				$author$project$Page$Song$stemList(config.b$.du),
+				$author$project$Page$Song$progressBar(config.dd),
 				A2(
 				$elm$html$Html$button,
 				_List_fromArray(
 					[
 						$elm$html$Html$Events$onClick(
-						config.c3(
+						config.c5(
 							$author$project$Page$Song$needsForce(status))),
-						$elm$html$Html$Attributes$disabled(config.dl)
+						$elm$html$Html$Attributes$disabled(config.$7)
 					]),
 				_List_fromArray(
 					[
 						$elm$html$Html$text(
-						A2($author$project$Page$Song$buttonLabel, status, config.dl))
+						A2($author$project$Page$Song$buttonLabel, status, config.$7))
 					]))
 			]));
 };
@@ -11488,13 +11578,13 @@ var $author$project$Page$Song$subtitle = function (s) {
 	var seconds = A2(
 		$elm$core$Basics$modBy,
 		60,
-		$elm$core$Basics$round(s.cp));
-	var minutes = ($elm$core$Basics$round(s.cp) / 60) | 0;
+		$elm$core$Basics$round(s.cr));
+	var minutes = ($elm$core$Basics$round(s.cr) / 60) | 0;
 	return $elm$core$String$fromInt(minutes) + (':' + (A3(
 		$elm$core$String$padLeft,
 		2,
 		'0',
-		$elm$core$String$fromInt(seconds)) + (' · ' + ($elm$core$String$fromInt(s.di) + ' Hz'))));
+		$elm$core$String$fromInt(seconds)) + (' · ' + ($elm$core$String$fromInt(s.dl) + ' Hz'))));
 };
 var $author$project$Page$Song$view = function (config) {
 	return A2(
@@ -11510,7 +11600,7 @@ var $author$project$Page$Song$view = function (config) {
 				_List_fromArray(
 					[
 						$elm$html$Html$Attributes$class('back'),
-						$elm$html$Html$Events$onClick(config.a3)
+						$elm$html$Html$Events$onClick(config.a4)
 					]),
 				_List_fromArray(
 					[
@@ -11521,7 +11611,7 @@ var $author$project$Page$Song$view = function (config) {
 				_List_Nil,
 				_List_fromArray(
 					[
-						$elm$html$Html$text(config.bZ.dx)
+						$elm$html$Html$text(config.b$.dA)
 					])),
 				A2(
 				$elm$html$Html$p,
@@ -11532,22 +11622,22 @@ var $author$project$Page$Song$view = function (config) {
 				_List_fromArray(
 					[
 						$elm$html$Html$text(
-						$author$project$Page$Song$subtitle(config.bZ))
+						$author$project$Page$Song$subtitle(config.b$))
 					])),
 				$author$project$Waveform$view(
 				{
-					cp: config.bZ.cp,
-					cA: 140,
-					N: A2(
+					cr: config.b$.cr,
+					cC: 140,
+					P: A2(
 						$elm$core$Maybe$map,
 						function (region) {
-							return {cr: region.cr, $7: region.$7};
+							return {ct: region.ct, dr: region.dr};
 						},
-						config.N),
-					R: config.R,
-					dD: 960
+						config.P),
+					T: config.T,
+					dG: 960
 				}),
-				$author$project$Waveform$caption(config.N),
+				$author$project$Waveform$caption(config.P),
 				$author$project$Page$Song$separationPanel(config),
 				$author$project$Page$Song$mixerPanel(config)
 			]));
@@ -11560,7 +11650,7 @@ var $author$project$Main$songView = F2(
 			_List_fromArray(
 				[
 					function () {
-					var _v0 = model._;
+					var _v0 = model.aa;
 					if (_v0.$ === 1) {
 						return _Utils_eq(model.ah, $elm$core$Maybe$Nothing) ? A2(
 							$elm$html$Html$p,
@@ -11576,14 +11666,14 @@ var $author$project$Main$songView = F2(
 						var song = _v0.a;
 						return $author$project$Page$Song$view(
 							{
-								N: model.N,
-								a3: $author$project$Main$BackToLibrary,
-								c_: $author$project$Main$OpenMixer,
-								c3: $author$project$Main$SeparateClicked,
-								R: model.R,
-								db: A2($author$project$Main$progressFor, songId, model),
-								dl: $author$project$Main$isSeparating(model.d),
-								bZ: song
+								P: model.P,
+								a4: $author$project$Main$BackToLibrary,
+								c0: $author$project$Main$OpenMixer,
+								c5: $author$project$Main$SeparateClicked,
+								T: model.T,
+								dd: A2($author$project$Main$progressFor, songId, model),
+								$7: $author$project$Main$isSeparating(model.c),
+								b$: song
 							});
 					}
 				}(),
@@ -11611,8 +11701,8 @@ var $author$project$Main$songView = F2(
 						return 'Could not start separation — ' + reason;
 					},
 					model.aq),
-					A2($author$project$Main$errorLine, $elm$core$Basics$identity, model.ab),
-					$author$project$Main$settingsProblem(model.X)
+					A2($author$project$Main$errorLine, $elm$core$Basics$identity, model.I),
+					$author$project$Main$settingsProblem(model.Y)
 				]));
 	});
 var $author$project$Main$view = function (model) {
@@ -11687,6 +11777,6 @@ var $author$project$Main$view = function (model) {
 			]));
 };
 var $author$project$Main$main = $elm$browser$Browser$element(
-	{cE: $author$project$Main$init, ds: $author$project$Main$subscriptions, dA: $author$project$Main$update, dC: $author$project$Main$view});
+	{cG: $author$project$Main$init, dv: $author$project$Main$subscriptions, dD: $author$project$Main$update, dF: $author$project$Main$view});
 _Platform_export({'Main':{'init':$author$project$Main$main(
 	$elm$json$Json$Decode$succeed(0))(0)}});}(this));

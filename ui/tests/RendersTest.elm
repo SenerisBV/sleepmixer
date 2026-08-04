@@ -63,14 +63,15 @@ aRender id songId config =
     }
 
 
-aJob : String -> String -> String -> Api.Job
-aJob id songId createdAt =
+aJob : String -> String -> Maybe String -> String -> Api.Job
+aJob id songId renderId createdAt =
     { id = id
     , kind = "render"
     , status = Api.Running
     , fraction = 0.4
     , message = "rendering"
     , songId = Just songId
+    , renderId = renderId
     , createdAt = createdAt
     }
 
@@ -155,6 +156,30 @@ suite =
                 \_ ->
                     (Renders.summarise (configOf vocalsAndBass)).decay
                         |> Expect.equal "decays to 1.6–2.2 kHz"
+            , test "a switched-off stem's decay endpoint is not part of the mix's" <|
+                \_ ->
+                    -- `vocalsOnly` has vocals on at 2200 Hz, with bass and drums
+                    -- switched off at 1600 Hz. Nothing audible in that mix ever
+                    -- reaches 1.6 kHz, and the row used to say it did.
+                    (Renders.summarise (configOf vocalsOnly)).decay
+                        |> Expect.all
+                            [ Expect.equal "decays to 2.2 kHz"
+                            , \decay -> Expect.equal False (String.contains "1.6" decay)
+                            ]
+            , test "a mix whose audible stems all have decay off claims none, however the silent ones decay" <|
+                \_ ->
+                    Renders.summarise
+                        (configOf """
+                        { "stems":
+                            [ {"name": "vocals", "enabled": true,
+                               "decay": {"enabled": false, "lowpass_end_hz": 2200.0}}
+                            , {"name": "bass", "enabled": false,
+                               "decay": {"enabled": true, "lowpass_end_hz": 1600.0}}
+                            ]
+                        }
+                        """)
+                        |> .decay
+                        |> Expect.equal "no decay"
             , test "an empty config admits it recorded nothing rather than claiming defaults" <|
                 \_ ->
                     let
@@ -200,21 +225,18 @@ suite =
                     Renders.durationLabel (Just 0.05) |> Expect.equal "3 s"
             ]
         , describe "the job behind a render"
-            [ test "a render is paired with the job submitted just after its row was written" <|
+            [ test "a render is paired with the job carrying its own id" <|
                 \_ ->
                     let
                         first =
-                            { earlier | createdAt = "2026-08-04T21:03:17.582197+00:00" }
-
-                        earlier =
                             aRender "r1" "s1" "{}"
 
                         second =
-                            { earlier | id = "r2", createdAt = "2026-08-04T21:03:35.473657+00:00" }
+                            { first | id = "r2" }
 
                         jobs =
-                            [ aJob "j2" "s1" "2026-08-04T21:03:35.501000+00:00"
-                            , aJob "j1" "s1" "2026-08-04T21:03:17.601000+00:00"
+                            [ aJob "j2" "s1" (Just "r2") "2026-08-04T21:03:35.501000+00:00"
+                            , aJob "j1" "s1" (Just "r1") "2026-08-04T21:03:17.601000+00:00"
                             ]
                     in
                     Expect.all
@@ -222,14 +244,40 @@ suite =
                         , \_ -> Expect.equal (Just "j2") (Maybe.map .id (Renders.jobFor jobs second))
                         ]
                         ()
+            , test "a render stranded by a restart is paired with nothing, not with the next render's job" <|
+                \_ ->
+                    -- The bug this pairing exists to make impossible: jobs live
+                    -- in memory and renders in SQLite, so a restart leaves a
+                    -- render at `running` with no job of its own. Paired by song
+                    -- and time it took the *next* render's job, drew that
+                    -- render's progress, and put that render's job id on its
+                    -- Cancel button — so cancelling the dead row killed the live
+                    -- one and deleted its file.
+                    let
+                        stranded =
+                            { id = "r-stranded"
+                            , songId = "s1"
+                            , status = Api.RenderRunning
+                            , path = "/tmp/data/renders/r-stranded.wav"
+                            , durationMin = Nothing
+                            , config = configOf "{}"
+                            , createdAt = "2026-08-01T09:00:00+00:00"
+                            }
+
+                        liveJob =
+                            aJob "j-live" "s1" (Just "r-new") "2026-08-04T21:03:35.501000+00:00"
+                    in
+                    Renders.jobFor [ liveJob ] stranded
+                        |> Expect.equal Nothing
             , test "a separation job for the same song is not mistaken for the render's" <|
                 \_ ->
+                    -- A separation carries the song id too, and no render id at
+                    -- all — so matching on the render id excludes it by
+                    -- construction rather than by a `kind` check that could be
+                    -- forgotten.
                     let
                         separation =
-                            { job | kind = "separate" }
-
-                        job =
-                            aJob "j1" "s1" "2026-08-04T21:03:35.501000+00:00"
+                            { sampleJob | kind = "separate", renderId = Nothing }
                     in
                     Renders.jobFor [ separation ] (aRender "r1" "s1" "{}")
                         |> Expect.equal Nothing
@@ -244,7 +292,7 @@ suite =
                             }
 
                         running =
-                            aJob "j1" "s1" "2026-08-04T21:03:35.501000+00:00"
+                            aJob "j1" "s1" (Just "r1") "2026-08-04T21:03:35.501000+00:00"
                     in
                     Renders.liveRenderJob [ queued, running ]
                         |> Maybe.map .id
@@ -260,7 +308,8 @@ suite =
                         fresher =
                             { sampleJob | fraction = 0.9 }
                     in
-                    Renders.replaceJob fresher [ aJob "j0" "s1" "x", sampleJob ]
+                    Renders.replaceJob fresher
+                        [ aJob "j0" "s1" (Just "r0") "x", sampleJob ]
                         |> List.map .fraction
                         |> Expect.equal [ 0.4, 0.9 ]
             , test "an event for a job the poll never mentioned is kept rather than dropped" <|
@@ -268,6 +317,33 @@ suite =
                     Renders.replaceJob sampleJob []
                         |> List.map .id
                         |> Expect.equal [ "j1" ]
+            , test "a poll landing after a stream event does not move the bar backwards" <|
+                \_ ->
+                    -- The poll is a round trip and the stream is a push, so a
+                    -- snapshot taken at 30% can arrive after an event saying
+                    -- 90%. Only the streamed job is held back; everything else
+                    -- takes the polled value, which is fresher for it.
+                    let
+                        streamed =
+                            { sampleJob | fraction = 0.9 }
+
+                        polled =
+                            [ { sampleJob | fraction = 0.3 }
+                            , { sampleJob | id = "j2", fraction = 0.5 }
+                            ]
+                    in
+                    Renders.keepStreamed (Just "j1") [ streamed ] polled
+                        |> List.map .fraction
+                        |> Expect.equal [ 0.9, 0.5 ]
+            , test "with no stream open the poll is taken as it comes" <|
+                \_ ->
+                    let
+                        polled =
+                            [ { sampleJob | fraction = 0.3 } ]
+                    in
+                    Renders.keepStreamed Nothing [ { sampleJob | fraction = 0.9 } ] polled
+                        |> List.map .fraction
+                        |> Expect.equal [ 0.3 ]
             ]
         , describe "when a render ended badly"
             [ test "a failed render shows the reason its job recorded" <|
@@ -278,16 +354,23 @@ suite =
                         |> Expect.equal True
             , test "a failed render whose job is gone says nobody recorded why, rather than inventing one" <|
                 \_ ->
+                    -- Asserted as the whole sentence, because the thing being
+                    -- tested is that it does not stop at "Failed." — the bare
+                    -- word is the silence this module exists to refuse, and a
+                    -- `String.contains "Failed"` assertion accepts it.
                     Renders.reasonFor Api.RenderFailed Nothing
-                        |> Expect.all
-                            [ \reason -> Expect.equal True (String.contains "ailed" reason)
-                            , \reason -> Expect.notEqual "" reason
-                            ]
+                        |> Expect.equal
+                            ("Failed. The reason was recorded on the job that ran it "
+                                ++ "rather than on the render, and that job is no longer "
+                                ++ "held — jobs live in memory and do not survive a restart."
+                            )
             , test "a cancelled render says its partial file is gone" <|
                 \_ ->
                     Renders.reasonFor Api.RenderCancelled Nothing
-                        |> String.contains "Cancelled"
-                        |> Expect.equal True
+                        |> Expect.equal
+                            ("Cancelled. The partial file was removed with it, so there is "
+                                ++ "nothing here to play or download."
+                            )
             ]
         , describe "deleting"
             [ test "a delete refused while the render is still running says to cancel it first" <|
@@ -304,6 +387,10 @@ suite =
         , describe "the list itself"
             [ test "renders are listed newest first whatever order they arrived in" <|
                 \_ ->
+                    -- Both input orders, because the endpoint already answers
+                    -- newest-first: a `List.reverse` with no sort passes against
+                    -- the shuffled case alone and would list the real screen
+                    -- oldest-first in production with this test green.
                     let
                         old =
                             { new | id = "old", createdAt = "2026-08-01T09:00:00+00:00" }
@@ -311,9 +398,11 @@ suite =
                         new =
                             aRender "new" "s1" "{}"
                     in
-                    Renders.newestFirst [ old, new ]
-                        |> List.map .id
-                        |> Expect.equal [ "new", "old" ]
+                    Expect.all
+                        [ \_ -> Expect.equal [ "new", "old" ] (List.map .id (Renders.newestFirst [ old, new ]))
+                        , \_ -> Expect.equal [ "new", "old" ] (List.map .id (Renders.newestFirst [ new, old ]))
+                        ]
+                        ()
             , test "the timestamp is shortened to a minute rather than shown to the microsecond" <|
                 \_ ->
                     Renders.momentOf "2026-08-04T21:03:35.473657+00:00"
@@ -331,4 +420,4 @@ suite =
 
 sampleJob : Api.Job
 sampleJob =
-    aJob "j1" "s1" "2026-08-04T21:03:35.501000+00:00"
+    aJob "j1" "s1" (Just "r1") "2026-08-04T21:03:35.501000+00:00"

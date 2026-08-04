@@ -201,6 +201,7 @@ suite =
                             { "id": "j1", "kind": "separate", "status": "running"
                             , "fraction": 0.42, "message": "Separating stems…"
                             , "error": null, "result": null, "song_id": "abc"
+                            , "render_id": null
                             , "created_at": "2026-08-04T21:03:17.584296+00:00" }
                             """
                     in
@@ -223,7 +224,7 @@ suite =
                             { "id": "j1", "kind": "render", "status": "failed"
                             , "fraction": 0.3, "message": "Failed"
                             , "error": "RuntimeError: disk full"
-                            , "result": null, "song_id": "abc"
+                            , "result": null, "song_id": "abc", "render_id": "r1"
                             , "created_at": "2026-08-04T21:03:57.645410+00:00" }
                             """
                     in
@@ -233,24 +234,74 @@ suite =
 
                         Err err ->
                             Expect.fail (Decode.errorToString err)
-            , test "carries created_at, captured from a live POST /api/renders envelope's job field" <|
+            , test "carries created_at and the id of the render it is producing, captured from a live POST /api/renders envelope's job field" <|
                 \_ ->
+                    -- Re-captured verbatim after the job dataclass grew
+                    -- `render_id`, rather than hand-edited: an earlier fixture
+                    -- on this branch was patched to look captured, and a
+                    -- fixture that *looks* captured is worse than an obviously
+                    -- written one because the next reader takes it as evidence.
+                    -- `render_id` here is the same hex the same response's
+                    -- `render.id` carried, which is the pairing the renders
+                    -- screen depends on.
                     let
                         json =
                             """
-                            { "id": "4834470a914c46088ea4576b48df68b3", "kind": "render"
+                            { "id": "a0e4cf2918d140119ad26d5e31006c06", "kind": "render"
                             , "status": "running", "fraction": 0.0, "message": ""
                             , "error": null, "result": null
-                            , "song_id": "15ff79b16efd4fc58874df4eac097a38"
-                            , "created_at": "2026-08-04T21:03:17.584296+00:00" }
+                            , "song_id": "ec08ea8c6f4449ab81e0711211761653"
+                            , "render_id": "0f4cf8f62db248d7be05aa54c25dfed0"
+                            , "created_at": "2026-08-04T21:51:07.563535+00:00" }
                             """
                     in
                     case Decode.decodeString Api.job json of
                         Ok j ->
-                            Expect.equal "2026-08-04T21:03:17.584296+00:00" j.createdAt
+                            Expect.all
+                                [ .createdAt >> Expect.equal "2026-08-04T21:51:07.563535+00:00"
+                                , .renderId >> Expect.equal (Just "0f4cf8f62db248d7be05aa54c25dfed0")
+                                ]
+                                j
 
                         Err err ->
                             Expect.fail (Decode.errorToString err)
+            , test "a separation's job carries no render id, captured live from POST /api/songs/{id}/separate" <|
+                \_ ->
+                    -- Null rather than absent, and that distinction is the
+                    -- decoder's: `render_id` is required-and-nullable like
+                    -- `song_id`, so a server that stopped sending the field
+                    -- fails loudly instead of decoding to the `Nothing` that
+                    -- means "this render has no job".
+                    let
+                        json =
+                            """
+                            { "id": "e3a021c0975348e8819694494c935527", "kind": "separate"
+                            , "status": "queued", "fraction": 0.0, "message": ""
+                            , "error": null, "result": null
+                            , "song_id": "ec08ea8c6f4449ab81e0711211761653"
+                            , "render_id": null
+                            , "created_at": "2026-08-04T21:51:07.567838+00:00" }
+                            """
+                    in
+                    case Decode.decodeString Api.job json of
+                        Ok j ->
+                            Expect.equal Nothing j.renderId
+
+                        Err err ->
+                            Expect.fail (Decode.errorToString err)
+            , test "a job missing render_id fails the decode rather than defaulting to none" <|
+                \_ ->
+                    let
+                        json =
+                            """
+                            { "id": "j1", "kind": "render", "status": "running"
+                            , "fraction": 0.0, "message": "", "error": null
+                            , "result": null, "song_id": "abc"
+                            , "created_at": "2026-08-04T21:03:17.584296+00:00" }
+                            """
+                    in
+                    Decode.decodeString Api.job json
+                        |> Expect.err
             , test "a job missing created_at fails the decode rather than defaulting" <|
                 \_ ->
                     let

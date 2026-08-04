@@ -103,7 +103,12 @@ def start_render(body: RenderRequest, request: Request) -> dict:
                             duration_min=mix.duration / 60.0)
         return {"render_id": render["id"], "path": output_path}
 
-    job = request.app.state.jobs.submit("render", work, song_id=body.song_id)
+    # `render_id` rather than leaving the client to pair the two by song and
+    # timestamp: a render row stranded at "running" by a restart keeps that
+    # status forever, and a pairing by song would hand it the next render's job
+    # — so its Cancel button would stop a render that is genuinely in flight.
+    job = request.app.state.jobs.submit("render", work, song_id=body.song_id,
+                                        render_id=render["id"])
     return {"job": job.as_event(), "render": store.get_render(render["id"])}
 
 

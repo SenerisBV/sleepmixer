@@ -58,6 +58,17 @@ type JobStatus
     | Failed String
 
 
+{-| A unit of background work: separating a song, or rendering a mix.
+
+`renderId` is the row this job is producing, and it is `Nothing` for every job
+that produces no row — every separation, and any job from a server predating the
+field. It exists because the alternative pairing, "the render of this song
+started around the same time", is wrong in exactly the case that matters: jobs
+live in memory and renders live in SQLite, so a restart leaves a render row at
+`running` with no job, and a song-and-time pairing hands that dead row the
+*next* render's job — a Cancel button on a finished render that stops a live
+one.
+-}
 type alias Job =
     { id : String
     , kind : String
@@ -65,6 +76,7 @@ type alias Job =
     , fraction : Float
     , message : String
     , songId : Maybe String
+    , renderId : Maybe String
     , createdAt : String
     }
 
@@ -244,6 +256,12 @@ job =
         |> Pipeline.required "fraction" Decode.float
         |> Pipeline.required "message" Decode.string
         |> Pipeline.required "song_id" (Decode.nullable Decode.string)
+        -- Required-and-nullable, exactly as `song_id` is: the field is always
+        -- present on the wire (`as_event` is `asdict` over a dataclass that
+        -- declares it) and null for everything that is not a render. Optional
+        -- would let a server that stopped sending it decode to `Nothing`, which
+        -- is the pairing failure this field exists to remove, arriving silently.
+        |> Pipeline.required "render_id" (Decode.nullable Decode.string)
         |> Pipeline.required "created_at" Decode.string
 
 

@@ -1,6 +1,6 @@
 module Page.Renders exposing
     ( State(..), Summary
-    , audioUrl, deleteMessage, durationLabel, jobFor, liveRenderJob, momentOf, newestFirst, reasonFor, replaceJob, summarise, titleFor
+    , audioUrl, deleteMessage, durationLabel, jobFor, keepStreamed, liveRenderJob, momentOf, newestFirst, reasonFor, replaceJob, summarise, titleFor
     , view
     )
 
@@ -89,16 +89,21 @@ newestFirst renders =
 
 {-| The job that produced this render, if the manager still remembers it.
 
-There is no render id on a job and no job id on a render, so the two are joined
-by song and time: `POST /api/renders` writes the render row and *then* submits
-the job, both stamped with `datetime.now(timezone.utc)`, so the render's job is
-the earliest render-kind job for that song at or after the render's own
-timestamp. A second render of the same song is submitted through a second HTTP
-request, which cannot land inside the microseconds between those two writes.
+Matched on the job's own `render_id` and on nothing else. This used to be a
+pairing by song and timestamp — the render row is written microseconds before
+the job is submitted, so "the earliest render-kind job for this song at or after
+this render's `created_at`" is right whenever both rows exist. The case where
+they do not is the whole problem: jobs are held in memory and renders in SQLite,
+so a server restarted mid-render leaves that render at `running` forever with no
+job of its own and no counterpart to `reconcile_orphaned_separations` to clear
+it. Render the same song again and the stranded row matched the *new* job:
+it drew the live render's progress bar and its Cancel button carried the live
+render's job id, so cancelling what looked like a dead row killed the render
+that was actually running and `_abandon` deleted its file. Silently, with both
+rows showing the same bar.
 
-Matching on `kind` as well as on the song matters: separating and rendering the
-same song both produce jobs carrying that `song_id`, and the separation's
-progress on a render's row would be a bar that fills and then produces nothing.
+An id cannot do that. A render with no job of its own now matches nothing,
+which is the state `inFlight` already had a branch and a sentence for.
 
 This is also the only route to why a failed render failed. The render row
 records the status and not the reason — `store.renders` has no column for one —
@@ -107,15 +112,7 @@ the manager keeps it (fifty terminal jobs, and none across a restart).
 -}
 jobFor : List Api.Job -> Api.Render -> Maybe Api.Job
 jobFor jobs render =
-    jobs
-        |> List.filter
-            (\aJob ->
-                aJob.kind == "render"
-                    && aJob.songId == Just render.songId
-                    && aJob.createdAt >= render.createdAt
-            )
-        |> List.sortBy .createdAt
-        |> List.head
+    List.head (List.filter (\aJob -> aJob.renderId == Just render.id) jobs)
 
 
 {-| The one render job worth holding an event stream open for.
@@ -169,6 +166,45 @@ replaceJob incoming jobs =
 
     else
         jobs ++ [ incoming ]
+
+
+{-| A freshly polled job list, without undoing the streamed job's progress.
+
+`GET /api/jobs` is a snapshot of a moment, and its response can arrive after an
+event that describes a later one — the poll is a round trip and the stream is a
+push. Taking the polled copy wholesale then moves the bar backwards, from 70%
+to the 30% the server had reached when the snapshot was taken.
+
+So the one job an event stream is open on keeps whatever this side already
+holds, and every other job takes the polled value. Exactly one job can be in
+that position, and it is the only one whose progress moves at all: one worker
+runs everything, and every other row is waiting or finished.
+-}
+keepStreamed : Maybe String -> List Api.Job -> List Api.Job -> List Api.Job
+keepStreamed streaming held polled =
+    let
+        streamedCopy =
+            case streaming of
+                Just id ->
+                    List.head (List.filter (\existing -> existing.id == id) held)
+
+                Nothing ->
+                    Nothing
+    in
+    case streamedCopy of
+        Nothing ->
+            polled
+
+        Just streamed ->
+            List.map
+                (\fresh ->
+                    if fresh.id == streamed.id then
+                        streamed
+
+                    else
+                        fresh
+                )
+                polled
 
 
 
@@ -299,6 +335,14 @@ a range is stated rather than one stem's value passed off as the mix's.
 
 A stem whose decay is switched off contributes no endpoint, because it does not
 travel; if none of them do, the mix repeats unchanged and the row says so.
+
+**And a stem that is switched off contributes nothing either, decaying or not.**
+It is not in the mix, so where its decay would have ended is not a fact about
+anything anyone hears. Both halves of that matter and both were wrong: a config
+with vocals on at 2200 Hz and a disabled bass at 1600 Hz read `decays to
+1.6–2.2 kHz` for a mix whose only audible stem stops at 2.2 kHz, and one whose
+enabled stems all had decay switched off still claimed a decay if some disabled
+stem carried one.
 -}
 decaySummary : Decode.Value -> String
 decaySummary config =
@@ -308,10 +352,13 @@ decaySummary config =
 
         Just entries ->
             let
+                decaying =
+                    List.filter (\entry -> entry.enabled && entry.decaying) entries
+
                 ends =
-                    List.filterMap .lowpassEnd (List.filter .decaying entries)
+                    List.filterMap .lowpassEnd decaying
             in
-            if List.isEmpty (List.filter .decaying entries) then
+            if List.isEmpty decaying then
                 "no decay"
 
             else
@@ -624,10 +671,13 @@ inFlight config paired =
         Nothing ->
             [ p [ class "dim" ]
                 [ text
-                    ("Still marked as being produced, but nothing is watching a job "
-                        ++ "for it — the queue is held in memory, so a render caught by "
-                        ++ "a restart stays at this status with no way to cancel it. "
-                        ++ "It can be deleted once the server is told it has ended."
+                    ("Still marked as being produced, but there is no job behind it. "
+                        ++ "The queue is held in memory, so a render caught by a server "
+                        ++ "restart keeps this status with nothing left to cancel — and "
+                        ++ "the server refuses to delete a render at this status, so "
+                        ++ "there is nothing this screen can do with the row either. "
+                        ++ "The file, if there is one, is in the renders directory; "
+                        ++ "render the song again to get a finished one."
                     )
                 ]
             ]

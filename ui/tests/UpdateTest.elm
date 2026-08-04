@@ -13,7 +13,6 @@ which `JobTest` covers directly.
 
 import Api
 import Expect
-import Json.Decode
 import Json.Encode
 import Main
 import Test exposing (Test, describe, test)
@@ -27,6 +26,7 @@ aJob id status fraction =
     , fraction = fraction
     , message = "working"
     , songId = Just "song-1"
+    , renderId = Nothing
     , createdAt = "2026-08-04T21:03:17.584296+00:00"
     }
 
@@ -40,6 +40,19 @@ watching job =
             Main.init ()
     in
     { fresh | selectedSongId = Just "song-1", separation = Main.Watching job }
+
+
+{-| A separation on song-1 *and* a render being watched at the same time — the
+state that makes "which stream did this frame come from" a real question rather
+than a rhetorical one.
+-}
+watchingBoth : Main.Model
+watchingBoth =
+    let
+        base =
+            watching (aJob "j1" Api.Running 0.4)
+    in
+    { base | watchedRender = Just "render-job" }
 
 
 step : Main.Msg -> Main.Model -> Main.Model
@@ -147,7 +160,7 @@ suite =
             [ test "ends the separation rather than leaving it running forever" <|
                 \_ ->
                     watching (aJob "j1" Api.Running 0.4)
-                        |> step (Main.JobEventReceived (Err badEvent))
+                        |> step (Main.JobEventReceived badEvent)
                         |> .separation
                         |> Expect.equal Main.Idle
             , test "is reported as an event problem, not as a failure to start" <|
@@ -155,13 +168,63 @@ suite =
                     let
                         after =
                             watching (aJob "j1" Api.Running 0.4)
-                                |> step (Main.JobEventReceived (Err badEvent))
+                                |> step (Main.JobEventReceived badEvent)
                     in
                     Expect.all
                         [ \m -> Expect.equal Nothing m.separateError
                         , \m -> Expect.notEqual Nothing m.eventError
                         ]
                         after
+            , test "an unreadable frame from a render's stream leaves the separation alone" <|
+                \_ ->
+                    -- `jobEvent` is one channel for every stream, and this used
+                    -- to end the separation whatever the frame's origin: a bad
+                    -- frame on a render's stream reset a running separation to
+                    -- Idle and closed its stream while Demucs carried on.
+                    watchingBoth
+                        |> step (Main.JobEventReceived badRenderEvent)
+                        |> Expect.all
+                            [ \m -> Expect.equal (Main.Watching (aJob "j1" Api.Running 0.4)) m.separation
+                            , \m -> Expect.equal Nothing m.eventError
+                            , \m -> Expect.equal Nothing m.watchedRender
+                            , \m -> Expect.notEqual Nothing m.rendersProblem
+                            ]
+            , test "an unreadable frame is reported where the screen it belongs to can show it" <|
+                \_ ->
+                    -- `eventError` is rendered only by the song screen, so a
+                    -- render's failure written there is a bar that silently
+                    -- stops for someone on the renders screen.
+                    watching (aJob "j1" Api.Running 0.4)
+                        |> step (Main.JobEventReceived badEvent)
+                        |> Expect.all
+                            [ \m -> Expect.notEqual Nothing m.eventError
+                            , \m -> Expect.equal Nothing m.rendersProblem
+                            ]
+            , test "an unreadable frame for neither watch changes nothing" <|
+                \_ ->
+                    step (Main.JobEventReceived badRenderEvent) (watching (aJob "j1" Api.Running 0.4))
+                        |> Expect.equal (watching (aJob "j1" Api.Running 0.4))
+            , test "an unreadable frame that does not say where it came from ends both watches" <|
+                \_ ->
+                    -- No id is no evidence, and both streams are the same shape
+                    -- from the same server. Guessing is what the previous
+                    -- version did — always in favour of the separation.
+                    watchingBoth
+                        |> step (Main.JobEventReceived anonymousBadEvent)
+                        |> Expect.all
+                            [ \m -> Expect.equal Main.Idle m.separation
+                            , \m -> Expect.equal Nothing m.watchedRender
+                            , \m -> Expect.notEqual Nothing m.eventError
+                            , \m -> Expect.notEqual Nothing m.rendersProblem
+                            ]
+            , test "an anonymous frame with nothing being watched says nothing" <|
+                \_ ->
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+                    in
+                    step (Main.JobEventReceived anonymousBadEvent) fresh
+                        |> Expect.equal fresh
             ]
         , describe "a superseded separation POST"
             [ test "its response is dropped rather than adopted" <|
@@ -239,15 +302,29 @@ suite =
         ]
 
 
-{-| A `Decode.Error` to feed the decode-failure path, produced the same way the
-subscription produces one: by running the real decoder over the wrong shape.
--}
-badEvent : Json.Decode.Error
-badEvent =
-    case Json.Decode.decodeString Api.job "{\"id\":\"j1\"}" of
-        Err err ->
-            err
+{-| An unreadable frame, produced the way the subscription produces one:
+by running `Main.readEvent` — the real function the port is wired to — over the
+wrong shape. It used to build a bare `Decode.Error`, which could not say which
+stream the frame came from; that is now the whole point of the type, so the
+fixture goes through the real reader rather than around it.
 
-        Ok _ ->
-            Json.Decode.Failure "the job decoder accepted a job with no status"
-                (Json.Encode.string "unreachable")
+`id` is `j1`, the job the `watching` model is watching, so this frame is the
+separation's.
+-}
+badEvent : Result Main.BadEvent Api.Job
+badEvent =
+    Main.readEvent (Json.Encode.object [ ( "id", Json.Encode.string "j1" ) ])
+
+
+{-| The same, from the stream a render is being watched on.
+-}
+badRenderEvent : Result Main.BadEvent Api.Job
+badRenderEvent =
+    Main.readEvent (Json.Encode.object [ ( "id", Json.Encode.string "render-job" ) ])
+
+
+{-| And one that does not say where it came from at all.
+-}
+anonymousBadEvent : Result Main.BadEvent Api.Job
+anonymousBadEvent =
+    Main.readEvent (Json.Encode.object [ ( "fraction", Json.Encode.float 0.5 ) ])

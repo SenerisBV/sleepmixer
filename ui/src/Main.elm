@@ -1,5 +1,6 @@
 port module Main exposing
-    ( JobOutcome(..)
+    ( BadEvent
+    , JobOutcome(..)
     , Model
     , Msg(..)
     , SelectOutcome
@@ -10,6 +11,7 @@ port module Main exposing
     , isSeparating
     , jobOutcome
     , main
+    , readEvent
     , separationOnSelect
     , streamFailureFor
     , update
@@ -391,7 +393,7 @@ type Msg
     | GotLoop Int (Result Http.Error Api.LoopRegion)
     | SeparateClicked Bool
     | Separated Int (Result Http.Error Api.Job)
-    | JobEventReceived (Result Decode.Error Api.Job)
+    | JobEventReceived (Result BadEvent Api.Job)
     | JobStreamFailed String
     | OpenMixer
     | CloseMixer
@@ -422,13 +424,51 @@ main =
         }
 
 
+{-| An event that arrived and could not be read as a job.
+
+The id is decoded on its own and leniently, because it is the only thing in an
+unreadable frame that says *which* stream sent it — and `jobEvent` is one
+channel carrying every stream this application opens. Without it a malformed
+frame was charged to the separation whatever its origin: a bad frame on a
+render's stream reset a genuinely running separation to `Idle` and closed its
+stream while Demucs carried on, and wrote its explanation to `eventError`,
+which only the song screen renders. Someone watching the renders screen saw
+nothing at all, and a progress bar that had simply stopped.
+
+`detail` is already a string rather than a `Decode.Error`, so the boundary
+between "JSON went wrong" and "something to say about it" is crossed once, at
+the edge, where `Api.job` is.
+-}
+type alias BadEvent =
+    { jobId : Maybe String
+    , detail : String
+    }
+
+
+{-| One frame off `jobEvent`, strictly as a job or precisely as a failure.
+-}
+readEvent : Decode.Value -> Result BadEvent Api.Job
+readEvent value =
+    case Decode.decodeValue Api.job value of
+        Ok job ->
+            Ok job
+
+        Err err ->
+            Err
+                { jobId =
+                    Decode.decodeValue (Decode.field "id" Decode.string) value
+                        |> Result.toMaybe
+                , detail = Decode.errorToString err
+                }
+
+
 {-| A malformed event surfaces as a `Result` for `update` to handle rather
 than crashing the application.
 -}
 subscriptions : Model -> Sub Msg
 subscriptions _ =
     Sub.batch
-        [ jobEvent (Decode.decodeValue Api.job >> JobEventReceived)
+        [ jobEvent (readEvent >> JobEventReceived)
         , jobStreamFailed JobStreamFailed
         , previewReady (playingLoopSeconds >> PreviewPlaying)
         , previewFailed PreviewFailed
@@ -726,24 +766,8 @@ update msg model =
                     , Cmd.batch [ stopWatchingJob job.id, refetch ]
                     )
 
-        JobEventReceived (Err decodeErr) ->
-            -- Separation started fine; the *event* was unreadable. Its own
-            -- field and its own wording, and a clean exit: leaving
-            -- `separation` alone here is what used to hang the panel at
-            -- "Separating…" with a JSON path dump above it saying separation
-            -- had failed to start.
-            ( { model
-                | separation = Idle
-                , eventError =
-                    Just
-                        ("Lost track of the separation — a progress event could not be read: "
-                            ++ Decode.errorToString decodeErr
-                            ++ "."
-                            ++ stillRunningNote
-                        )
-              }
-            , stopWatching (watchedJobId model.separation)
-            )
+        JobEventReceived (Err bad) ->
+            unreadableEvent bad model
 
         JobStreamFailed jobId ->
             case streamFailureFor jobId model.separation of
@@ -903,9 +927,15 @@ update msg model =
             ( { model | renders = Nothing, rendersProblem = Nothing }, Cmd.none )
 
         GotRenders (Ok renders) ->
-            ( { model | renders = Just (Renders.Loaded renders) }, Cmd.none )
+            -- The jobs are asked for here rather than beside this request, so
+            -- that no row can be paired against a snapshot taken before it
+            -- existed. See `refreshRenders`.
+            ( { model | renders = Just (Renders.Loaded renders) }
+            , Request.jobs GotRenderJobs
+            )
 
         GotRenders (Err err) ->
+            -- No rows to pair, so no reason to ask what is behind them.
             ( { model | renders = Just (Renders.Failed (httpErrorToString err)) }, Cmd.none )
 
         GotRenderJobs (Ok jobs) ->
@@ -915,12 +945,27 @@ update msg model =
             -- render failed, since the render row has no column for one.
             adoptRenderJob (List.filter (\job -> job.kind == "render") jobs) model
 
-        GotRenderJobs (Err _) ->
-            -- Nothing to say on the screen. The renders themselves arrive on
-            -- their own request and carry their own status; what is lost here
-            -- is the progress bar and the cancel button, which the row says
-            -- for itself when it has no job.
-            ( model, Cmd.none )
+        GotRenderJobs (Err err) ->
+            -- Said rather than swallowed. The renders arrive on their own
+            -- request and carry their own status, so the list is still right —
+            -- but every bar and every Cancel button on it is now drawn from a
+            -- snapshot of unknown age, and a stale Cancel is a button that
+            -- stops something other than what it is next to. The previous
+            -- list is kept rather than cleared, because dropping it would
+            -- replace those with the "caught by a restart" paragraph, which
+            -- would be a second wrong answer rather than an honest silence.
+            ( { model
+                | rendersProblem =
+                    Just
+                        ("Could not refresh what is running — "
+                            ++ httpErrorToString err
+                            ++ ". Progress and Cancel on this screen are from an "
+                            ++ "older snapshot until it succeeds; leave and come "
+                            ++ "back to try again."
+                        )
+              }
+            , Cmd.none
+            )
 
         DeleteRenderClicked renderId ->
             ( { model | rendersProblem = Nothing }, Request.deleteRender renderId RenderDeleted )
@@ -958,17 +1003,115 @@ update msg model =
             )
 
 
-{-| Both halves of what the renders screen shows.
+{-| An unreadable frame, charged to whichever stream sent it and to no other.
 
-The renders are the screen; the jobs are what a running row's bar and cancel
-button are made of, and the only place a failed render's reason exists at all.
+The work started fine; the *event* was unreadable. Whichever watch it belongs
+to ends cleanly and says so where that watch is visible — `eventError` is
+rendered by the song screen and `rendersProblem` by the renders screen, so
+writing to the wrong one is the same as saying nothing.
+
+The stream is closed explicitly, unlike the `JobStreamFailed` path: this is a
+frame `events.js` delivered happily and Elm could not read, so the connection is
+still open and still ours, and nothing further can be trusted from it.
+
+When the id itself cannot be read, *both* watches end. A frame with no id is
+not a job event at all, both streams are the same shape from the same server,
+and there is no evidence pointing at either — so the choice is between ending
+both and guessing. Guessing is what the previous version did, always in favour
+of the separation, and it closed healthy ones while Demucs kept running.
+-}
+unreadableEvent : BadEvent -> Model -> ( Model, Cmd Msg )
+unreadableEvent bad model =
+    let
+        lost subject =
+            "Lost track of "
+                ++ subject
+                ++ " — a progress event could not be read: "
+                ++ bad.detail
+                ++ "."
+                ++ stillRunningNote
+
+        endSeparation =
+            ( { model | separation = Idle, eventError = Just (lost "the separation") }
+            , stopWatching (watchedJobId model.separation)
+            )
+
+        endRenderWatch =
+            ( { model | watchedRender = Nothing, rendersProblem = Just (lost "a render") }
+            , stopWatching model.watchedRender
+            )
+    in
+    case bad.jobId of
+        Just jobId ->
+            if watchedJobId model.separation == Just jobId then
+                endSeparation
+
+            else if model.watchedRender == Just jobId then
+                endRenderWatch
+
+            else
+                -- Neither of ours. Nothing to end and nothing to say.
+                ( model, Cmd.none )
+
+        Nothing ->
+            let
+                watchingSeparation =
+                    watchedJobId model.separation /= Nothing
+
+                watchingRender =
+                    model.watchedRender /= Nothing
+            in
+            if not watchingSeparation && not watchingRender then
+                -- Nothing open for it to have come from. Ending watches that
+                -- do not exist and apologising for them would be noise.
+                ( model, Cmd.none )
+
+            else
+                ( { model
+                    | separation =
+                        if watchingSeparation then
+                            Idle
+
+                        else
+                            model.separation
+                    , watchedRender = Nothing
+                    , eventError =
+                        if watchingSeparation then
+                            Just (lost "the separation")
+
+                        else
+                            model.eventError
+                    , rendersProblem =
+                        if watchingRender then
+                            Just (lost "a render")
+
+                        else
+                            model.rendersProblem
+                  }
+                , Cmd.batch
+                    [ stopWatching (watchedJobId model.separation)
+                    , stopWatching model.watchedRender
+                    ]
+                )
+
+
+{-| The renders, and then the jobs behind them.
+
+Two requests, deliberately sequenced rather than batched. Concurrently, the
+jobs response could be served *before* a `POST /api/renders` lands and the
+renders response *after* it, leaving a brand-new row paired against a job
+snapshot that predates it — a queued, perfectly cancellable render wearing the
+"caught by a restart, nothing to cancel" paragraph, and wearing it until the
+user leaves the screen and comes back. Fetching the jobs from `GotRenders`
+means the jobs snapshot is never older than the renders it is paired against.
+
 Fired on entering the screen and after anything that could have changed either
 — which is every delete and every cancel, since a delete refused with a 409
 means the row was staler than the server.
 -}
 refreshRenders : Cmd Msg
 refreshRenders =
-    Cmd.batch [ Request.renders GotRenders, Request.jobs GotRenderJobs ]
+    Request.renders GotRenders
 
 
 refreshRendersIfOpen : Model -> Cmd Msg
@@ -995,7 +1138,10 @@ adoptRenderJob : List Api.Job -> Model -> ( Model, Cmd Msg )
 adoptRenderJob jobs model =
     let
         updated =
-            { model | renderJobs = jobs }
+            { model
+                | renderJobs =
+                    Renders.keepStreamed model.watchedRender model.renderJobs jobs
+            }
     in
     case Renders.liveRenderJob jobs of
         Nothing ->

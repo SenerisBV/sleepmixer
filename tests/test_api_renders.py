@@ -118,6 +118,44 @@ def test_render_records_the_config_that_made_it(client, tmp_path):
     assert render["config"]["output"]["duration_min"] == 0.05
 
 
+def test_a_render_job_names_the_render_it_is_producing(client, tmp_path):
+    """The job says which render it is making, in the envelope and in the list.
+
+    Without it the only join between the two is "the render of this song
+    started around the same time", and that pairing is wrong exactly where it
+    hurts: jobs are held in memory and renders in SQLite, so a server restarted
+    mid-render leaves a render row at ``running`` with no job of its own — and
+    a by-song pairing hands that dead row the *next* render's job. The
+    interface then draws the live render's progress on the dead row and puts
+    the live render's job id on its Cancel button, so cancelling something that
+    finished hours ago kills the render that is actually running and
+    ``_abandon`` deletes its file.
+
+    Asserted on `GET /api/jobs` too, because that is where the renders screen
+    reads it from; the envelope alone would leave the field free to be dropped
+    by ``as_event``.
+    """
+    song = _import_song(client, tmp_path)
+    body = client.post("/api/renders",
+                       json={"song_id": song["id"], "config": _SHORT}).json()
+    assert body["job"]["render_id"] == body["render"]["id"]
+
+    _await_job(client, body["job"]["id"])
+    listed = {j["id"]: j for j in client.get("/api/jobs").json()["jobs"]}
+    assert listed[body["job"]["id"]]["render_id"] == body["render"]["id"]
+
+
+def test_a_separation_job_names_no_render(client, tmp_path):
+    """Null rather than absent: the field is on every job, empty on the ones
+    that produce no render. The Elm decoder requires it and allows null, so a
+    server that stopped sending it fails loudly instead of decoding to the
+    "this render has no job" case it cannot be distinguished from."""
+    song = _import_song(client, tmp_path)
+    job = client.post(f"/api/songs/{song['id']}/separate").json()
+    assert "render_id" in job
+    assert job["render_id"] is None
+
+
 def test_listing_renders(client, tmp_path):
     song = _import_song(client, tmp_path)
     body = client.post("/api/renders",
