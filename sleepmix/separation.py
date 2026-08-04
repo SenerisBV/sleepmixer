@@ -72,6 +72,12 @@ def separate_detailed(
     reason: str | None = None
     try:
         stems = _demucs_separate(input_path, model)
+    except MemoryError:
+        # Not a statement about whether Demucs is installed — running out of
+        # memory inside the worker must surface as a crash (SeparationFailed,
+        # via the process exiting non-zero), not as a one-stem 'mix' that the
+        # parent cannot tell apart from "the separation extra isn't there".
+        raise
     except Exception as exc:  # noqa: BLE001 - intentional broad fallback
         reason = (
             f"Demucs separation unavailable ({exc}); using the full mix as a "
