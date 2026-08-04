@@ -36,6 +36,37 @@ each of those choices.
 
 **What it deliberately does not do yet — all of it Plan 3b:**
 
+- **Nothing in the interface plays audio, and nothing says so.** This is the
+  gap that actually bit during testing. `Page.Song` announces "separated" with
+  four stem names and then offers no next action — no preview, no render, no
+  player. Grep `ui/src` for anything audio-related and you get three code
+  comments. The API can do all of it (`POST /api/preview` returns WAV bytes in
+  well under a second once a session is warm; `POST /api/renders` produces a
+  file), but no view calls those endpoints. A reasonable person separates a
+  song, finds no way to hear anything, and concludes the tool is broken. Until
+  Plan 3b lands, the song view should say plainly that preview and render
+  arrive later — announcing success while offering nothing is worse than
+  announcing nothing.
+
+- **Orphaned `running` rows survive a server restart.** `separation_status` is
+  set to `running` before the job starts, and only a terminal status or one of
+  `separate_song`'s two exception handlers clears it. Process death bypasses
+  both, so killing or suspending the server mid-separation leaves the song
+  claiming to separate forever, with no job behind it — the in-memory
+  `JobManager` died with the process. Observed in practice: two rows stranded
+  at `running` after a `Ctrl-Z`, which suspends rather than kills and looks
+  identical to having exited. The fix is small and belongs at startup: the job
+  manager is in-memory, so **any `running` row at boot is definitionally
+  orphaned** and should be reset to `pending`. Plan 2b fixed this class of bug
+  for exceptions; process death is the case that was missed.
+
+- **No warning about how long a large import will take.** A 70-minute file
+  imports instantly and then queues a separation that takes a very long time
+  and holds several gigabytes — measured at 6.2 GB resident for one such job.
+  Jobs run one at a time by design, so a single large file blocks every
+  smaller one behind it, and the interface shows neither an estimate nor the
+  queue depth. `GET /api/jobs` lists them, but no view renders it.
+
 - **No loop region on the waveform, and no route that could draw one.** The
   spec's Song view asks for the detected loop region marked plus a tempo
   readout, and Plan 3a's goal line promised "see its waveform and detected
