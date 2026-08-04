@@ -18,5 +18,9 @@ venv/
 .pytest_cache/
 .DS_Store
 
+# Elm build cache — sleepmix/static/app.js, events.js and app.js.sha256 are
+# committed artefacts, not this.
+ui/elm-stuff/
+
 # Working notes from the planning workflow — drafts, not published docs.
 .superpowers/
