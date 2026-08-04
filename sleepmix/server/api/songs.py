@@ -12,7 +12,9 @@ import os
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from ...analysis import find_loop
 from ...audio import load_audio
+from ...config import LoopConfig
 from ...paths import cache_dir
 from ...peaks import compute_peaks
 from ...progress import Cancelled
@@ -70,6 +72,38 @@ def get_peaks(
             detail=f"Source file unavailable — it has moved or been deleted: {song['path']}")
     buf = load_audio(song["path"])
     return {"peaks": compute_peaks(buf, buckets), "duration_s": buf.duration}
+
+
+@router.get("/{song_id}/loop")
+def get_loop(
+    song_id: str,
+    request: Request,
+    start_s: float | None = None,
+    end_s: float | None = None,
+) -> dict:
+    """The loop region a render would use, in seconds, plus the tempo estimate.
+
+    Runs on the whole file rather than on separated stems, so it answers before
+    separation and needs no warm session. Passing ``start_s``/``end_s`` echoes
+    that region back with a tempo — which is what the UI does once you have
+    dragged the handles, so the readout stays consistent with what a render
+    would actually loop."""
+    song = request.app.state.store.get_song(song_id)
+    if song is None:
+        raise HTTPException(status_code=404, detail="No such song")
+    if not os.path.isfile(song["path"]):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source file unavailable — it has moved or been deleted: {song['path']}")
+
+    buf = load_audio(song["path"])
+    config = LoopConfig(start_s=start_s, end_s=end_s)
+    point = find_loop(buf, config)
+    return {
+        "start_s": point.start / buf.sr,
+        "end_s": point.end / buf.sr,
+        "tempo": point.tempo,
+    }
 
 
 @router.post("/{song_id}/separate", status_code=202)
