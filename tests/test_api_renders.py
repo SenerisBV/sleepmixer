@@ -111,3 +111,25 @@ def test_render_rejects_a_negative_seed(client, tmp_path):
     r = client.post("/api/renders",
                     json={"song_id": song["id"], "config": {"seed": -3}})
     assert r.status_code == 400
+
+
+def test_a_failed_render_is_marked_failed_even_after_a_cancel(client, tmp_path, monkeypatch):
+    """The row must agree with the job about what happened.
+
+    Classifying by a cancel flag rather than by exception type mislabels a
+    genuine failure as a cancellation whenever the token happens to be set."""
+    import sleepmix.server.api.renders as renders_api
+
+    def boom(*_a, **_k):
+        raise RuntimeError("pipeline exploded")
+
+    monkeypatch.setattr(renders_api, "run_pipeline", boom)
+    song = _import_song(client, tmp_path)
+    body = client.post("/api/renders",
+                       json={"song_id": song["id"], "config": _SHORT}).json()
+    finished = _await_job(client, body["job"]["id"])
+    assert finished["status"] == "failed"
+
+    render = client.get(f"/api/renders/{body['render']['id']}").json()
+    assert render["status"] == "failed"
+    assert client.get(f"/api/renders/{body['render']['id']}/audio").status_code == 404
