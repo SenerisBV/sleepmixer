@@ -69,8 +69,9 @@
      Left scoped rather than made a bare `.back` because `.song-view` has no
      other rule, and dropping the scope would leave that class styling nothing
      — trading this blind spot for the one the coverage test does catch. A
-     third screen with a back button needs a third selector here. */
-  .song-view .back, .mixer .back { margin-bottom: 1.25rem; }
+     third screen with a back button needs a third selector here.
+     The renders screen is that third one, added below with its own screen. */
+  .song-view .back, .mixer .back, .renders .back { margin-bottom: 1.25rem; }
   .waveform { display: block; width: 100%; margin: 1rem 0 1.5rem;
               background: #101115; border: 1px solid var(--line);
               border-radius: 5px; }
@@ -154,6 +155,62 @@
                  font-variant-numeric: tabular-nums; }
   .field-box { flex: 0 1 7rem; min-width: 0; }
   .field-select { flex: 0 1 12rem; min-width: 0; }
+
+  /* The way out of the library and into anything that is not a song. One rule
+     for the strip; the buttons in it are ordinary buttons. */
+  .nav { display: flex; gap: .5rem; margin-bottom: 1rem; }
+
+  /* Renders. Six mixes of the same song carry the same title, so the row is
+     built around what tells them apart: the length, the stems and where the
+     decay ends. The whole config folds out underneath.
+     Every selector here is scoped under `.renders` except the four generic
+     ones at the end (`.download`, `.delete`, `.cancel`, and the progress bar,
+     which is shared with the separation panel) — the mistake this file has
+     already made once is a rule scoped to the screen it was written for and a
+     class emitted on a different one. */
+  .renders h2 { margin-bottom: 1rem; }
+  .renders .render-list { border-top: 1px solid var(--line); }
+  .renders .render-row { border-bottom: 1px solid var(--line); padding: .9rem .25rem; }
+  .renders .render-head { display: flex; align-items: baseline; gap: 1rem; }
+  .renders .render-title { flex: 1; min-width: 0; font-weight: 600;
+                           letter-spacing: .02em; overflow: hidden;
+                           text-overflow: ellipsis; white-space: nowrap; }
+  .renders .render-status { color: var(--dim); }
+  /* Its own class rather than reusing `.error`: both are single-class
+     selectors, so whichever this file states last would win, and a failed
+     render reading in the same grey as a queued one is exactly the kind of
+     silence the rest of this interface is built to avoid. */
+  .renders .render-bad { color: #f7768e; }
+  .renders .render-when { color: var(--dim); font-variant-numeric: tabular-nums;
+                          font-size: .9rem; white-space: nowrap; }
+  .renders .render-summary { display: flex; flex-wrap: wrap; gap: .2rem 1.25rem;
+                             color: var(--dim); font-size: .9rem;
+                             margin: .3rem 0 .5rem; }
+  .renders .render-fact { white-space: nowrap; }
+  .renders .render-actions { display: flex; align-items: center; gap: .75rem;
+                             flex-wrap: wrap; margin: .5rem 0; }
+  /* The audition. A plain <audio controls> streaming from
+     /api/renders/{id}/audio — half an hour of WAV is ~300 MB decoded, which is
+     what the Web Audio port would do to loop it, and this needs no JavaScript
+     at all. Height comes from the browser's own controls; only the width is
+     ours, so it does not stretch to the full page on a wide window. */
+  .renders .render-audio { display: block; width: 100%; max-width: 34rem;
+                           margin: .5rem 0 .25rem; }
+  .renders .render-config { margin-top: .4rem; }
+  .renders .render-json { margin: .25rem 0 0; padding: .6rem .75rem;
+                          background: #101115; border: 1px solid var(--line);
+                          border-radius: 5px; color: var(--dim);
+                          font-size: .82rem; line-height: 1.45;
+                          max-height: 22rem; overflow: auto;
+                          white-space: pre; }
+
+  /* Emitted inside `.render-actions` today and deliberately left unscoped:
+     these describe a kind of action rather than a screen, and the next screen
+     with a Cancel button should not need a fourth selector written for it. */
+  .download { color: var(--accent); text-decoration: underline;
+              text-underline-offset: .2em; }
+  .download:hover { color: var(--fg); }
+  .delete, .cancel { font-size: .85rem; padding: .2rem .6rem; }
 </style>
 <div id="app"></div>
 <script src="/static/app.js"></script>

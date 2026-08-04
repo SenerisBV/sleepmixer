@@ -30,13 +30,15 @@ parameters out and receives outcomes back; it never touches audio bytes.
 import Api
 import Browser
 import Config
-import Html exposing (Html, div, h1, p, text)
+import Html exposing (Html, button, div, h1, p, text)
 import Html.Attributes exposing (class)
+import Html.Events exposing (onClick)
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Page.Library as Library
 import Page.Mixer as Mixer
+import Page.Renders as Renders
 import Page.Song
 import Preview
 import Request
@@ -197,6 +199,10 @@ type alias Model =
     , loopError : Maybe String
     , settings : Settings
     , mixer : Maybe Mixer.State
+    , renders : Maybe Renders.State
+    , renderJobs : List Api.Job
+    , watchedRender : Maybe String
+    , rendersProblem : Maybe String
     , preview : Preview.State
     , previewError : Maybe String
     , loopSeconds : Maybe Float
@@ -312,26 +318,47 @@ The mixer's own state *is* the mixer being open: it exists only while the
 screen does, and `leaveMixer` throws it away and stops the audio in the same
 step. There is no way to be on the mixer with nothing to mix, and no way to
 leave it while a preview keeps looping underneath the library.
+
+`renders` is the same argument again: the fetch behind the renders screen
+exists only while that screen does, so `Nothing` *is* "the screen is closed"
+and there is no way to be on it showing the list from the last time it was
+open. Entering it goes through `leaveMixer`, so a preview cannot go on looping
+underneath it either.
+
+What is deliberately *not* thrown away when it closes is `renderJobs` and
+`watchedRender`: a render keeps going whether or not anyone is looking at it,
+and dropping the watch would orphan the event stream — the same mistake
+`separationOnSelect` exists to prevent one screen along.
 -}
 type Route
     = Library
+    | RendersView Renders.State
     | SongView String
     | MixerView Mixer.State
 
 
+{-| The renders screen is checked first because it is the only one that can be
+open over a selected song: it is reached from anywhere, and closing it puts you
+back where you were rather than at the library.
+-}
 routeFor : Model -> Route
 routeFor model =
-    case model.mixer of
+    case model.renders of
         Just state ->
-            MixerView state
+            RendersView state
 
         Nothing ->
-            case model.selectedSongId of
-                Nothing ->
-                    Library
+            case model.mixer of
+                Just state ->
+                    MixerView state
 
-                Just songId ->
-                    SongView songId
+                Nothing ->
+                    case model.selectedSongId of
+                        Nothing ->
+                            Library
+
+                        Just songId ->
+                            SongView songId
 
 
 {-| How many peak buckets to ask for. 200 buckets across the 960px-wide
@@ -375,6 +402,14 @@ type Msg
     | RetryPreview
     | PreviewPlaying (Maybe Float)
     | PreviewFailed String
+    | OpenRenders
+    | CloseRenders
+    | GotRenders (Result Http.Error (List Api.Render))
+    | GotRenderJobs (Result Http.Error (List Api.Job))
+    | DeleteRenderClicked String
+    | RenderDeleted (Result Http.Error ())
+    | CancelRenderClicked String
+    | RenderCancelSent (Result Http.Error Api.Job)
 
 
 main : Program () Model Msg
@@ -430,6 +465,10 @@ init _ =
       , loopError = Nothing
       , settings = SettingsLoading
       , mixer = Nothing
+      , renders = Nothing
+      , renderJobs = []
+      , watchedRender = Nothing
+      , rendersProblem = Nothing
       , preview = Preview.Cold
       , previewError = Nothing
       , loopSeconds = Nothing
@@ -664,7 +703,12 @@ update msg model =
         JobEventReceived (Ok incoming) ->
             case jobOutcome incoming model.separation of
                 Ignored ->
-                    ( model, Cmd.none )
+                    -- Not the separation's. `jobEvent` is one channel carrying
+                    -- every stream this application opens, and the renders
+                    -- screen opens one too — so an event nothing here is
+                    -- watching falls through to the only other watcher there
+                    -- is, which ignores it in turn unless it is theirs.
+                    renderJobEvent incoming model
 
                 Tracking job ->
                     ( { model | separation = Watching job }, Cmd.none )
@@ -704,7 +748,24 @@ update msg model =
         JobStreamFailed jobId ->
             case streamFailureFor jobId model.separation of
                 StreamIrrelevant ->
-                    ( model, Cmd.none )
+                    if model.watchedRender == Just jobId then
+                        -- `events.js` has already closed and forgotten it, so
+                        -- there is nothing to stop watching. The render is
+                        -- still on the worker; the row keeps its status and
+                        -- loses only its bar.
+                        ( { model
+                            | watchedRender = Nothing
+                            , rendersProblem =
+                                Just
+                                    ("Lost the progress stream for a render — it stopped reporting before it finished."
+                                        ++ stillRunningNote
+                                    )
+                          }
+                        , Cmd.none
+                        )
+
+                    else
+                        ( model, Cmd.none )
 
                 StreamLost _ ->
                     -- `events.js` has already closed and forgotten this
@@ -823,6 +884,158 @@ update msg model =
               }
             , sendPreview toSend
             )
+
+        OpenRenders ->
+            -- Through `leaveMixer` rather than beside it: a preview loops until
+            -- something stops it, and a mixer left open under this screen would
+            -- go on playing with nothing on screen to stop it.
+            let
+                ( closed, stopped ) =
+                    leaveMixer model
+            in
+            ( { closed | renders = Just Renders.Loading, rendersProblem = Nothing }
+            , Cmd.batch [ stopped, refreshRenders ]
+            )
+
+        CloseRenders ->
+            -- The list goes; the watch stays. The render is on the server's
+            -- worker and keeps going, and its stream is still ours.
+            ( { model | renders = Nothing, rendersProblem = Nothing }, Cmd.none )
+
+        GotRenders (Ok renders) ->
+            ( { model | renders = Just (Renders.Loaded renders) }, Cmd.none )
+
+        GotRenders (Err err) ->
+            ( { model | renders = Just (Renders.Failed (httpErrorToString err)) }, Cmd.none )
+
+        GotRenderJobs (Ok jobs) ->
+            -- The snapshot the rows are paired against, plus whichever of them
+            -- is worth an event stream. A failed job is kept in the list as
+            -- well as a live one: its `error` is the only record of why a
+            -- render failed, since the render row has no column for one.
+            adoptRenderJob (List.filter (\job -> job.kind == "render") jobs) model
+
+        GotRenderJobs (Err _) ->
+            -- Nothing to say on the screen. The renders themselves arrive on
+            -- their own request and carry their own status; what is lost here
+            -- is the progress bar and the cancel button, which the row says
+            -- for itself when it has no job.
+            ( model, Cmd.none )
+
+        DeleteRenderClicked renderId ->
+            ( { model | rendersProblem = Nothing }, Request.deleteRender renderId RenderDeleted )
+
+        RenderDeleted (Ok ()) ->
+            ( model, refreshRenders )
+
+        RenderDeleted (Err err) ->
+            -- Re-fetched as well as reported: the 409 means this row's status
+            -- is older than the server's, and the message tells the user to
+            -- cancel a render the row may already be showing as finished.
+            ( { model
+                | rendersProblem = Just (Renders.deleteMessage err (httpErrorToString err))
+              }
+            , refreshRenders
+            )
+
+        CancelRenderClicked jobId ->
+            ( { model | rendersProblem = Nothing }, Request.cancelJob jobId RenderCancelSent )
+
+        RenderCancelSent (Ok job) ->
+            -- Cancelling is a request, not an outcome: the worker stops at its
+            -- next check, and the render row flips to `cancelled` after that.
+            -- The re-fetch here shows the job's own new status; the row's
+            -- follows over the event stream.
+            ( { model | renderJobs = Renders.replaceJob job model.renderJobs }
+            , refreshRenders
+            )
+
+        RenderCancelSent (Err err) ->
+            ( { model
+                | rendersProblem = Just ("Could not cancel that render — " ++ httpErrorToString err)
+              }
+            , refreshRenders
+            )
+
+
+{-| Both halves of what the renders screen shows.
+
+The renders are the screen; the jobs are what a running row's bar and cancel
+button are made of, and the only place a failed render's reason exists at all.
+Fired on entering the screen and after anything that could have changed either
+— which is every delete and every cancel, since a delete refused with a 409
+means the row was staler than the server.
+-}
+refreshRenders : Cmd Msg
+refreshRenders =
+    Cmd.batch [ Request.renders GotRenders, Request.jobs GotRenderJobs ]
+
+
+refreshRendersIfOpen : Model -> Cmd Msg
+refreshRendersIfOpen model =
+    case model.renders of
+        Just _ ->
+            refreshRenders
+
+        Nothing ->
+            Cmd.none
+
+
+{-| Take the polled job list, and hold one stream open over the job that is
+actually moving.
+
+Only one, and only ever one: `events.js` opens a connection per job and the
+manager fans out per subscriber, so a screen with ten rows watching ten streams
+would be ten connections to report one worker's progress. Re-adopting the job
+already being watched is a no-op rather than a reconnect — `watchJob` is
+idempotent on the JavaScript side, but saying so here keeps the model's
+`watchedRender` meaning exactly "the stream we own".
+-}
+adoptRenderJob : List Api.Job -> Model -> ( Model, Cmd Msg )
+adoptRenderJob jobs model =
+    let
+        updated =
+            { model | renderJobs = jobs }
+    in
+    case Renders.liveRenderJob jobs of
+        Nothing ->
+            ( updated, Cmd.none )
+
+        Just live ->
+            if model.watchedRender == Just live.id then
+                ( updated, Cmd.none )
+
+            else
+                ( { updated | watchedRender = Just live.id }
+                , Cmd.batch [ stopWatching model.watchedRender, watchJob live.id ]
+                )
+
+
+{-| An event for the render we are streaming.
+
+The finished job is kept rather than dropped: a `Failed` job carries the only
+description of what went wrong that exists anywhere, and the row it belongs to
+is about to be re-fetched as `failed` with nothing of its own to say. The
+re-fetch also re-polls the job list, which is what picks up the next queued
+render and starts watching that instead.
+-}
+renderJobEvent : Api.Job -> Model -> ( Model, Cmd Msg )
+renderJobEvent incoming model =
+    if model.watchedRender /= Just incoming.id then
+        ( model, Cmd.none )
+
+    else
+        let
+            updated =
+                { model | renderJobs = Renders.replaceJob incoming model.renderJobs }
+        in
+        if Api.isFinished incoming.status then
+            ( { updated | watchedRender = Nothing }
+            , Cmd.batch [ stopWatchingJob incoming.id, refreshRendersIfOpen model ]
+            )
+
+        else
+            ( updated, Cmd.none )
 
 
 {-| What to re-fetch once a job reaches a terminal status.
@@ -1040,6 +1253,9 @@ view model =
             Library ->
                 libraryView model
 
+            RendersView state ->
+                rendersView model state
+
             SongView songId ->
                 songView model songId
 
@@ -1048,10 +1264,39 @@ view model =
         ]
 
 
+{-| The renders screen, and the song list's way into it.
+
+The songs come from the library fetch that has already happened rather than
+from one of this screen's own: a render carries a `song_id` and nothing else
+about the song it came from, and `Page.Renders.titleFor` is what turns that
+back into a title — or leaves it as the id, for a song that has since been
+removed out from under a render that outlived it.
+-}
+rendersView : Model -> Renders.State -> Html Msg
+rendersView model state =
+    Renders.view
+        { state = state
+        , songs =
+            case model.library of
+                Library.Loaded songs ->
+                    songs
+
+                _ ->
+                    []
+        , jobs = model.renderJobs
+        , problem = model.rendersProblem
+        , onDelete = DeleteRenderClicked
+        , onCancel = CancelRenderClicked
+        , onBack = CloseRenders
+        }
+
+
 libraryView : Model -> Html Msg
 libraryView model =
     div []
-        [ Library.view
+        [ div [ class "nav" ]
+            [ button [ onClick OpenRenders ] [ text "Renders" ] ]
+        , Library.view
             { state = model.library
             , pathInput = model.pathInput
             , importing = model.importing
