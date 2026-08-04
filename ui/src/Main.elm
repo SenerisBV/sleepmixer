@@ -883,12 +883,19 @@ andThen next ( model, cmd ) =
 
 {-| Every change the mixer can make, in one place.
 
-Note what is *not* here: any test of whether a request should go out. The
+Note what is *not* here: any test of whether a request should go out *yet*. The
 scrubber emits a message per pixel of drag and each one arrives here; which of
 them reaches the server is `Preview.request`'s decision alone, and this passes
 on whatever it hands back. A condition of the form "only if nothing is in
 flight" written here would be the same logic in a place `elm-test` cannot
 reach, which is the whole argument for `Preview.elm` existing.
+
+`everyStemDisabled` is a different question and not an exception to that one.
+It is not about timing or coalescing — it is that the config now describes a
+mix of nothing, which the server refuses with a 400 (`preview.render_window`).
+Sending it anyway would turn an unticked checkbox into a preview that appears
+to break. The predicate lives in `Page.Mixer` beside the config it reads, so it
+is as testable as anything in `Preview`; only the choice to consult it is here.
 -}
 withMixer : (Mixer.State -> Mixer.State) -> Model -> ( Model, Cmd Msg )
 withMixer change model =
@@ -900,11 +907,20 @@ withMixer change model =
             let
                 updated =
                     change state
-
-                ( preview, toSend ) =
-                    Preview.request (Mixer.params updated) model.preview
             in
-            ( { model | mixer = Just updated, preview = preview }, sendPreview toSend )
+            if Mixer.everyStemDisabled updated then
+                -- The mixer says so on screen, and the last preview keeps
+                -- looping — the alternative is a request we know comes back
+                -- 400, and an error line blaming the server for a choice the
+                -- user just made.
+                ( { model | mixer = Just updated }, Cmd.none )
+
+            else
+                let
+                    ( preview, toSend ) =
+                        Preview.request (Mixer.params updated) model.preview
+                in
+                ( { model | mixer = Just updated, preview = preview }, sendPreview toSend )
 
 
 sendPreview : Maybe Preview.Params -> Cmd msg

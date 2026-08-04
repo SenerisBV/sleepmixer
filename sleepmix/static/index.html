@@ -61,7 +61,16 @@
                         text-overflow: ellipsis; white-space: nowrap; }
 
   /* Song view */
-  .song-view .back { margin-bottom: 1.25rem; }
+  /* Both screens, named. `.back` is emitted by `.song-view` and by `.mixer`,
+     and this rule was scoped to the first only — so the mixer's back button
+     had no margin at all and sat against the title. The class-coverage test
+     cannot catch that: it proves a rule exists somewhere for a class, not that
+     the rule applies where the class is emitted.
+     Left scoped rather than made a bare `.back` because `.song-view` has no
+     other rule, and dropping the scope would leave that class styling nothing
+     — trading this blind spot for the one the coverage test does catch. A
+     third screen with a back button needs a third selector here. */
+  .song-view .back, .mixer .back { margin-bottom: 1.25rem; }
   .waveform { display: block; width: 100%; margin: 1rem 0 1.5rem;
               background: #101115; border: 1px solid var(--line);
               border-radius: 5px; }

@@ -152,6 +152,45 @@ suite =
                             (stemField 0 "decay" keysOf)
                             [ "amp_end_db", "enabled", "lowpass_start_hz" ]
             ]
+        , describe "the fields that are not numbers"
+            -- Every other `Config.set` in this file is numeric or deliberately
+            -- invalid, so until these existed *no* test set a valid value on a
+            -- `StringChoiceField`, an `IntChoiceField` or a `TextField`.
+            -- Inverting `memberOf`, or making `parse` return `Nothing` for a
+            -- choice field, left the suite green while every `<select>` in the
+            -- mixer silently deleted its key: pick `exp` and the control snaps
+            -- back to `linear`, which is also the default, so nothing appears
+            -- to have happened — and the render uses `linear`.
+            [ test "a curve the schema does offer is kept" <|
+                \_ ->
+                    config
+                        |> Config.set Fixtures.schema (Config.InStemDecay 0 "curve") "exp"
+                        |> expect
+                            (stemField 0 "decay" (Decode.field "curve" Decode.string))
+                            "exp"
+            , test "so is a choice from a different string select" <|
+                \_ ->
+                    config
+                        |> Config.set Fixtures.schema (Config.InSection "soundbed" "noise_type") "brown"
+                        |> expect (Decode.at [ "soundbed", "noise_type" ] Decode.string) "brown"
+            , test "an integer choice is kept, and stays an integer" <|
+                \_ ->
+                    -- `output.sample_rate` and `output.channels` index buffers
+                    -- on the server; a float there fails deep rather than here.
+                    config
+                        |> Config.set Fixtures.schema (Config.InSection "output" "sample_rate") "22050"
+                        |> expect (Decode.at [ "output", "sample_rate" ] Decode.int) 22050
+            , test "an integer choice the schema does not offer is refused" <|
+                \_ ->
+                    config
+                        |> Config.set Fixtures.schema (Config.InSection "output" "sample_rate") "96000"
+                        |> expect (Decode.field "output" keysOf) [ "channels", "duration_min" ]
+            , test "a text field keeps what was typed into it" <|
+                \_ ->
+                    config
+                        |> Config.set Fixtures.schema (Config.Top "separation_model") "htdemucs"
+                        |> expect (Decode.field "separation_model" Decode.string) "htdemucs"
+            ]
         , describe "bounds"
             [ test "a negative seed cannot be constructed from the UI's own controls" <|
                 \_ ->

@@ -5,8 +5,9 @@ module Preview exposing
 
 {-| When to ask the server for a preview, and when not to.
 
-Previews serialize per song — measured at 117 seconds cold and 73 milliseconds
-warm — because the server holds a per-song lock across the whole render. A
+Previews serialize per song — minutes cold against milliseconds warm, with the
+measurements and what each of them includes in `docs/architecture.md` — because
+the server holds a per-song lock across the whole render. A
 scrubber drag emits dozens of events, so firing one request each would queue
 dozens of renders behind one another and hold a threadpool thread for every
 one of them.
@@ -65,7 +66,7 @@ type State
 
 
 {-| Playable once the first preview has returned. Until then the session may
-still be building stems and a stretched loop, which is the 117-second path.
+still be building stems and a stretched loop, which is the slow path.
 -}
 isPlayable : State -> Bool
 isPlayable state =

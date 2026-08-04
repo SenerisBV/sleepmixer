@@ -16,8 +16,10 @@ from the state `Preview` hands back and nothing else.
 -}
 
 import Api
+import Config
 import Expect
 import Fixtures
+import Json.Decode as Decode
 import Main
 import Page.Mixer as Mixer
 import Preview
@@ -94,10 +96,177 @@ phase state =
             "Queued"
 
 
+{-| What a preview built from this model would actually carry, decoded out of
+the encoded config along the paths `MixConfig.from_dict` walks.
+
+`Mixer.params` is where a control change stops being a model update and starts
+being a request, so asserting here rather than on `state.config` is what makes
+these tests about the button rather than about the setter behind it.
+-}
+carried : Decode.Decoder a -> Main.Model -> Maybe (Result Decode.Error a)
+carried decoder model =
+    model.mixer
+        |> Maybe.map (Mixer.params >> .config >> Decode.decodeValue decoder)
+
+
+stemField : Int -> String -> Decode.Decoder a -> Decode.Decoder a
+stemField index key decoder =
+    Decode.field "stems" (Decode.index index (Decode.field key decoder))
+
+
+{-| Untick (or retick) the Enabled box on the stem in row `index`, as the
+generated checkbox does.
+-}
+enabling : Int -> Bool -> Main.Msg
+enabling index on =
+    Main.FieldToggled (Config.InStem index "enabled") on
+
+
+{-| Back to a state where a change would be sent, so that "nothing was sent"
+is observable rather than hidden behind a request that was already queued.
+-}
+idle : Main.Model -> Main.Model
+idle model =
+    { model | preview = Preview.Idle }
+
+
+{-| Two of `warm`'s three stems switched off. -}
+oneStemLeft : Main.Model
+oneStemLeft =
+    idle (warm |> step (enabling 0 False) |> step (enabling 1 False))
+
+
+{-| And the third. -}
+everyStemOff : Main.Model
+everyStemOff =
+    idle (oneStemLeft |> step (enabling 2 False))
+
+
 suite : Test
 suite =
     describe "the mixer"
-        [ describe "solo"
+        [ describe "the controls, driven through `update`"
+            -- These exist because replacing `SoloToggled`, `FieldChanged` and
+            -- `FieldToggled` with `( model, Cmd.none )` — every solo button and
+            -- every generated control inert — used to leave the whole suite
+            -- green. `Mixer.toggleSolo` and `Mixer.params` were called
+            -- directly and the button path was never touched.
+            [ test "a typed or dragged value reaches the config a preview carries" <|
+                \_ ->
+                    warm
+                        |> step (Main.FieldChanged (Config.InStem 1 "gain_db") "-6.5")
+                        |> carried (stemField 1 "gain_db" Decode.float)
+                        |> Expect.equal (Just (Ok -6.5))
+            , test "and that value goes out" <|
+                \_ ->
+                    warm
+                        |> step (Main.FieldChanged (Config.InStem 1 "gain_db") "-6.5")
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "InFlight"
+            , test "a checkbox reaches it too" <|
+                \_ ->
+                    warm
+                        |> step (enabling 1 False)
+                        |> carried (stemField 1 "enabled" Decode.bool)
+                        |> Expect.equal (Just (Ok False))
+            , test "and that checkbox goes out" <|
+                \_ ->
+                    warm
+                        |> step (enabling 1 False)
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "InFlight"
+            , test "a solo button reaches the stems a preview carries" <|
+                \_ ->
+                    warm
+                        |> step (Main.SoloToggled "drums")
+                        |> .mixer
+                        |> Maybe.map (Mixer.params >> .stems)
+                        |> Expect.equal (Just [ "drums" ])
+            , test "and that solo goes out" <|
+                \_ ->
+                    warm
+                        |> step (Main.SoloToggled "drums")
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "InFlight"
+            ]
+        , describe "switching off the stem that is soloed"
+            -- The Solo button is disabled on a switched-off stem, which closes
+            -- one order only. Solo first, then untick Enabled, and the request
+            -- asks for a mix of exactly one disabled stem — 200 and a 48-byte
+            -- WAV before the server started refusing it, and still a request
+            -- with no answer worth playing.
+            [ test "clears the solo rather than reporting an impossible one" <|
+                \_ ->
+                    mixer
+                        |> Mixer.toggleSolo "drums"
+                        |> Mixer.toggleField (Config.InStem 1 "enabled") False
+                        |> Mixer.soloedStems
+                        |> Expect.equal []
+            , test "through the button path as well" <|
+                \_ ->
+                    warm
+                        |> step (Main.SoloToggled "drums")
+                        |> step (enabling 1 False)
+                        |> .mixer
+                        |> Maybe.map (Mixer.params >> .stems)
+                        |> Expect.equal (Just [])
+            , test "switching off a different stem leaves the solo alone" <|
+                \_ ->
+                    mixer
+                        |> Mixer.toggleSolo "drums"
+                        |> Mixer.toggleField (Config.InStem 0 "enabled") False
+                        |> Mixer.soloedStems
+                        |> Expect.equal [ "drums" ]
+            , test "and switching one back on does not invent a solo" <|
+                \_ ->
+                    mixer
+                        |> Mixer.toggleField (Config.InStem 1 "enabled") True
+                        |> Mixer.soloedStems
+                        |> Expect.equal []
+            ]
+        , describe "switching off every stem"
+            -- The server refuses this with a 400 rather than playing the full
+            -- default mix, which is what it used to do. A refusal that arrives
+            -- after the request still reads as a preview that broke, so the
+            -- request is not sent and the mixer says why.
+            [ test "the mixer knows there is nothing left to render" <|
+                \_ ->
+                    everyStemOff.mixer
+                        |> Maybe.map Mixer.everyStemDisabled
+                        |> Expect.equal (Just True)
+            , test "one still on is not that state" <|
+                \_ ->
+                    oneStemLeft.mixer
+                        |> Maybe.map Mixer.everyStemDisabled
+                        |> Expect.equal (Just False)
+            , test "a change with one stem left goes out" <|
+                \_ ->
+                    -- The control for the assertion below: same model, same
+                    -- message, one stem's difference.
+                    oneStemLeft
+                        |> step (Main.ProgressChanged "0.5")
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "InFlight"
+            , test "and with none left, nothing is sent" <|
+                \_ ->
+                    everyStemOff
+                        |> step (Main.ProgressChanged "0.5")
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "Idle"
+            , test "though the change is still kept, so switching one back on plays it" <|
+                \_ ->
+                    everyStemOff
+                        |> step (Main.ProgressChanged "0.5")
+                        |> .mixer
+                        |> Maybe.map .progress
+                        |> Expect.equal (Just 0.5)
+            ]
+        , describe "solo"
             [ test "nothing soloed asks for no stems in particular" <|
                 \_ ->
                     -- Not "every stem, listed": `Preview.encode` omits an

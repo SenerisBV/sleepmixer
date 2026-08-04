@@ -1,6 +1,6 @@
 module Page.Mixer exposing
     ( State
-    , init, loopOverride, params, setField, setProgress, soloedStems, toggleField, toggleSolo
+    , everyStemDisabled, init, loopOverride, params, setField, setProgress, soloedStems, toggleField, toggleSolo
     , view
     )
 
@@ -17,10 +17,11 @@ carrying whatever bounds the schema does state.
 
 The screen is inert until the first preview returns, and says so. That first
 render is the expensive one — the loop is sliced out of every stem and
-time-stretched, which is the difference between 117 seconds and 73
-milliseconds — and it is also what `preview.master_gain` calibrates from, so
-until it has happened there is no level to play anything at. `Preview.isPlayable`
-is the single guard; nothing here decides for itself whether it is usable.
+time-stretched, minutes against milliseconds; `docs/architecture.md` carries
+the measurements and what each of them includes — and it is also what
+`preview.master_gain` calibrates from, so until it has happened there is no
+level to play anything at. `Preview.isPlayable` is the single guard; nothing
+here decides for itself whether it is usable.
 
 -}
 
@@ -129,9 +130,72 @@ setField schema target raw state =
     { state | config = Config.set schema target raw state.config }
 
 
+{-| Apply a checkbox, and drop a solo the checkbox has just invalidated.
+
+Switching off the stem that is currently soloed asks the server for a mix of
+exactly nothing. The Solo button is disabled on a switched-off stem, which
+closes the solo-second order and nothing else: solo first, then uncheck
+Enabled, and the button you are no longer looking at stays lit. That order used
+to reach `POST /api/preview` and come back 200 with a one-frame WAV — silence
+the browser plays without a word about why.
+
+Clearing it here rather than filtering in `soloedStems` is the difference
+between the state being unrepresentable and it merely being reported: nothing
+downstream has to remember the combination exists.
+
+-}
 toggleField : Config.Target -> Bool -> State -> State
 toggleField target on state =
-    { state | config = Config.toggle target on state.config }
+    let
+        updated =
+            { state | config = Config.toggle target on state.config }
+    in
+    { updated | solo = soloAfter target on updated }
+
+
+soloAfter : Config.Target -> Bool -> State -> Maybe String
+soloAfter target on state =
+    case ( target, on ) of
+        ( Config.InStem index "enabled", False ) ->
+            if state.solo == stemNameAt index state then
+                Nothing
+
+            else
+                state.solo
+
+        _ ->
+            state.solo
+
+
+stemNameAt : Int -> State -> Maybe String
+stemNameAt index state =
+    List.head (List.drop index state.config.stems) |> Maybe.map .name
+
+
+{-| Is this stem's Enabled box ticked? Absent means yes — the schema's own
+default, and the only reading that keeps a config which never mentions
+`enabled` meaning "play it".
+-}
+stemEnabled : Config.Stem -> Bool
+stemEnabled stem =
+    Dict.get "enabled" stem.fields
+        |> Maybe.andThen Config.asBool
+        |> Maybe.withDefault True
+
+
+{-| Nothing left to render: every stem the mixer is showing is switched off.
+
+The server refuses this (400, `preview.render_window`) rather than playing the
+default mix, which is what it used to do — but a refusal that arrives after the
+request is a preview that stopped working for a reason the screen never states.
+So `Main` does not send it, and the mixer says so instead. Empty is not this
+case: a mixer with no stems at all cannot be opened.
+
+-}
+everyStemDisabled : State -> Bool
+everyStemDisabled state =
+    not (List.isEmpty state.config.stems)
+        && List.all (stemEnabled >> not) state.config.stems
 
 
 {-| The loop region the config is currently asking for, if it is asking for one.
@@ -220,7 +284,11 @@ arcPanel :
 arcPanel config =
     div [ class "arc" ]
         (if Preview.isPlayable config.preview then
-            [ scrubber config, playingLine config, previewProblem config ]
+            [ scrubber config
+            , playingLine config
+            , nothingToPlay config.state
+            , previewProblem config
+            ]
 
          else
             case config.previewError of
@@ -311,8 +379,10 @@ playingLine config =
 {-| The honest version of a spinner.
 
 The wait behind this is real and long: slicing the loop out of every stem and
-time-stretching each one, measured at 117 seconds on a full-length track, all
-of it inside a per-song lock with nothing reporting progress. There is no
+time-stretching each one — minutes on a full-length track, and more than that
+when separation has to happen too; `docs/architecture.md` reconciles the
+measurements — all of it inside a per-song lock with nothing reporting
+progress. There is no
 fraction to draw, so the bar does not pretend to be one — it moves because the
 page is alive, and the words say what is happening and roughly what it costs.
 A static "Preparing…" for two minutes reads as a hung application, and a
@@ -338,6 +408,28 @@ preparing =
                 )
             ]
         ]
+
+
+{-| Said before the request goes out, not after it comes back 400.
+
+The audio does not stop when the last stem is unticked — `Main` sends nothing,
+so the previous preview keeps looping. Saying that outright is the point: a
+mixer that goes on playing something while every control claims otherwise is
+the same lie as one that plays a mix nobody asked for.
+-}
+nothingToPlay : State -> Html msg
+nothingToPlay state =
+    if everyStemDisabled state then
+        p [ class "error" ]
+            [ text
+                ("Every stem is switched off, so there is nothing to render — "
+                    ++ "what you can still hear is the last preview, looping. "
+                    ++ "Switch a stem back on to hear the change."
+                )
+            ]
+
+    else
+        text ""
 
 
 previewProblem : { a | previewError : Maybe String, onRetry : msg } -> Html msg
@@ -369,9 +461,7 @@ stemRow : Wiring msg -> State -> Schema.Schema -> (String -> msg) -> Int -> Conf
 stemRow wiring state schema onSolo index stem =
     let
         enabled =
-            Config.valueAt (Config.InStem index "enabled") state.config
-                |> Maybe.andThen Config.asBool
-                |> Maybe.withDefault True
+            stemEnabled stem
 
         soloed =
             state.solo == Just stem.name
@@ -383,9 +473,10 @@ stemRow wiring state schema onSolo index stem =
                 [ soloClass soloed
                 , onClick (onSolo stem.name)
 
-                -- Soloing a stem the config has switched off would ask the
-                -- server for a mix of nothing, which renders as silence and
-                -- reads as a broken preview.
+                -- Soloing a stem the config has switched off asks the server
+                -- for a mix of nothing, which it refuses with a 400. This
+                -- closes the solo-second order; `toggleField` closes the other
+                -- one by clearing a solo the checkbox has invalidated.
                 , disabled (not wiring.enabled || not enabled)
                 ]
                 [ text "Solo" ]
@@ -538,7 +629,8 @@ sectionNote name =
                     Just
                         ("Duration decides how many repetitions the arc is spread over, so "
                             ++ "it changes what any point in it sounds like. The fades apply "
-                            ++ "to the finished mix only."
+                            ++ "to the finished mix only, and so does the sample rate — a "
+                            ++ "preview always plays at the rate the stems were separated at."
                         )
 
                 "mix" ->
