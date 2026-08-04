@@ -282,10 +282,13 @@ elm-test
   more than one input order, because `GET /api/jobs` already answers in
   submission order and a single-arrangement test would pass against a sort
   that does nothing.
-- `Fixtures.elm` — not a suite so much as a shared `Schema` for the two above,
-  copied out of a live `/api/schema` and trimmed; its one test asserts it still
-  decodes, so a fixture that has drifted fails loudly rather than leaving the
-  tests that use it running against an empty schema.
+- `Fixtures.elm` — not a suite so much as a shared `Schema` for `ConfigTest`
+  and `MixerTest`, the two that need one; copied out of a live `/api/schema`
+  and trimmed. Its one test asserts it still decodes, so a fixture that has
+  drifted fails loudly rather than leaving the tests that use it running
+  against an empty schema. (Named rather than called "the two above", which is
+  what it said until `RendersTest` and `QueueTest` were inserted between it and
+  its referents.)
 
 No view is tested by `elm-test` — but one thing about the views is tested from
 the *Python* side, and it exists because of a real failure: see

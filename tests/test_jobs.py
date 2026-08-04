@@ -231,6 +231,102 @@ def test_a_job_cancelled_before_it_starts_never_runs():
     manager.shutdown(wait=True)
 
 
+def test_cancelling_a_queued_job_ends_it_now_rather_than_when_the_worker_gets_there():
+    """A cancel nobody can see is a cancel that did not happen.
+
+    ``cancel`` used to only set the token, which is technically enough —
+    ``_run`` checks it before doing any work — but the pool does not reach a
+    queued job until the one ahead of it finishes, and there is one worker. So
+    the status stayed "queued" for as long as the job in front took, and the
+    queue screen went on drawing the row as waiting with its Cancel button
+    still on it.
+
+    That is exactly the case the queue screen was built for: a very long
+    separation running, a render queued behind it, and an operator trying to
+    get the render out of the way. Measured in the shape that matters here —
+    the job ahead is still blocked when the assertions run, so this can only
+    pass if the flip happened synchronously inside ``cancel``.
+    """
+    manager = JobManager(max_workers=1)
+    gate = threading.Event()
+    started = threading.Event()
+    ran = []
+
+    def blocker(reporter, cancel):
+        started.set()
+        gate.wait(timeout=5)
+        return {}
+
+    def second(reporter, cancel):
+        ran.append(True)
+        return {}
+
+    try:
+        first = manager.submit("test", blocker)
+        assert started.wait(timeout=5), "the blocking job never started"
+        queued = manager.submit("test", second)
+        assert manager.get(queued.id).status == "queued"
+
+        assert manager.cancel(queued.id) is True
+        # No _wait_for, deliberately: the worker is still inside `blocker` and
+        # cannot have touched this job at all.
+        assert manager.get(queued.id).status == "cancelled"
+        assert manager.get(queued.id).message == "Cancelled"
+        assert manager.get(first.id).status == "running", (
+            "the job ahead must still be blocked, or this proves nothing")
+
+        # And it stays cancelled once the worker does reach it, rather than
+        # being walked back to "running" by `_run`.
+        gate.set()
+        _wait_for(lambda: manager.get(first.id).status in TERMINAL_STATUSES)
+        assert ran == []
+        assert manager.get(queued.id).status == "cancelled"
+
+        # Nothing left to stop, and the caller can tell that apart from
+        # "asked to stop" — the UI says different things for the two.
+        assert manager.cancel(queued.id) is False
+    finally:
+        gate.set()
+        manager.shutdown(wait=True)
+
+
+def test_cancelling_a_running_job_leaves_the_status_to_the_work_function():
+    """Only the *queued* case is decided by `cancel`.
+
+    A running job is genuinely still running when the token is set — the work
+    function stops at its next `check()` — so writing "cancelled" over it here
+    would claim an outcome that has not happened yet, and would race `_run`'s
+    own terminal update.
+    """
+    manager = JobManager(max_workers=1)
+    started = threading.Event()
+    proceed = threading.Event()
+
+    def work(reporter, cancel):
+        started.set()
+        # Held here rather than looping on `check()`, so the assertion below
+        # is not racing the work function: without this gate the job could
+        # legitimately reach `cancelled` in the microseconds after `cancel`
+        # returns, and the test would flake for the right reason.
+        proceed.wait(timeout=5)
+        for _ in range(2000):
+            cancel.check()
+            time.sleep(0.001)
+        return {}
+
+    try:
+        job = manager.submit("test", work)
+        assert started.wait(timeout=5)
+        assert manager.cancel(job.id) is True
+        assert manager.get(job.id).status == "running", (
+            "a running job must not be marked cancelled before it has stopped")
+        proceed.set()
+        assert _wait_for_status(manager, job.id, ("cancelled",)).result is None
+    finally:
+        proceed.set()
+        manager.shutdown(wait=True)
+
+
 def test_terminal_jobs_are_evicted_but_live_ones_never_are():
     manager = JobManager(max_workers=1, keep_terminal=3)
     done = [manager.submit("test", lambda r, c: {}) for _ in range(6)]

@@ -435,13 +435,13 @@ type Msg
     | DeleteRenderClicked String
     | RenderDeleted (Result Http.Error ())
     | CancelRenderClicked String
-    | RenderCancelSent (Result Http.Error Api.Job)
+    | RenderCancelSent (Result Http.Error Api.Cancellation)
     | OpenQueue
     | CloseQueue
     | QueueTick Int
     | GotQueueJobs (Result Http.Error (List Api.Job))
     | CancelJobClicked String
-    | JobCancelSent (Result Http.Error Api.Job)
+    | JobCancelSent (Result Http.Error Api.Cancellation)
 
 
 main : Program () Model Msg
@@ -1029,12 +1029,19 @@ update msg model =
         CancelRenderClicked jobId ->
             ( { model | rendersProblem = Nothing }, Request.cancelJob jobId RenderCancelSent )
 
-        RenderCancelSent (Ok job) ->
-            -- Cancelling is a request, not an outcome: the worker stops at its
-            -- next check, and the render row flips to `cancelled` after that.
-            -- The re-fetch here shows the job's own new status; the row's
-            -- follows over the event stream.
-            ( { model | renderJobs = Renders.replaceJob job model.renderJobs }
+        RenderCancelSent (Ok answer) ->
+            -- Cancelling a *running* render is a request, not an outcome: the
+            -- worker stops at its next check, and the render row flips to
+            -- `cancelled` after that. A render still queued is now ended by the
+            -- server on the spot (`JobManager.cancel`), so its job comes back
+            -- already terminal. The re-fetch here shows the job's own new
+            -- status either way; the row's follows over the event stream.
+            --
+            -- `answer.cancelled` is not read on this screen: every row here
+            -- carries its own render, and the re-fetch re-states that render's
+            -- status, which is the thing this screen is about. The queue screen
+            -- does read it, because there a refused cancel is otherwise silent.
+            ( { model | renderJobs = Renders.replaceJob answer.job model.renderJobs }
             , refreshRenders
             )
 
@@ -1108,7 +1115,18 @@ update msg model =
                 Just state ->
                     case result of
                         Ok jobs ->
-                            ( { model | queue = Just (Queue.Loaded jobs) }, Cmd.none )
+                            -- The note about a cancel goes with the rows it was
+                            -- about. It is written when a Cancel does something
+                            -- other than what the row implied, and these are the
+                            -- rows that show what actually happened — so
+                            -- leaving it up over them would be exactly the
+                            -- lingering warning `Queue.Stale` exists to avoid,
+                            -- one field over. Nothing schedules this: the poll
+                            -- that corrects the screen is the poll that clears
+                            -- the sentence explaining why it needed correcting.
+                            ( { model | queue = Just (Queue.Loaded jobs), queueProblem = Nothing }
+                            , Cmd.none
+                            )
 
                         Err err ->
                             -- The rows already on screen are kept: this is a
@@ -1125,32 +1143,39 @@ update msg model =
         CancelJobClicked jobId ->
             ( { model | queueProblem = Nothing }, Request.cancelJob jobId JobCancelSent )
 
-        JobCancelSent (Ok job) ->
-            -- Cancelling is a request, not an outcome: the worker stops at its
-            -- next check, so a job that was genuinely cancelled comes back
-            -- still `running`. A job that comes back *terminal* is one the
-            -- server refused — `JobManager.cancel` returns False for anything
-            -- already finished, and answers 200 either way. That is reachable
-            -- by ordinary use, because the button is drawn from a poll up to
-            -- `queueInterval` old, and it is worth a sentence: the row is about
-            -- to flip to "done" on its own, and without one the button would
-            -- simply have done nothing and said nothing about it.
+        JobCancelSent (Ok answer) ->
+            -- Two outcomes behind one 200, and only `cancelled` tells them
+            -- apart. It is False when the job was already terminal at the
+            -- moment the server looked — reachable by ordinary use, since the
+            -- button is drawn from a poll up to `queueInterval` old — and that
+            -- deserves a sentence, or the button did nothing and said nothing
+            -- about it.
             --
-            -- Re-fetching the whole list rather than writing this job into it
-            -- keeps one answer to "what is the queue".
-            ( { model
-                | queueProblem =
-                    if Api.isFinished job.status then
+            -- Deriving this from the returned job's status instead would be
+            -- wrong in a real case: the route cancels and then re-reads, so a
+            -- running job genuinely cancelled can come back `done` if the
+            -- worker finished it in that window, and the screen would report
+            -- "nothing was stopped" about a cancel that worked.
+            --
+            -- No re-fetch on the refused branch, deliberately: the note lives
+            -- exactly until the next poll, which is the same poll that brings
+            -- the corrected row. Fetching here would clear it in the same
+            -- breath as writing it. The successful branch does re-fetch, so a
+            -- queued job — which the server now ends on the spot — shows as
+            -- cancelled immediately rather than four seconds later.
+            if answer.cancelled then
+                ( { model | queueProblem = Nothing }, Request.jobs GotQueueJobs )
+
+            else
+                ( { model
+                    | queueProblem =
                         Just
                             ("That job had already finished, so nothing was "
                                 ++ "stopped — the row was from the last poll."
                             )
-
-                    else
-                        model.queueProblem
-              }
-            , Request.jobs GotQueueJobs
-            )
+                  }
+                , Cmd.none
+                )
 
         JobCancelSent (Err err) ->
             ( { model
@@ -1736,6 +1761,16 @@ songView model songId =
                     , onMixer = OpenMixer
                     , onBack = BackToLibrary
                     }
+
+        -- Directly under the separation panel, which is the last thing
+        -- `Page.Song.view` draws and the thing this is for. Nothing on this
+        -- screen can stop a separation — `Page.Song` has no cancel path at all
+        -- — so the queue is the only way to, and it was reachable only from the
+        -- library: back out of the song you are watching, then across. This is
+        -- the screen where you sit watching a bar crawl and decide you picked
+        -- the wrong file, so it is the screen the way out belongs on.
+        , div [ class "nav" ]
+            [ button [ onClick OpenQueue ] [ text "Queue" ] ]
         , errorLine (\reason -> "Could not load that song — " ++ reason) model.songError
         , errorLine (\reason -> "Could not load the waveform — " ++ reason) model.peaksError
         , errorLine (\reason -> "Could not find the loop — " ++ reason) model.loopError

@@ -93,12 +93,48 @@ class JobManager:
             return list(self._jobs.values())
 
     def cancel(self, job_id: str) -> bool:
+        """Ask a job to stop, and answer whether there was one to ask.
+
+        A job that has not started yet is cancelled *here*, synchronously,
+        rather than only having its token set. Setting the token alone is
+        technically enough — ``_run`` checks it before doing any work — but
+        "enough" is measured in wall time, and on one worker the pool does not
+        reach a queued job until the one ahead of it finishes. The case that
+        makes this matter is the one the queue screen exists for: a
+        seventy-minute separation running, a render queued behind it, and the
+        operator cancelling the render. The token was set, ``cancel`` answered
+        true, and the row went on saying "waiting" with its Cancel button still
+        there for seventy minutes. Nothing was wrong; nothing was visible
+        either.
+
+        Flipping the status now is the honest answer rather than an optimistic
+        one, because ``_run``'s opening guard means that job will never do any
+        work. The lock serialises this against ``_update``, so the two
+        orderings are the only two there are: this wins and ``_run`` later
+        short-circuits into its own ``cancelled`` update, or ``_run`` wins and
+        this sees ``"running"`` and leaves the status alone for the work
+        function's own ``check()`` to honour.
+
+        Returns False for a job that is already terminal — including one this
+        method itself finished on an earlier call — so the caller can tell "it
+        has been asked to stop" from "there was nothing left to stop".
+        """
         with self._lock:
             token = self._tokens.get(job_id)
             job = self._jobs.get(job_id)
-        if token is None or job is None or job.status in TERMINAL_STATUSES:
-            return False
-        token.cancel()
+            if token is None or job is None or job.status in TERMINAL_STATUSES:
+                return False
+            token.cancel()
+            if job.status == "queued":
+                # Inside the lock on purpose, and re-entering `_update` through
+                # it: `_lock` is an RLock, and doing this after releasing would
+                # reopen the window this is closing — `_run` could set
+                # "running" in between and then be overwritten by a "cancelled"
+                # written for a job that had already started. Holding across
+                # `_update` costs nothing: its fan-out is
+                # `loop.call_soon_threadsafe`, which does not block and does not
+                # want this lock.
+                self._update(job_id, status="cancelled", message="Cancelled")
         return True
 
     def shutdown(self, wait: bool = False) -> None:

@@ -1,6 +1,6 @@
 module Api exposing
-    ( Job, JobStatus(..), LoopRegion, Render, RenderStatus(..), Song, SeparationStatus(..)
-    , isFinished, isRenderFinished, job, loopRegion, render, renderStatusLabel, song, statusLabel
+    ( Cancellation, Job, JobStatus(..), LoopRegion, Render, RenderStatus(..), Song, SeparationStatus(..)
+    , cancellation, isFinished, isRenderFinished, job, loopRegion, render, renderStatusLabel, song, statusLabel
     )
 
 {-| Types and decoders for the sleepmix API.
@@ -78,6 +78,22 @@ type alias Job =
     , songId : Maybe String
     , renderId : Maybe String
     , createdAt : String
+    }
+
+
+{-| What `POST /api/jobs/{id}/cancel` answers: whether there was anything left
+to stop, and the job as it stood immediately afterwards.
+
+Both, because neither implies the other. `cancelled` is False only when the job
+was already terminal when the server looked — but the job returned beside it is
+re-read *after* the cancel, so a job that was genuinely cancelled while running
+can come back `done` if the worker finished it in that window. Deriving "was it
+refused?" from the status would call that a refusal and tell the user nothing
+was stopped.
+-}
+type alias Cancellation =
+    { cancelled : Bool
+    , job : Job
     }
 
 
@@ -263,6 +279,13 @@ job =
         -- is the pairing failure this field exists to remove, arriving silently.
         |> Pipeline.required "render_id" (Decode.nullable Decode.string)
         |> Pipeline.required "created_at" Decode.string
+
+
+cancellation : Decoder Cancellation
+cancellation =
+    Decode.map2 Cancellation
+        (Decode.field "cancelled" Decode.bool)
+        (Decode.field "job" job)
 
 
 jobStatus : Decoder JobStatus

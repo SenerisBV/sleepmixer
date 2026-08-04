@@ -147,6 +147,62 @@ suite =
                         , \_ -> Expect.equal expected (ids (Queue.ordered [ waiting, running, finished ]))
                         ]
                         ()
+            , test "among the jobs that have ended the most recent is first, not last" <|
+                \_ ->
+                    -- The opposite direction from the two live groups, on
+                    -- purpose. The manager keeps fifty terminal jobs and this
+                    -- screen has no pagination, so oldest-first would put the
+                    -- render that failed a minute ago — the row you opened the
+                    -- screen to read — at the bottom of forty-nine you did not.
+                    let
+                        oldest =
+                            { sample | id = "oldest", status = Api.Done, createdAt = nine }
+
+                        middle =
+                            { oldest | id = "middle", status = Api.Cancelled, createdAt = ten }
+
+                        newest =
+                            { oldest | id = "newest", status = Api.Failed "boom", createdAt = eleven }
+
+                        expected =
+                            [ "newest", "middle", "oldest" ]
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal expected (ids (Queue.ordered [ oldest, middle, newest ]))
+                        , \_ -> Expect.equal expected (ids (Queue.ordered [ middle, newest, oldest ]))
+                        , \_ -> Expect.equal expected (ids (Queue.ordered [ newest, oldest, middle ]))
+                        ]
+                        ()
+            , test "the live groups still read forward in time while the ended one reads backward" <|
+                \_ ->
+                    -- Both directions in one list, because they are two rules
+                    -- and a single `sortBy` cannot express them: a sort that
+                    -- reversed everything would fail on the two waiting jobs,
+                    -- and one that reversed nothing would fail on the two that
+                    -- ended.
+                    let
+                        base =
+                            aJob "x" ten
+
+                        running =
+                            { base | id = "running", status = Api.Running, createdAt = eleven }
+
+                        waitingOld =
+                            { base | id = "waiting-old", status = Api.Queued, createdAt = nine }
+
+                        waitingNew =
+                            { base | id = "waiting-new", status = Api.Queued, createdAt = eleven }
+
+                        endedOld =
+                            { base | id = "ended-old", status = Api.Done, createdAt = nine }
+
+                        endedNew =
+                            { base | id = "ended-new", status = Api.Done, createdAt = eleven }
+                    in
+                    Queue.ordered [ endedOld, waitingNew, running, endedNew, waitingOld ]
+                        |> ids
+                        |> Expect.equal
+                            [ "running", "waiting-old", "waiting-new", "ended-new", "ended-old" ]
             , test "separations and renders queue together, because they share the one worker" <|
                 \_ ->
                     -- The screen would be a lie if it split them: a separation

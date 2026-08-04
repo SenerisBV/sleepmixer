@@ -93,25 +93,43 @@ band status =
             2
 
 
-{-| In flight, then waiting, then recently ended — and oldest first inside each.
+{-| In flight, then waiting, then recently ended.
 
-Both halves are said here rather than assumed of `GET /api/jobs`. That endpoint
-answers in `JobManager`'s own insertion order, which is submission order and
-therefore already `created_at` ascending, and it does no grouping at all. So the
-grouping is genuinely this screen's, and the sort within a group is a property
-of the list someone is reading rather than something that should quietly depend
-on a dictionary's iteration order in another language.
-
-`created_at` is a UTC `datetime.isoformat()` throughout, so the strings sort in
-the same order as the instants they name.
+Both the grouping and the sort inside it are said here rather than assumed of
+`GET /api/jobs`. That endpoint answers in `JobManager`'s own insertion order,
+which is submission order and therefore already `created_at` ascending, and it
+does no grouping at all. So the grouping is genuinely this screen's, and the
+order within a group is a property of the list someone is reading rather than
+something that should quietly depend on a dictionary's iteration order in
+another language.
 
 Terminal jobs sort last however recently they ended, and that is the whole point
 of banding before sorting: the fifty finished jobs the manager keeps would
 otherwise bury the one that is actually blocking the worker.
+
+**The three groups do not share one direction, and the reason is what each
+group is for.** Running and waiting are ordered oldest first because that is the
+order the worker will take them in — the list is a prediction, and reading down
+it is reading forward in time. Nothing about that is true of the ended group:
+the worker will never take those again, so "the order they will happen in" is
+not a fact about them, and the only reason anyone scrolls to that group is to
+read what just happened. The manager keeps fifty of them and this screen has no
+pagination, so oldest-first would put a render that failed a minute ago at the
+bottom of fifty rows — the exact row you opened the screen for, hidden by
+forty-nine you did not. It is also what the renders screen one click away
+already does with the same material.
+
+`created_at` is a UTC `datetime.isoformat()` throughout, so the strings sort in
+the same order as the instants they name, in either direction.
 -}
 ordered : List Api.Job -> List Api.Job
 ordered jobs =
-    List.sortBy (\aJob -> ( band aJob.status, aJob.createdAt )) jobs
+    let
+        ( ended, live ) =
+            List.partition (\aJob -> Api.isFinished aJob.status) jobs
+    in
+    List.sortBy (\aJob -> ( band aJob.status, aJob.createdAt )) live
+        ++ List.reverse (List.sortBy .createdAt ended)
 
 
 {-| Can this still be stopped?

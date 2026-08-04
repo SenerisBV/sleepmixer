@@ -15,6 +15,7 @@ import Api
 import Expect
 import Json.Encode
 import Main
+import Page.Queue as Queue
 import Test exposing (Test, describe, test)
 
 
@@ -299,7 +300,171 @@ suite =
                     Main.isSeparating (Main.Watching (aJob "j1" Api.Running 0.1))
                         |> Expect.equal True
             ]
+        , describe "the queue screen's poll"
+            -- What these can and cannot see, stated up front. `Cmd` has no
+            -- equality in Elm, so none of this observes a request going out or
+            -- a timer being armed. What it does hold is the invariant the
+            -- chain's correctness rests on — exactly one chain while the screen
+            -- is open, none while it is closed — which lives today in a
+            -- convention nothing enforces: only `OpenQueue` writes `queueTick`.
+            -- A `queue = Just …` written anywhere else would break it silently,
+            -- and these are what would notice.
+            [ test "opening the queue takes a chain id that the initial model could never be mistaken for" <|
+                \_ ->
+                    -- `queueTick` starts at 0 and `nextRequest` at 1, so the
+                    -- id every chain is issued is non-zero. That is what stops
+                    -- a `QueueTick 0` — the only tick value reachable without
+                    -- anyone having opened the screen — from being honoured.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        opened =
+                            step Main.OpenQueue fresh
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal 0 fresh.queueTick
+                        , \_ -> Expect.notEqual 0 opened.queueTick
+                        , \_ -> Expect.equal (Just Queue.Loading) opened.queue
+                        ]
+                        ()
+            , test "reopening the queue issues a fresh chain id rather than reusing the last one" <|
+                \_ ->
+                    -- The case this exists for is a double-click, or leaving
+                    -- and coming back inside the poll interval: the first
+                    -- chain's sleep is still in flight when the second starts.
+                    -- Two chains on one screen would double the request rate
+                    -- for the rest of the session, and only the id tells them
+                    -- apart.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        first =
+                            step Main.OpenQueue fresh
+
+                        second =
+                            first
+                                |> step Main.CloseQueue
+                                |> step Main.OpenQueue
+                    in
+                    Expect.notEqual first.queueTick second.queueTick
+            , test "a tick from a superseded chain leaves the model exactly as it was" <|
+                \_ ->
+                    -- Weaker than it looks, and worth being honest about: the
+                    -- live branch also returns the model unchanged, so this
+                    -- cannot see the difference between polling and not. What
+                    -- it does catch is `QueueTick` growing a model write —
+                    -- after which a stale tick would start editing a screen it
+                    -- no longer belongs to.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        first =
+                            step Main.OpenQueue fresh
+
+                        reopened =
+                            first
+                                |> step Main.CloseQueue
+                                |> step Main.OpenQueue
+                                |> step (Main.GotQueueJobs (Ok [ queuedJob ]))
+
+                        afterStaleTick =
+                            step (Main.QueueTick first.queueTick) reopened
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal reopened.queue afterStaleTick.queue
+                        , \_ -> Expect.equal reopened.queueTick afterStaleTick.queueTick
+                        , \_ -> Expect.equal reopened.queueProblem afterStaleTick.queueProblem
+                        ]
+                        ()
+            , test "a tick that lands after the screen closed does not reopen it" <|
+                \_ ->
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        opened =
+                            step Main.OpenQueue fresh
+                    in
+                    opened
+                        |> step Main.CloseQueue
+                        |> step (Main.QueueTick opened.queueTick)
+                        |> .queue
+                        |> Expect.equal Nothing
+            , test "a poll that lands after the screen closed does not reopen it either" <|
+                \_ ->
+                    -- `queue` is what `routeFor` reads to decide which screen
+                    -- is showing, so writing a late response back would put the
+                    -- queue over whatever the user moved on to.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+                    in
+                    fresh
+                        |> step Main.OpenQueue
+                        |> step Main.CloseQueue
+                        |> step (Main.GotQueueJobs (Ok [ queuedJob ]))
+                        |> .queue
+                        |> Expect.equal Nothing
+            , test "a successful poll clears the note left by a cancel that came too late" <|
+                \_ ->
+                    -- The note explains why a row did not do what the button
+                    -- implied; these are the rows that show what actually
+                    -- happened, so the note has nothing left to explain.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        complaining =
+                            { fresh
+                                | queue = Just Queue.Loading
+                                , queueProblem = Just "That job had already finished"
+                            }
+                    in
+                    complaining
+                        |> step (Main.GotQueueJobs (Ok [ queuedJob ]))
+                        |> .queueProblem
+                        |> Expect.equal Nothing
+            , test "the queue and the renders screen are never open at once" <|
+                \_ ->
+                    -- Which is what makes `routeFor`'s order between the two
+                    -- not load-bearing.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        queueOverRenders =
+                            fresh |> step Main.OpenRenders |> step Main.OpenQueue
+
+                        rendersOverQueue =
+                            fresh |> step Main.OpenQueue |> step Main.OpenRenders
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal Nothing queueOverRenders.renders
+                        , \_ -> Expect.notEqual Nothing queueOverRenders.queue
+                        , \_ -> Expect.equal Nothing rendersOverQueue.queue
+                        , \_ -> Expect.notEqual Nothing rendersOverQueue.renders
+                        ]
+                        ()
+            ]
         ]
+
+
+{-| A job as `GET /api/jobs` would list one that has not started yet.
+-}
+queuedJob : Api.Job
+queuedJob =
+    { id = "queued-1"
+    , kind = "render"
+    , status = Api.Queued
+    , fraction = 0.0
+    , message = ""
+    , songId = Just "song-1"
+    , renderId = Just "r1"
+    , createdAt = "2026-08-04T21:04:00.000000+00:00"
+    }
 
 
 {-| An unreadable frame, produced the way the subscription produces one:

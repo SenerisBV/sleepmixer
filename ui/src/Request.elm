@@ -181,10 +181,20 @@ jobs toMsg =
         }
 
 
-cancelJob : String -> (Result Http.Error Api.Job -> msg) -> Cmd msg
+{-| Ask a job to stop, and hear back both halves of the answer.
+
+`cancelled` is the server's own report of whether there was anything left to
+stop, and it is not derivable from the job beside it. The route calls
+`JobManager.cancel` and then re-`get`s the job, so a job that was genuinely
+cancelled can come back already `done` if the worker finished it in that
+window — reading the status alone would then tell the user "nothing was
+stopped" about a cancel that worked. Only `cancelled` distinguishes the two,
+and it is the field the route exists to return.
+-}
+cancelJob : String -> (Result Http.Error Api.Cancellation -> msg) -> Cmd msg
 cancelJob jobId toMsg =
     Http.post
         { url = Url.Builder.absolute [ "api", "jobs", jobId, "cancel" ] []
         , body = Http.emptyBody
-        , expect = Http.expectJson toMsg (Decode.field "job" Api.job)
+        , expect = Http.expectJson toMsg Api.cancellation
         }
