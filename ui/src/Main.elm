@@ -1,4 +1,4 @@
-module Main exposing (main)
+port module Main exposing (JobOutcome(..), jobOutcome, main)
 
 {-| The sleepmix interface.
 
@@ -23,6 +23,19 @@ import Page.Song
 import Request
 
 
+{-| Elm cannot open an `EventSource` — `elm/http` has no server-sent-events
+support — so `ui/ports/events.js` owns the connection and forwards parsed
+events in. A job id goes out; a decoded JSON value comes back.
+-}
+port watchJob : String -> Cmd msg
+
+
+port stopWatchingJob : String -> Cmd msg
+
+
+port jobEvent : (Decode.Value -> msg) -> Sub msg
+
+
 type alias Model =
     { health : Health
     , library : Library.State
@@ -36,7 +49,37 @@ type alias Model =
     , peaksError : Maybe String
     , separating : Bool
     , separateError : Maybe String
+    , trackedJob : Maybe Api.Job
     }
+
+
+{-| What an incoming job event means, given what we are currently watching.
+-}
+type JobOutcome
+    = Ignored
+    | Tracking Api.Job
+    | Finished Api.Job
+
+
+{-| Pure and returning a value rather than a `Cmd`, so it can be tested. Events
+for other jobs are ignored rather than adopted: two jobs can be in flight, and
+the stream for one must not hijack the progress bar of the other.
+-}
+jobOutcome : Api.Job -> Maybe Api.Job -> JobOutcome
+jobOutcome incoming tracked =
+    case tracked of
+        Nothing ->
+            Ignored
+
+        Just current ->
+            if incoming.id /= current.id then
+                Ignored
+
+            else if Api.isFinished incoming.status then
+                Finished incoming
+
+            else
+                Tracking incoming
 
 
 {-| Which screen is showing.
@@ -88,6 +131,7 @@ type Msg
     | GotPeaks String (Result Http.Error (List ( Float, Float )))
     | SeparateClicked Bool
     | Separated (Result Http.Error Api.Job)
+    | JobEventReceived (Result Decode.Error Api.Job)
 
 
 main : Program () Model Msg
@@ -95,9 +139,17 @@ main =
     Browser.element
         { init = init
         , update = update
-        , subscriptions = always Sub.none
+        , subscriptions = subscriptions
         , view = view
         }
+
+
+{-| A malformed event surfaces as a `Result` for `update` to handle rather
+than crashing the application.
+-}
+subscriptions : Model -> Sub Msg
+subscriptions _ =
+    jobEvent (Decode.decodeValue Api.job >> JobEventReceived)
 
 
 init : () -> ( Model, Cmd Msg )
@@ -114,6 +166,7 @@ init _ =
       , peaksError = Nothing
       , separating = False
       , separateError = Nothing
+      , trackedJob = Nothing
       }
     , Cmd.batch
         [ Http.get
@@ -178,6 +231,7 @@ update msg model =
                 , peaksError = Nothing
                 , separating = False
                 , separateError = Nothing
+                , trackedJob = Nothing
               }
             , Cmd.batch
                 [ Request.song songId (GotSongDetail songId)
@@ -224,21 +278,46 @@ update msg model =
                     , Request.startSeparation songId force Separated
                     )
 
-        Separated (Ok _) ->
-            -- Re-fetch rather than trust the job response: the job reports
-            -- its own progress, not the song's separation_status, and that
-            -- status is what the panel and the button label read from.
-            case model.selectedSongId of
-                Nothing ->
-                    ( { model | separating = False }, Cmd.none )
-
-                Just songId ->
-                    ( { model | separating = False }
-                    , Request.song songId (GotSongDetail songId)
-                    )
+        Separated (Ok job) ->
+            -- Don't re-fetch yet: the job has only just been queued, and its
+            -- progress from here on comes from the event stream, not from
+            -- polling the song. `separating` stays True until a terminal
+            -- event lands.
+            ( { model | trackedJob = Just job }, watchJob job.id )
 
         Separated (Err err) ->
-            ( { model | separating = False, separateError = Just (httpErrorToString err) }
+            ( { model | separating = False, separateError = Just (httpErrorToString err), trackedJob = Nothing }
+            , Cmd.none
+            )
+
+        JobEventReceived (Ok incoming) ->
+            case jobOutcome incoming model.trackedJob of
+                Ignored ->
+                    ( model, Cmd.none )
+
+                Tracking job ->
+                    ( { model | trackedJob = Just job }, Cmd.none )
+
+                Finished job ->
+                    -- Re-fetch rather than trust the job's own fields: the
+                    -- job reports its own progress, not the song's
+                    -- separation_status, and that status is what the panel
+                    -- and the button label read from.
+                    let
+                        refetch =
+                            case model.selectedSongId of
+                                Nothing ->
+                                    Cmd.none
+
+                                Just songId ->
+                                    Request.song songId (GotSongDetail songId)
+                    in
+                    ( { model | trackedJob = Nothing, separating = False }
+                    , Cmd.batch [ stopWatchingJob job.id, refetch ]
+                    )
+
+        JobEventReceived (Err decodeErr) ->
+            ( { model | separateError = Just (Decode.errorToString decodeErr) }
             , Cmd.none
             )
 
@@ -304,6 +383,24 @@ libraryView model =
         ]
 
 
+{-| The tracked job's progress, but only when it belongs to the song on
+screen — a job for a song the user has since navigated away from and back to
+must not paint a stale bar here.
+-}
+progressFor : String -> Model -> Maybe Float
+progressFor songId model =
+    case model.trackedJob of
+        Just job ->
+            if job.songId == Just songId then
+                Just job.fraction
+
+            else
+                Nothing
+
+        Nothing ->
+            Nothing
+
+
 {-| The song screen. `currentSong` is `Nothing` until its fetch lands — until
 then this shows a loading line rather than the page, since `Page.Song.view`
 needs a real `Api.Song` to read a title and duration from.
@@ -325,7 +422,7 @@ songView model songId =
                     { song = song
                     , peaks = model.peaks
                     , separating = model.separating
-                    , progress = Nothing
+                    , progress = progressFor songId model
                     , onSeparate = SeparateClicked
                     , onBack = BackToLibrary
                     }
