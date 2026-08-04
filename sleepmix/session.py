@@ -32,20 +32,21 @@ class RenderSession:
     only some of them feed the memoized stages:
 
     - **Safe to mutate in place on ``session.config``:** each stem's ``decay``
-      (curve, lowpass, amplitude, dropout, noise, spectral-hole settings) and
-      ``enabled``, plus ``soundbed`` and ``seed``. Nothing downstream is cached
-      from these, so ``render_window`` picks the new value up immediately. The
-      existing tests rely on exactly this.
+      (curve, lowpass, amplitude, dropout, noise, spectral-hole settings),
+      plus ``soundbed`` and ``seed``. Nothing downstream is cached from these,
+      so ``render_window`` picks the new value up immediately. The existing
+      tests rely on exactly this.
 
     - **Must go through :meth:`update_config`:** ``loop``, ``tempo``,
-      ``separation_model``, ``reverb``, ``output``, and each stem's ``gain_db``
-      and ``reverb_send``. The first three determine ``loop_point()``, the
-      ``prepared_loop()`` cache, and ``stems()`` respectively, as before. The
-      latter three feed ``preview.master_gain``, which is now memoized on this
-      class (see ``self.master_gain``) — mutating them directly leaves that
-      cache holding a gain computed from the *old* values, and there is no
-      error — the preview simply plays at the previous loudness, silently,
-      which is exactly the defect this class exists to prevent.
+      ``separation_model``, ``reverb``, ``output``, and each stem's
+      ``enabled``, ``gain_db`` and ``reverb_send``. The first three determine
+      ``loop_point()``, the ``prepared_loop()`` cache, and ``stems()``
+      respectively, as before. The latter four feed ``preview.master_gain``,
+      which is now memoized on this class (see ``self.master_gain``) —
+      mutating them directly leaves that cache holding a gain computed from
+      the *old* values, and there is no error — the preview simply plays at
+      the previous loudness, silently, which is exactly the defect this class
+      exists to prevent.
 
     A server applying config edits to a long-lived session should therefore
     build the new ``MixConfig`` and hand it to :meth:`update_config` rather than
