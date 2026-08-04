@@ -125,6 +125,23 @@ unknownTypeJson =
     """
 
 
+{-| The server never actually omits `default` — every real fragment sends it,
+`null` or otherwise. But that's exactly why this fixture is worth having:
+`Decode.nullable` and `Decode.maybe (Decode.field ...)` agree on every
+fixture that has the key (both land on `Nothing` for `"default": null`,
+since `Decode.float` fails on `null` either way) and only diverge when the
+key is missing outright. Without this case, swapping `numberSpec`'s
+`default` decoder from `nullable` to `maybe (field ...)` is invisible to the
+suite — it silently yields `Nothing` instead of failing. This fixture pins
+that the key is required, which is the whole point of using `nullable`
+there instead of `maybe`. -}
+missingDefaultJson : String
+missingDefaultJson =
+    """
+    { "type":"float","label":"No default key","help":null,"min":0.0 }
+    """
+
+
 {-| Decode a lone field-object fragment the way `Schema.decoder` would meet it:
 nested one level under a `fields` dict, since `field` itself isn't exposed. -}
 decodeField : String -> Result Decode.Error Schema.Field
@@ -273,6 +290,12 @@ suite =
             [ test "an unrecognised field type fails the decode rather than being dropped" <|
                 \_ ->
                     decodeField unknownTypeJson
+                        |> Expect.err
+            ]
+        , describe "default is required, even though the server always sends it"
+            [ test "a field with the default key omitted fails the decode" <|
+                \_ ->
+                    decodeField missingDefaultJson
                         |> Expect.err
             ]
         , describe "sections and whole responses"
