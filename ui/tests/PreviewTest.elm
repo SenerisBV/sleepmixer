@@ -45,6 +45,35 @@ suite =
                     -- render at all.
                     Preview.warm (params 0) Preview.Idle
                         |> Expect.equal ( Preview.Idle, Nothing )
+            , test "an opening preview that failed goes back to cold" <|
+                \_ ->
+                    -- Not Idle: nothing came back, so nothing is known to be
+                    -- playable and `isPlayable` must keep saying so. Not
+                    -- Warming either, which `request` refuses to leave.
+                    Preview.failed Preview.Warming
+                        |> Expect.equal ( Preview.Cold, Nothing )
+            , test "which is not playable" <|
+                \_ ->
+                    Preview.failed Preview.Warming
+                        |> Tuple.first
+                        |> Preview.isPlayable
+                        |> Expect.equal False
+            , test "and which retry can start again" <|
+                \_ ->
+                    Preview.retry (params 0) Preview.Cold
+                        |> Expect.equal ( Preview.Warming, Just (params 0) )
+            , test "an ordinary failure still frees the slot" <|
+                \_ ->
+                    Preview.failed (Preview.InFlight (params 0.5))
+                        |> Expect.equal ( Preview.Idle, Nothing )
+            , test "and still sends what was waiting behind it" <|
+                \_ ->
+                    Preview.failed (Preview.Queued (params 0.7))
+                        |> Expect.equal ( Preview.InFlight (params 0.7), Just (params 0.7) )
+            , test "retry from a playable session is an ordinary request" <|
+                \_ ->
+                    Preview.retry (params 0.5) Preview.Idle
+                        |> Expect.equal ( Preview.InFlight (params 0.5), Just (params 0.5) )
             , test "the opening preview gets exactly one arrived, via warmed" <|
                 \_ ->
                     -- `audio.js` answers every request it starts exactly once,

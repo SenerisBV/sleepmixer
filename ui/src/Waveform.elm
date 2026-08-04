@@ -1,4 +1,4 @@
-module Waveform exposing (Bar, Box, barFor, regionBox, view)
+module Waveform exposing (Bar, Box, barFor, caption, regionBox, view)
 
 {-| Peaks as SVG.
 
@@ -11,6 +11,8 @@ Min *and* max are drawn rather than absolute peak, so an asymmetric signal
 looks asymmetric. That is a real cue when picking a loop region by eye.
 -}
 
+import Html exposing (Html, p, text)
+import Html.Attributes exposing (class)
 import Svg exposing (Svg)
 import Svg.Attributes as A
 
@@ -84,6 +86,50 @@ view config =
         , A.class "waveform"
         ]
         (loopRegion config ++ List.indexedMap bar config.peaks)
+
+
+{-| What the shaded rectangle is, in words.
+
+It lives beside the drawing rather than in either screen because both screens
+need it and an unexplained rectangle is worse on the mixer than on the song
+view: the region is the few seconds every one of the next several hundred
+repetitions is made of, and the tempo is what the whole time-stretch is built
+around. A shape with no caption says neither.
+
+Takes the record shape `Api.LoopRegion` has rather than the type, so this
+module keeps knowing nothing about the API.
+-}
+caption : Maybe { a | startS : Float, endS : Float, tempo : Float } -> Html msg
+caption region =
+    case region of
+        Nothing ->
+            text ""
+
+        Just loop ->
+            p [ class "dim" ]
+                [ text
+                    ("Loop "
+                        ++ clock loop.startS
+                        ++ " – "
+                        ++ clock loop.endS
+                        ++ " · "
+                        ++ String.fromInt (round (loop.endS - loop.startS))
+                        ++ " s · "
+                        ++ String.fromInt (round loop.tempo)
+                        ++ " BPM"
+                    )
+                ]
+
+
+clock : Float -> String
+clock seconds =
+    let
+        total =
+            round seconds
+    in
+    String.fromInt (total // 60)
+        ++ ":"
+        ++ String.padLeft 2 '0' (String.fromInt (modBy 60 total))
 
 
 type alias Box =

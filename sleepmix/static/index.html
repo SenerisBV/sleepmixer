@@ -32,7 +32,11 @@
           border: 1px solid var(--line); border-radius: 5px;
           padding: .4rem .6rem; }
   input:focus, select:focus { outline: none; border-color: var(--accent); }
-  input:disabled, select:disabled, .field:has(:disabled) { opacity: .45; }
+  /* One rule, not two: an `input:disabled` rule as well would compound with
+     this one and render the control at .20 against its own label at .45. The
+     whole row dims together, because "inert until the first preview returns"
+     is a statement about the row, not about the widget. */
+  .field:has(:disabled) { opacity: .45; }
   /* The base rule above is for text boxes; a checkbox or a slider wearing a
      border and .4rem of padding is a different control that happens to be an
      <input>. */

@@ -156,6 +156,35 @@ def _emitted_class_names():
     return names
 
 
+def _stylesheet() -> str:
+    """The `<style>` blocks of the page, with their CSS comments blanked out.
+
+    Searching the whole file for the class name was not good enough, and the
+    hole was exactly the shape of the bug this test exists to catch: deleting
+    the `.progress-fill` *rule* left the test passing, because the stylesheet's
+    own header comment names `.progress-fill` while explaining why it must have
+    one. A test satisfied by prose about a rule is a test satisfied by no rule.
+    """
+    html = (STATIC / "index.html").read_text()
+    blocks = re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL | re.IGNORECASE)
+    assert blocks, "no <style> block on the page — every class would look missing"
+    return _strip_css_comments("\n".join(blocks))
+
+
+def _strip_css_comments(css: str) -> str:
+    return re.sub(r"/\*.*?\*/", " ", css, flags=re.DOTALL)
+
+
+def _has_rule(css: str, name: str) -> bool:
+    """Is `name` used as a selector, rather than merely appearing?
+
+    A selector is followed by the end of itself: a combinator or another
+    simple selector (whitespace, `.`, `#`, `>`, `+`, `~`, `[`, `:`), a comma,
+    or the opening brace. Requiring one of those is what stops a bare mention
+    inside a declaration value from counting."""
+    return re.search(rf"\.{re.escape(name)}(?![\w-])\s*[,{{:\[>+~.#\s]", css) is not None
+
+
 def test_every_class_the_views_emit_has_a_rule_on_the_page():
     """A class with no rule is not a cosmetic problem — it is an invisible element.
 
@@ -164,18 +193,41 @@ def test_every_class_the_views_emit_has_a_rule_on_the_page():
     and paints nothing. The compiler cannot see this — a class name is a
     string on one side and a stylesheet on the other — so nothing but this
     connects them."""
-    css = (STATIC / "index.html").read_text()
+    css = _stylesheet()
     names = _emitted_class_names()
     assert len(names) > 10, "the scan found suspiciously few classes; check the regex"
-    missing = sorted(
-        name for name in names
-        if not re.search(rf"\.{re.escape(name)}(?![\w-])", css)
-    )
+    missing = sorted(name for name in names if not _has_rule(css, name))
     assert not missing, (
         "these classes are emitted by ui/src and have no rule in "
         f"sleepmix/static/index.html, so whatever they style is unstyled — "
         f"and an empty div among them renders as nothing at all: {missing}"
     )
+
+
+def test_a_class_mentioned_only_in_prose_does_not_count_as_a_rule():
+    """The test above has to be worth trusting, so this tests the test.
+
+    It was once satisfiable by a comment. Deleting `.progress-fill`'s rule —
+    height, background, the two declarations without which the bar is an
+    invisible empty div — left it passing, because the stylesheet's own header
+    comment names `.progress-fill` while explaining why it needs one. The
+    regression this project has already shipped once could have walked back in
+    through the test written to stop it."""
+    css = _strip_css_comments(
+        """/* .ghost is an empty div, so it must have a rule of its own */
+           .app { max-width: 62rem; }
+           .real-one, .other { color: red; }
+           .parent .child { color: blue; }
+           .flag:hover { color: green; }
+           .thing::after { content: ".fake"; }"""
+    )
+    assert not _has_rule(css, "ghost"), "a comment is not a rule"
+    assert not _has_rule(css, "fake"), "a string inside a declaration is not a rule"
+    for name in ("app", "real-one", "other", "parent", "child", "flag", "thing"):
+        assert _has_rule(css, name), f"{name} is a selector and should count"
+
+    # And the real page, which is the case that matters.
+    assert _has_rule(_stylesheet(), "progress-fill")
 
 
 def test_no_class_name_is_assembled_at_runtime():

@@ -723,12 +723,13 @@ update msg model =
         OpenMixer ->
             case ( model.currentSong, model.settings ) of
                 ( Just song, SettingsReady schema ) ->
-                    if List.isEmpty song.stems then
-                        -- The button is disabled without stems; the model does
-                        -- not rely on that being true. A mixer with no stems
-                        -- would ask the server for a preview of a song it has
-                        -- not separated, which runs Demucs inside the preview
-                        -- lock with nothing reporting progress.
+                    if List.isEmpty song.stems || separatingNow song model then
+                        -- Both halves of `Page.Song.mixerPanel`'s gate, because
+                        -- the model does not rely on a button being disabled.
+                        -- No stems: the first preview would run Demucs inside
+                        -- the preview lock with nothing reporting progress.
+                        -- Mid-separation: finishing discards the warm session
+                        -- and can change the stem list under an open mixer.
                         ( model, Cmd.none )
 
                     else
@@ -777,15 +778,51 @@ update msg model =
                     ( model, Cmd.none )
 
         RetryPreview ->
-            -- The same parameters again. `Preview.request` decides whether
-            -- that actually goes anywhere, exactly as a control change does.
-            withMixer identity model
+            -- The same parameters again, through whichever door fits the state
+            -- the failure left behind — `Preview.retry` decides which, exactly
+            -- as `Preview.request` decides for a control change.
+            case model.mixer of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just state ->
+                    let
+                        ( preview, toSend ) =
+                            Preview.retry (Mixer.params state) model.preview
+                    in
+                    ( { model | preview = preview, previewError = Nothing }
+                    , sendPreview toSend
+                    )
 
         PreviewPlaying seconds ->
-            previewArrived { model | previewError = Nothing, loopSeconds = seconds }
+            let
+                ( preview, toSend ) =
+                    Preview.arrived (Preview.warmed model.preview)
+            in
+            ( { model
+                | preview = preview
+                , previewError = Nothing
+                , loopSeconds = seconds
+              }
+            , sendPreview toSend
+            )
 
         PreviewFailed reason ->
-            previewArrived { model | previewError = Just reason, loopSeconds = Nothing }
+            -- Not the same transition as a success. An opening preview that
+            -- never came back leaves nothing known to be playable, and
+            -- `Preview.failed` says so by going back to `Cold` rather than
+            -- opening the controls over silence.
+            let
+                ( preview, toSend ) =
+                    Preview.failed model.preview
+            in
+            ( { model
+                | preview = preview
+                , previewError = Just reason
+                , loopSeconds = Nothing
+              }
+            , sendPreview toSend
+            )
 
 
 {-| What to re-fetch once a job reaches a terminal status.
@@ -813,6 +850,17 @@ refetchAfter job model =
 
         Nothing ->
             ( model, Request.songs GotSongs )
+
+
+{-| Is this song separating right now, by either account?
+
+The client's own flag, and the server's status for the case the flag cannot
+cover: a reload mid-separation forgets that a job was started but the row still
+says `running`.
+-}
+separatingNow : Api.Song -> Model -> Bool
+separatingNow song model =
+    isSeparating model.separation || song.separationStatus == Api.Separating
 
 
 {-| Ask the loop endpoint to detect a region rather than echo one back.
@@ -857,22 +905,6 @@ withMixer change model =
                     Preview.request (Mixer.params updated) model.preview
             in
             ( { model | mixer = Just updated, preview = preview }, sendPreview toSend )
-
-
-{-| A preview came back — played or failed, it makes no difference here.
-
-Either way the slot is free, and anything the user asked for while it was busy
-goes now. `warmed` first, so the reply to the opening preview both ends the
-wait and frees the slot: it is one request and it gets exactly one `arrived`,
-which is the invariant `audio.js` is written against.
--}
-previewArrived : Model -> ( Model, Cmd Msg )
-previewArrived model =
-    let
-        ( preview, toSend ) =
-            Preview.arrived (Preview.warmed model.preview)
-    in
-    ( { model | preview = preview }, sendPreview toSend )
 
 
 sendPreview : Maybe Preview.Params -> Cmd msg

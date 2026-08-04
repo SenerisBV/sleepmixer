@@ -1,6 +1,6 @@
 module Preview exposing
     ( Params, State(..)
-    , arrived, encode, isPlayable, request, warm, warmed
+    , arrived, encode, failed, isPlayable, request, retry, warm, warmed
     )
 
 {-| When to ask the server for a preview, and when not to.
@@ -96,8 +96,13 @@ preview would play at a level the finished mix never reaches.
 
 It lives here rather than in `Main` for the reason the rest of this module
 does: it is a decision about whether to send, and every one of those is
-testable only while it stays on this side of the port. Entering a mixer that is
-already warm sends nothing, so re-opening a song costs no render at all.
+testable only while it stays on this side of the port.
+
+Nothing here spares the request: leaving the mixer resets this to `Cold`, so
+re-opening a song sends another opening preview. What is saved is on the
+server, where the session — separated stems, detected loop, stretched loops —
+is still warm and answers in milliseconds rather than minutes. `Warming` is a
+statement about this application's knowledge, not about the server's.
 -}
 warm : Params -> State -> ( State, Maybe Params )
 warm params state =
@@ -142,8 +147,11 @@ request params state =
             ( Queued params, Nothing )
 
 
-{-| Call when a preview returns, whether it succeeded or failed — either way
-the slot is free and anything waiting should go now.
+{-| Call when a preview plays: the slot is free and anything waiting goes now.
+
+For a preview that *failed*, call `failed` instead. Both are exactly one call
+per request emitted, which is what `ports/audio.js` is written against; they
+differ only in what a failure means for the opening preview.
 -}
 arrived : State -> ( State, Maybe Params )
 arrived state =
@@ -156,3 +164,42 @@ arrived state =
 
         other ->
             ( other, Nothing )
+
+
+{-| Call when a preview comes back failed.
+
+For an ordinary request this is `arrived`: the slot is free either way, and a
+failure at one scrubber position says nothing about the next.
+
+The opening preview is different. It is the only thing that establishes there
+is anything to play — stems, a stretched loop, a calibrated master gain — and
+if it did not come back, none of that is known to exist. Treating it as
+`arrived` would move `Warming` to `Idle`, which is `isPlayable`, which replaces
+the preparing panel with a live scrubber and enabled sliders over silence. So a
+failed opening preview goes back to `Cold`: not playable, sending nothing, and
+`warm` (via `retry`) is the way out. Nothing can be queued behind it, because
+`request` refuses while `Warming`.
+-}
+failed : State -> ( State, Maybe Params )
+failed state =
+    case state of
+        Warming ->
+            ( Cold, Nothing )
+
+        other ->
+            arrived other
+
+
+{-| Asking again, by hand, after something went wrong.
+
+The same two doors as everything else, chosen by which side of the opening
+preview the failure happened on.
+-}
+retry : Params -> State -> ( State, Maybe Params )
+retry params state =
+    case state of
+        Cold ->
+            warm params state
+
+        _ ->
+            request params state

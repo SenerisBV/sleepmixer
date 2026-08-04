@@ -37,47 +37,10 @@ view config =
             , durationS = config.song.durationS
             , loop = Maybe.map (\region -> { startS = region.startS, endS = region.endS }) config.loop
             }
-        , loopLine config.loop
+        , Waveform.caption config.loop
         , separationPanel config
         , mixerPanel config
         ]
-
-
-{-| What the shaded region on the waveform is, in words. The region is the part
-of the song every one of the next several hundred repetitions is made of, which
-is worth stating plainly rather than leaving as an unexplained rectangle.
--}
-loopLine : Maybe Api.LoopRegion -> Html msg
-loopLine loop =
-    case loop of
-        Nothing ->
-            text ""
-
-        Just region ->
-            p [ class "dim" ]
-                [ text
-                    ("Loop "
-                        ++ clock region.startS
-                        ++ " – "
-                        ++ clock region.endS
-                        ++ " · "
-                        ++ String.fromInt (round (region.endS - region.startS))
-                        ++ " s · "
-                        ++ String.fromInt (round region.tempo)
-                        ++ " BPM"
-                    )
-                ]
-
-
-clock : Float -> String
-clock seconds =
-    let
-        total =
-            round seconds
-    in
-    String.fromInt (total // 60)
-        ++ ":"
-        ++ String.padLeft 2 '0' (String.fromInt (modBy 60 total))
 
 
 {-| The way into the mixer, and — when there is no way in — why.

@@ -105,11 +105,29 @@ perStemSections =
 
 The stem list is built from the song's separated stems rather than from
 `MixConfig`'s own default list, because the schema cannot describe a list and
-the stems a song has are the only ones a preview could play. One consequence
-worth knowing: a fresh mixer starts every stem at `StemConfig`'s defaults —
-all enabled, all at the same decay curve — where `sleepmix render` starts from
-`MixConfig`'s curated list (drums off, bass undecayed). The mixer shows what it
-will render; it just does not start where the CLI starts.
+the stems a song has are the only ones a preview could play.
+
+**The consequence is larger than it looks, so it is written out in full.** A
+fresh mixer gives every stem `StemConfig`'s and `StemDecayConfig`'s defaults —
+one identical setting for all of them. `MixConfig`'s curated list is four
+different settings, and a mixer opened on a normally-separated song differs
+from what `sleepmix render` would do on every one of them:
+
+  - `drums` — enabled here, disabled there.
+  - `bass` — decay enabled here, disabled there (the CLI keeps the low end
+    steady on purpose).
+  - `vocals` — `linear` here against `exp` there, and three endpoints the CLI
+    moves: lowpass 1600 → 2200 Hz, amplitude -9 → -16 dB, spectral holes
+    0.3 → 0.45.
+  - `other` — lowpass 1600 → 2400 Hz, amplitude -9 → -4 dB.
+
+So it is not "drums start on". It is that the CLI's per-stem shaping — vocals
+dissolving late and far, other staying present — is absent, and every stem
+erodes identically until someone moves a slider. The mixer is honest: it shows
+exactly what it will render. It just does not start where the CLI starts, and
+anyone comparing a mix made here against one made there should know that is
+why they differ. Closing this properly needs the server to publish its default
+config, not a copy of that list written out in Elm.
 -}
 fromSchema : Schema.Schema -> List String -> Config
 fromSchema schema stemNames =

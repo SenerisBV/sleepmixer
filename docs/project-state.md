@@ -43,13 +43,19 @@ control could produce a config the server refuses, and it would surface as a
 What it does not do yet, and what to know before changing it:
 
 - **The mixer starts from the schema's stem defaults, not `MixConfig`'s curated
-  ones.** A fresh mixer has every stem enabled at the same decay curve, where
-  `sleepmix render` starts with drums off and bass undecayed. The schema
-  deliberately does not describe list-typed fields, so there is nothing to read
-  those from, and hard-coding them in Elm is exactly the drift the schema
-  exists to prevent. The mixer is honest about what it will render; it just
-  does not start where the CLI starts. A `GET /api/config/default` would close
-  this properly.
+  ones — and that is a difference on every stem, not just drums.** A fresh
+  mixer gives all four stems one identical setting (`StemConfig` +
+  `StemDecayConfig` defaults). `MixConfig`'s list is four different ones, and
+  they differ as follows: `drums` enabled here / disabled there; `bass` decay
+  enabled here / disabled there; `vocals` `linear` here against `exp` there
+  plus lowpass 1600 → 2200 Hz, amplitude -9 → -16 dB and spectral holes
+  0.3 → 0.45; `other` lowpass 1600 → 2400 Hz and amplitude -9 → -4 dB. The
+  CLI's per-stem shaping is simply absent until someone moves a slider, so a
+  mix built in the UI and a mix built by `sleepmix render` from defaults are
+  audibly different things. The schema deliberately does not describe
+  list-typed fields, so there is nothing to read the curated list from, and
+  hard-coding it in Elm is exactly the drift the schema exists to prevent. A
+  `GET /api/config/default` is the right fix and is parked for a later plan.
 - **The sound bed is not in previews.** `preview.render_window` does not add it;
   `pipeline.run_pipeline` does. The section says so in place, because otherwise
   you turn on binaural beats, hear nothing, and conclude the mixer is broken.
@@ -60,7 +66,18 @@ What it does not do yet, and what to know before changing it:
   an open mixer, which is the other half of the gate.
 - **"Preparing…" is indeterminate on purpose.** The first preview is the
   117-second path and nothing in it reports progress, so the bar animates and
-  claims nothing. Do not replace it with a fraction; there is no fraction.
+  claims nothing. Do not replace it with a fraction; there is no fraction. If
+  that preview *fails*, `Preview.failed` puts the session back to `Cold` rather
+  than to `Idle`: nothing came back, so nothing is known to be playable, and
+  opening the controls over silence would break the one promise this screen
+  makes. The panel says so and offers to try again.
+- **`separation_model` has no control in the mixer, deliberately.** It is the
+  one config field whose change is not a cheap re-render: `update_config` nulls
+  the session's stems, so the next preview runs Demucs inside the per-song
+  preview lock — minutes, no progress, and the screen already playable. The
+  value still travels with every preview; only the control is absent. It
+  belongs beside the Separate button, which already has a job and a progress
+  bar, and that is a later plan.
 - **The loop region is re-fetched only when `loop.start_s` or `loop.end_s`
   changes**, because those are the only two things `GET /api/songs/{id}/loop`
   takes. `bars`, `beats_per_bar` and the search window are config fields a

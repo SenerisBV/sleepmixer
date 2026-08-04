@@ -196,6 +196,7 @@ view config =
             , durationS = config.song.durationS
             , loop = Maybe.map (\r -> { startS = r.startS, endS = r.endS }) config.loop
             }
+        , Waveform.caption config.loop
         , arcPanel config
         , stemsPanel wiring config.state config.schema config.onSolo
         , settingsPanel wiring config.state config.schema
@@ -222,8 +223,26 @@ arcPanel config =
             [ scrubber config, playingLine config, previewProblem config ]
 
          else
-            [ preparing, previewProblem config ]
+            case config.previewError of
+                -- Not playable *and* something went wrong: the opening preview
+                -- failed, so nothing is being prepared and an animated bar
+                -- would be claiming otherwise.
+                Just _ ->
+                    [ stalled, previewProblem config ]
+
+                Nothing ->
+                    [ preparing, previewProblem config ]
         )
+
+
+stalled : Html msg
+stalled =
+    p [ class "dim" ]
+        [ text
+            ("There is nothing to play yet — the first preview did not come back, "
+                ++ "so the controls stay inert until one does."
+            )
+        ]
 
 
 scrubber :
@@ -427,7 +446,7 @@ sectionFields name schema =
 settingsPanel : Wiring msg -> State -> Schema.Schema -> Html msg
 settingsPanel wiring state schema =
     div [ class "settings" ]
-        (section wiring state Config.Top "mix" schema.fields
+        (section wiring state Config.Top "mix" (mixFields schema)
             :: List.map
                 (\( name, aSection ) ->
                     section wiring state (Config.InSection name) name aSection.fields
@@ -436,6 +455,33 @@ settingsPanel wiring state schema =
                     (Dict.toList schema.sections)
                 )
         )
+
+
+{-| The top-level config fields, minus `separation_model`.
+
+Named explicitly rather than filtered by some rule, because there is exactly
+one of these and a general mechanism for hiding config fields is the thing this
+module exists not to have. It is excluded because it is not a mix-time setting
+at all: `RenderSession.update_config` nulls `_stems` when it changes, and the
+registry is built with the real `separate` function, so the next preview runs
+Demucs — minutes, inside the per-song preview lock, with nothing reporting
+progress, and the screen already playable so not even the preparing panel
+shows. A typo committed on blur would fail somewhere deep in Demucs several
+minutes later.
+
+Every other control on this screen is a cheap re-render, which is the mixer's
+whole contract; this one is not, and prose warning beside it is not a guard.
+Giving it `choices` in `config.py` would make it a select instead of a text
+box, which stops the typo and none of the rest. It belongs beside the Separate
+button, where separation already has a progress bar and a job to watch.
+
+The *value* still goes with every preview — `Config` carries the schema's
+default and the server needs it to know which cached stems to use. Only the
+control is gone.
+-}
+mixFields : Schema.Schema -> Dict String Schema.Field
+mixFields schema =
+    Dict.remove "separation_model" schema.fields
 
 
 section : Wiring msg -> State -> (String -> Config.Target) -> String -> Dict String Schema.Field -> Html msg
@@ -497,8 +543,10 @@ sectionNote name =
 
                 "mix" ->
                     Just
-                        ("A different separation model separates the song again from "
-                            ++ "scratch — minutes, not seconds."
+                        ("The separation model is not here on purpose: changing it "
+                            ++ "separates the song again from scratch, which is minutes "
+                            ++ "of silence rather than a re-render. It belongs beside "
+                            ++ "the Separate button, which has a progress bar."
                         )
 
                 _ ->

@@ -207,15 +207,70 @@ suite =
                         |> Expect.equal "Cold"
             , test "though the control itself still moves" <|
                 \_ ->
-                    -- The scrubber is disabled in the view; the model does not
-                    -- depend on that. What matters is that the position is not
-                    -- silently discarded — the next preview should be of where
+                    -- `arcPanel` does not render the scrubber at all while the
+                    -- session is not playable, so nothing can arrive here from
+                    -- the mixer's own view. The model does not depend on that:
+                    -- what matters is that a position arriving anyway is kept
+                    -- rather than discarded, so the next preview is of where
                     -- the scrubber actually is.
                     { opened | preview = Preview.Cold }
                         |> step (Main.ProgressChanged "0.5")
                         |> .mixer
                         |> Maybe.map .progress
                         |> Expect.equal (Just 0.5)
+            ]
+        , describe "when the opening preview fails"
+            [ test "the mixer does not become playable" <|
+                \_ ->
+                    -- The one thing that establishes there is anything to play
+                    -- did not come back. Going Idle here would replace the
+                    -- preparing panel with a live scrubber and enabled sliders
+                    -- over silence, which is the promise "controls are inert
+                    -- until then" makes and this would break.
+                    opened
+                        |> step (Main.PreviewFailed "server answered 500")
+                        |> .preview
+                        |> Preview.isPlayable
+                        |> Expect.equal False
+            , test "and goes back to cold rather than sitting in Warming" <|
+                \_ ->
+                    -- Warming would be a dead end: `request` refuses there, so
+                    -- no control could ever start anything again.
+                    opened
+                        |> step (Main.PreviewFailed "server answered 500")
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "Cold"
+            , test "and says what happened" <|
+                \_ ->
+                    opened
+                        |> step (Main.PreviewFailed "server answered 500")
+                        |> .previewError
+                        |> Expect.equal (Just "server answered 500")
+            , test "retrying opens it again rather than doing nothing" <|
+                \_ ->
+                    opened
+                        |> step (Main.PreviewFailed "server answered 500")
+                        |> step Main.RetryPreview
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "Warming"
+            , test "and clears the error while that attempt is in flight" <|
+                \_ ->
+                    opened
+                        |> step (Main.PreviewFailed "server answered 500")
+                        |> step Main.RetryPreview
+                        |> .previewError
+                        |> Expect.equal Nothing
+            , test "a retry that succeeds leaves it playable" <|
+                \_ ->
+                    opened
+                        |> step (Main.PreviewFailed "server answered 500")
+                        |> step Main.RetryPreview
+                        |> step (Main.PreviewPlaying (Just 12.5))
+                        |> .preview
+                        |> Preview.isPlayable
+                        |> Expect.equal True
             ]
         , describe "once the first preview has come back"
             [ test "it is playable" <|
@@ -249,6 +304,8 @@ suite =
                         |> Expect.equal "InFlight"
             , test "a failure frees the slot as surely as a success" <|
                 \_ ->
+                    -- Once the session is known to be playable, a failure at
+                    -- one scrubber position says nothing about the next.
                     -- Anything else strands the state machine in `InFlight`
                     -- and the scrubber stops responding for the rest of the
                     -- session.
