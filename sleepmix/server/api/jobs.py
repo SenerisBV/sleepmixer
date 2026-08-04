@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from ..jobs import TERMINAL_STATUSES
+from ..renders import abandon_render
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
@@ -34,10 +35,50 @@ def get_job(job_id: str, request: Request) -> dict:
 
 @router.post("/{job_id}/cancel")
 def cancel_job(job_id: str, request: Request) -> dict:
-    if request.app.state.jobs.get(job_id) is None:
+    """Stop a job, and settle anything it was going to write but now will not.
+
+    The settling is here rather than in the work function because for one case
+    the work function never runs. ``JobManager._run`` short-circuits without
+    calling it when the token is already set — deliberate, and what stops a
+    cancelled separation from starting Demucs anyway — so a render cancelled
+    while it was still *queued* had nothing to write its row: the job read
+    "cancelled" while the row read "queued" forever, and ``DELETE
+    /api/renders/{id}`` refuses anything at "queued", so the row could not be
+    removed either. The queue screen and the renders screen, one click apart,
+    disagreed about the same render with no way to resolve it.
+
+    **Only when the job came back terminal.** A *running* render settles its
+    own row through ``work``'s ``except Cancelled``, and writing it from this
+    request thread as well would race the worker — the case that would hurt is
+    a render finishing a moment after the token was set, where this would put
+    "cancelled" over a row the pipeline had just marked "done". ``cancel`` ends
+    a queued job synchronously and leaves a running one alone, so the status
+    read back here is exactly the test for "the work function will never run".
+
+    Not gated on ``cancelled`` being True: a second cancel of an
+    already-cancelled render re-settles a row that is already settled, which
+    ``abandon_render`` is idempotent for, and that makes this the one place a
+    row stranded by any earlier version of this code can still be cleared.
+    """
+    manager = request.app.state.jobs
+    job = manager.get(job_id)
+    if job is None:
         raise HTTPException(status_code=404, detail="No such job")
-    cancelled = request.app.state.jobs.cancel(job_id)
-    return {"cancelled": cancelled, "job": request.app.state.jobs.get(job_id).as_event()}
+
+    # Held across the cancel rather than re-fetched after it. `JobManager`
+    # mutates its jobs in place, so this reference reflects the cancel — and it
+    # still exists if cancelling was what tipped this job out of the bounded
+    # set of terminal ones the manager keeps. Re-fetching would answer with a
+    # `job` of null in that case, which the client's decoder refuses.
+    cancelled = manager.cancel(job_id)
+
+    if job.render_id and job.status == "cancelled":
+        store = request.app.state.store
+        render = store.get_render(job.render_id)
+        if render is not None:
+            abandon_render(store, job.render_id, render["path"], "cancelled")
+
+    return {"cancelled": cancelled, "job": job.as_event()}
 
 
 @router.get("/{job_id}/events")

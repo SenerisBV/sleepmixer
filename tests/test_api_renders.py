@@ -93,6 +93,130 @@ def _a_running_render(client, tmp_path):
         renders_api.run_pipeline = original
 
 
+def _blocking_render(client, tmp_path):
+    """A render held at 'running', plus the gate that releases it.
+
+    `_a_running_render` restores `run_pipeline` before it returns, which is
+    right for a test that only needs a render *at* running. These tests need
+    the worker still occupied while they do something else, since there is one
+    worker and "queued" is only reachable while it is busy. So the patch stays
+    in place and the caller is handed the gate and the restore to run itself.
+    """
+    import sleepmix.server.api.renders as renders_api
+
+    gate = threading.Event()
+    original = renders_api.run_pipeline
+
+    def blocked(*args, **kwargs):
+        if not gate.wait(timeout=5.0):
+            cancel = kwargs.get("cancel")
+            if cancel is not None and cancel.cancelled:
+                cancel.check()
+        return original(*args, **kwargs)
+
+    renders_api.run_pipeline = blocked
+
+    def restore():
+        gate.set()
+        renders_api.run_pipeline = original
+
+    song = _import_song(client, tmp_path)
+    body = client.post("/api/renders",
+                       json={"song_id": song["id"], "config": _SHORT}).json()
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if client.get(f"/api/renders/{body['render']['id']}").json()["status"] == "running":
+            return song, body, restore
+    restore()
+    raise AssertionError("the blocking render never reached status 'running'")
+
+
+def test_cancelling_a_queued_render_settles_its_row_instead_of_stranding_it(client, tmp_path):
+    """The row used to be left at 'queued' forever, and could not be deleted.
+
+    `JobManager._run` short-circuits without calling the work function when the
+    token is already set, and the work function is the only thing that writes
+    this row — so a render cancelled before it started had its job go
+    'cancelled' while the row stayed 'queued'. `DELETE /api/renders/{id}`
+    refuses anything at 'queued', so there was no way to clear it: the queue
+    screen said the job was cancelled, the renders screen said the render was
+    still coming, and neither could be made to agree with the other.
+    """
+    song, blocker, restore = _blocking_render(client, tmp_path)
+    try:
+        queued = client.post("/api/renders",
+                             json={"song_id": song["id"], "config": _SHORT}).json()
+        render_id = queued["render"]["id"]
+        assert client.get(f"/api/renders/{render_id}").json()["status"] == "queued"
+
+        answer = client.post(f"/api/jobs/{queued['job']['id']}/cancel").json()
+        assert answer["cancelled"] is True
+        assert answer["job"]["status"] == "cancelled"
+
+        # No polling: the worker is still inside the blocking render and cannot
+        # have touched this one, so the row can only have been settled by the
+        # cancel route itself.
+        assert client.get(f"/api/renders/{render_id}").json()["status"] == "cancelled"
+        assert client.get(f"/api/jobs/{blocker['job']['id']}").json()["status"] == "running", (
+            "the blocking render must still hold the worker, or this proves nothing")
+
+        # The assertion the whole fix is for: the row is no longer stranded.
+        assert client.delete(f"/api/renders/{render_id}").status_code == 204
+        assert client.get(f"/api/renders/{render_id}").status_code == 404
+    finally:
+        restore()
+
+
+def test_cancelling_a_running_render_leaves_the_row_to_the_work_function(client, tmp_path):
+    """The route must not write a row the worker still owns.
+
+    Racing it from the request thread is how 'cancelled' would end up written
+    over a 'done' that landed a moment later. The route's guard is the job's
+    own status, which `JobManager.cancel` leaves at 'running' precisely so the
+    work function keeps ownership — and the row still ends up 'cancelled',
+    through `work`'s `except Cancelled`, which is the point.
+    """
+    song, blocker, restore = _blocking_render(client, tmp_path)
+    try:
+        render_id = blocker["render"]["id"]
+        answer = client.post(f"/api/jobs/{blocker['job']['id']}/cancel").json()
+        assert answer["cancelled"] is True
+        assert answer["job"]["status"] == "running", (
+            "a running job must not be marked cancelled before it has stopped")
+        assert client.get(f"/api/renders/{render_id}").json()["status"] == "running", (
+            "the route settled a row the work function still owns")
+    finally:
+        restore()
+
+    _await_job(client, blocker["job"]["id"])
+    assert client.get(f"/api/renders/{render_id}").json()["status"] == "cancelled"
+
+
+def test_cancelling_a_queued_separation_touches_nothing_render_shaped(client, tmp_path):
+    """A separation carries no `render_id`, so the new branch must not fire.
+
+    Asserted rather than assumed: the guard is `job.render_id and ...`, and a
+    version of it that only checked the status would go looking for a render
+    row keyed on None for every separation anyone cancels.
+    """
+    song, blocker, restore = _blocking_render(client, tmp_path)
+    before = {r["id"]: r["status"] for r in client.get("/api/renders").json()["renders"]}
+    try:
+        separation = client.post(f"/api/songs/{song['id']}/separate?force=true").json()
+        assert client.get(f"/api/jobs/{separation['id']}").json()["status"] == "queued"
+        assert separation["render_id"] is None
+
+        answer = client.post(f"/api/jobs/{separation['id']}/cancel").json()
+        assert answer["cancelled"] is True
+        assert answer["job"]["status"] == "cancelled"
+        assert answer["job"]["render_id"] is None
+
+        after = {r["id"]: r["status"] for r in client.get("/api/renders").json()["renders"]}
+        assert after == before, "cancelling a separation changed a render row"
+    finally:
+        restore()
+
+
 def test_render_produces_a_downloadable_file(client, tmp_path):
     song = _import_song(client, tmp_path)
     r = client.post("/api/renders", json={"song_id": song["id"], "config": _SHORT})

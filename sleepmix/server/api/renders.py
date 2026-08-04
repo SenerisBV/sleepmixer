@@ -20,6 +20,7 @@ from ...config import MixConfig
 from ...paths import data_dir
 from ...pipeline import run_pipeline
 from ...progress import Cancelled
+from ..renders import abandon_render
 
 router = APIRouter(prefix="/api/renders", tags=["renders"])
 
@@ -34,23 +35,6 @@ def _renders_dir() -> str:
     path = os.path.join(str(data_dir()), "renders")
     os.makedirs(path, exist_ok=True)
     return path
-
-
-def _abandon(store, render_id: str, output_path: str, status: str) -> None:
-    """Record a render that produced nothing, and leave no partial file.
-
-    Both failure paths go through here so the row can never be left at
-    "running" and a half-written file can never masquerade as a finished
-    render. Errors while cleaning up are swallowed deliberately: the original
-    exception is the one worth propagating."""
-    try:
-        store.update_render(render_id, status=status)
-    finally:
-        try:
-            if output_path and os.path.exists(output_path):
-                os.remove(output_path)
-        except OSError:
-            pass
 
 
 @router.post("", status_code=202)
@@ -88,7 +72,7 @@ def start_render(body: RenderRequest, request: Request) -> dict:
             mix = run_pipeline(source, config, output_path,
                                reporter=reporter, cancel=cancel)
         except Cancelled:
-            _abandon(store, render["id"], output_path, "cancelled")
+            abandon_render(store, render["id"], output_path, "cancelled")
             raise
         except Exception:
             # Genuine failure, not a cancellation. Classified by exception
@@ -97,7 +81,7 @@ def start_render(body: RenderRequest, request: Request) -> dict:
             # pipeline reaches its next check(), and the job manager itself
             # classifies by type, so this must match it or the render row and
             # the job row disagree about the same event.
-            _abandon(store, render["id"], output_path, "failed")
+            abandon_render(store, render["id"], output_path, "failed")
             raise
         store.update_render(render["id"], status="done",
                             duration_min=mix.duration / 60.0)
@@ -145,7 +129,7 @@ def delete_render(render_id: str, request: Request) -> Response:
     Refused while the render is still being produced: the pipeline would go on
     writing to a path nobody will look at, and the row it updates on completion
     would be gone. Cancel the job first — that path already deletes the partial
-    file through ``_abandon``."""
+    file through ``abandon_render``."""
     store = request.app.state.store
     render = store.get_render(render_id)
     if render is None:
