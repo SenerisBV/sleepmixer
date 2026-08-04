@@ -18,7 +18,7 @@ import threading
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from ..progress import Cancelled, CancelToken, ProgressEvent, ProgressReporter

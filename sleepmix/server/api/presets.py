@@ -27,7 +27,12 @@ def list_presets(request: Request) -> dict:
 @router.post("", status_code=201)
 def create_preset(body: PresetRequest, request: Request) -> dict:
     try:
-        MixConfig.from_dict(body.config)
+        # Called for the ValueError, not the value: what gets stored is the raw
+        # dict, and this is the only thing standing between a bad config and a
+        # preset that fails much later, at render time, with the connection to
+        # the offending value long gone. Bound rather than discarded so a
+        # "remove the unused call" cleanup cannot silently delete the 400 path.
+        _validated = MixConfig.from_dict(body.config)  # noqa: F841
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     try:

@@ -153,3 +153,49 @@ def test_a_cancelled_separation_returns_the_song_to_pending(client, tmp_path, mo
     updated = client.get(f"/api/songs/{song['id']}").json()
     assert updated["separation_status"] == "pending"
     assert updated["separation_reason"] is None
+
+
+def test_a_cancelled_force_does_not_destroy_the_cache(client, tmp_path, monkeypatch):
+    """Cancelling a forced re-separation must leave the cached stems alone.
+
+    `force=true` deletes the cache first so the model really runs again. If the
+    cancel check sits *after* that delete, a job cancelled before it ever ran
+    still destroys the cache on its way out — the song is left with nothing,
+    having been asked to stop. So the check goes first.
+
+    Made deterministic by occupying the single worker: the forced job is still
+    queued when the cancel lands, so when it finally runs the token is already
+    set and `cancel.check()` fires on the first line of the closure."""
+    import threading
+
+    import sleepmix.server.api.songs as songs_api
+
+    deleted: list[str] = []
+    monkeypatch.setattr(
+        songs_api, "invalidate_cache",
+        lambda path, model, cache_dir=None: deleted.append(path))
+
+    song = _import_song(client, tmp_path)
+
+    release = threading.Event()
+    occupied = threading.Event()
+
+    def blocker(reporter, cancel) -> dict:
+        occupied.set()
+        release.wait(timeout=30)
+        return {}
+
+    jobs = client.app.state.jobs
+    jobs.submit("test-blocker", blocker)
+    assert occupied.wait(timeout=10), "the worker never picked up the blocker"
+
+    job_id = client.post(f"/api/songs/{song['id']}/separate?force=true").json()["id"]
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "queued"
+    assert client.post(f"/api/jobs/{job_id}/cancel").status_code in (200, 202, 204)
+    release.set()
+
+    body = _await_job(client, job_id)
+    assert body["status"] == "cancelled"
+    assert deleted == [], "a cancelled force deleted the cache anyway"
+    assert client.get(f"/api/songs/{song['id']}").json()[
+        "separation_status"] == "pending"

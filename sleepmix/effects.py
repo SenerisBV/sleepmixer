@@ -15,7 +15,6 @@ import numpy as np
 
 from .audio import AudioBuffer
 from .config import ReverbConfig
-from .util import db_to_amp
 
 # Keyed by (sr, predelay_ms): the offset depends on the installed backend and
 # the pre-delay, on nothing else, and measuring it costs a real reverb call.

@@ -96,9 +96,12 @@ def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
     def work(reporter, cancel) -> dict:
         reporter.emit("separate", "Separating stems…", 0.0)
         try:
+            # Before the invalidation, not after: a cancel that lands in this
+            # window would otherwise delete the cached stems on its way out and
+            # leave the song with nothing, having been asked to stop.
+            cancel.check()
             if force:
                 invalidate_cache(path, model, cache_dir=str(cache_dir()))
-            cancel.check()
             result = separate_detailed(path, model, cache_dir=str(cache_dir()))
         except Cancelled:
             # Nothing was produced, so the honest state is the one we started
