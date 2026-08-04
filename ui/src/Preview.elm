@@ -1,6 +1,6 @@
 module Preview exposing
     ( Params, State(..)
-    , arrived, isPlayable, request, warmed
+    , arrived, encode, isPlayable, request, warmed
     )
 
 {-| When to ask the server for a preview, and when not to.

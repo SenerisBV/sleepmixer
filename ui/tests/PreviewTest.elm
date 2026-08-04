@@ -64,6 +64,43 @@ suite =
                     Preview.arrived Preview.Idle
                         |> Expect.equal ( Preview.Idle, Nothing )
             ]
+        , describe "encode"
+            [ test "keys are the API's, not Elm's" <|
+                \_ ->
+                    let
+                        json =
+                            Encode.encode 0 (Preview.encode (params 0.5))
+                    in
+                    json
+                        |> Expect.all
+                            [ \s -> Expect.equal True (String.contains "\"song_id\"" s)
+                            , \s -> Expect.equal False (String.contains "\"songId\"" s)
+                            ]
+            , test "an empty stems list is omitted, not sent empty" <|
+                \_ ->
+                    Encode.encode 0 (Preview.encode (params 0.5))
+                        |> String.contains "\"stems\""
+                        |> Expect.equal False
+            , test "a non-empty stems list is included" <|
+                \_ ->
+                    let
+                        withStems =
+                            let
+                                base =
+                                    params 0.5
+                            in
+                            { base | stems = [ "vocals", "drums" ] }
+
+                        json =
+                            Encode.encode 0 (Preview.encode withStems)
+                    in
+                    json
+                        |> Expect.all
+                            [ \s -> Expect.equal True (String.contains "\"stems\"" s)
+                            , \s -> Expect.equal True (String.contains "\"vocals\"" s)
+                            , \s -> Expect.equal True (String.contains "\"drums\"" s)
+                            ]
+            ]
         , describe "the property that matters"
             [ test "a drag of twenty positions sends at most two requests" <|
                 \_ ->
