@@ -784,11 +784,11 @@ function _Debug_crash_UNUSED(identifier, fact1, fact2, fact3, fact4)
 
 function _Debug_regionToString(region)
 {
-	if (region.au._ === region.aH._)
+	if (region.ax.ab === region.aL.ab)
 	{
-		return 'on line ' + region.au._;
+		return 'on line ' + region.ax.ab;
 	}
-	return 'on lines ' + region.au._ + ' through ' + region.aH._;
+	return 'on lines ' + region.ax.ab + ' through ' + region.aL.ab;
 }
 
 
@@ -1861,9 +1861,9 @@ var _Platform_worker = F4(function(impl, flagDecoder, debugMetadata, args)
 	return _Platform_initialize(
 		flagDecoder,
 		args,
-		impl.bP,
-		impl.cm,
-		impl.cg,
+		impl.bV,
+		impl.cE,
+		impl.cy,
 		function() { return function() {} }
 	);
 });
@@ -2727,9 +2727,9 @@ var _VirtualDom_mapEventTuple = F2(function(func, tuple)
 var _VirtualDom_mapEventRecord = F2(function(func, record)
 {
 	return {
-		F: func(record.F),
-		av: record.av,
-		as: record.as
+		b_: func(record.b_),
+		ay: record.ay,
+		av: record.av
 	}
 });
 
@@ -2997,11 +2997,11 @@ function _VirtualDom_makeCallback(eventNode, initialHandler)
 		// 3 = Custom
 
 		var value = result.a;
-		var message = !tag ? value : tag < 3 ? value.a : value.F;
-		var stopPropagation = tag == 1 ? value.b : tag == 3 && value.av;
+		var message = !tag ? value : tag < 3 ? value.a : value.b_;
+		var stopPropagation = tag == 1 ? value.b : tag == 3 && value.ay;
 		var currentEventNode = (
 			stopPropagation && event.stopPropagation(),
-			(tag == 2 ? value.b : tag == 3 && value.as) && event.preventDefault(),
+			(tag == 2 ? value.b : tag == 3 && value.av) && event.preventDefault(),
 			eventNode
 		);
 		var tagger;
@@ -3951,11 +3951,11 @@ var _Browser_element = _Debugger_element || F4(function(impl, flagDecoder, debug
 	return _Platform_initialize(
 		flagDecoder,
 		args,
-		impl.bP,
-		impl.cm,
-		impl.cg,
+		impl.bV,
+		impl.cE,
+		impl.cy,
 		function(sendToApp, initialModel) {
-			var view = impl.co;
+			var view = impl.cG;
 			/**/
 			var domNode = args['node'];
 			//*/
@@ -3987,12 +3987,12 @@ var _Browser_document = _Debugger_document || F4(function(impl, flagDecoder, deb
 	return _Platform_initialize(
 		flagDecoder,
 		args,
-		impl.bP,
-		impl.cm,
-		impl.cg,
+		impl.bV,
+		impl.cE,
+		impl.cy,
 		function(sendToApp, initialModel) {
-			var divertHrefToApp = impl.at && impl.at(sendToApp)
-			var view = impl.co;
+			var divertHrefToApp = impl.aw && impl.aw(sendToApp)
+			var view = impl.cG;
 			var title = _VirtualDom_doc.title;
 			var bodyNode = _VirtualDom_doc.body;
 			var currNode = _VirtualDom_virtualize(bodyNode);
@@ -4000,12 +4000,12 @@ var _Browser_document = _Debugger_document || F4(function(impl, flagDecoder, deb
 			{
 				_VirtualDom_divertHrefToApp = divertHrefToApp;
 				var doc = view(model);
-				var nextNode = _VirtualDom_node('body')(_List_Nil)(doc.bw);
+				var nextNode = _VirtualDom_node('body')(_List_Nil)(doc.aE);
 				var patches = _VirtualDom_diff(currNode, nextNode);
 				bodyNode = _VirtualDom_applyPatches(bodyNode, currNode, patches, sendToApp);
 				currNode = nextNode;
 				_VirtualDom_divertHrefToApp = 0;
-				(title !== doc.ck) && (_VirtualDom_doc.title = title = doc.ck);
+				(title !== doc.cC) && (_VirtualDom_doc.title = title = doc.cC);
 			});
 		}
 	);
@@ -4061,12 +4061,12 @@ function _Browser_makeAnimator(model, draw)
 
 function _Browser_application(impl)
 {
-	var onUrlChange = impl.b3;
-	var onUrlRequest = impl.b4;
+	var onUrlChange = impl.ce;
+	var onUrlRequest = impl.cf;
 	var key = function() { key.a(onUrlChange(_Browser_getUrl())); };
 
 	return _Browser_document({
-		at: function(sendToApp)
+		aw: function(sendToApp)
 		{
 			key.a = sendToApp;
 			_Browser_window.addEventListener('popstate', key);
@@ -4082,9 +4082,9 @@ function _Browser_application(impl)
 					var next = $elm$url$Url$fromString(href).a;
 					sendToApp(onUrlRequest(
 						(next
-							&& curr.a3 === next.a3
-							&& curr.aP === next.aP
-							&& curr.a0.a === next.a0.a
+							&& curr.a7 === next.a7
+							&& curr.aT === next.aT
+							&& curr.a4.a === next.a4.a
 						)
 							? $elm$browser$Browser$Internal(next)
 							: $elm$browser$Browser$External(href)
@@ -4092,13 +4092,13 @@ function _Browser_application(impl)
 				}
 			});
 		},
-		bP: function(flags)
+		bV: function(flags)
 		{
-			return A3(impl.bP, flags, _Browser_getUrl(), key);
+			return A3(impl.bV, flags, _Browser_getUrl(), key);
 		},
-		co: impl.co,
-		cm: impl.cm,
-		cg: impl.cg
+		cG: impl.cG,
+		cE: impl.cE,
+		cy: impl.cy
 	});
 }
 
@@ -4164,17 +4164,17 @@ var _Browser_decodeEvent = F2(function(decoder, event)
 function _Browser_visibilityInfo()
 {
 	return (typeof _VirtualDom_doc.hidden !== 'undefined')
-		? { bM: 'hidden', bz: 'visibilitychange' }
+		? { bS: 'hidden', bD: 'visibilitychange' }
 		:
 	(typeof _VirtualDom_doc.mozHidden !== 'undefined')
-		? { bM: 'mozHidden', bz: 'mozvisibilitychange' }
+		? { bS: 'mozHidden', bD: 'mozvisibilitychange' }
 		:
 	(typeof _VirtualDom_doc.msHidden !== 'undefined')
-		? { bM: 'msHidden', bz: 'msvisibilitychange' }
+		? { bS: 'msHidden', bD: 'msvisibilitychange' }
 		:
 	(typeof _VirtualDom_doc.webkitHidden !== 'undefined')
-		? { bM: 'webkitHidden', bz: 'webkitvisibilitychange' }
-		: { bM: 'hidden', bz: 'visibilitychange' };
+		? { bS: 'webkitHidden', bD: 'webkitvisibilitychange' }
+		: { bS: 'hidden', bD: 'visibilitychange' };
 }
 
 
@@ -4255,12 +4255,12 @@ var _Browser_call = F2(function(functionName, id)
 function _Browser_getViewport()
 {
 	return {
-		ba: _Browser_getScene(),
-		bl: {
-			bo: _Browser_window.pageXOffset,
-			bp: _Browser_window.pageYOffset,
-			bn: _Browser_doc.documentElement.clientWidth,
-			aO: _Browser_doc.documentElement.clientHeight
+		be: _Browser_getScene(),
+		bp: {
+			bs: _Browser_window.pageXOffset,
+			bt: _Browser_window.pageYOffset,
+			br: _Browser_doc.documentElement.clientWidth,
+			aS: _Browser_doc.documentElement.clientHeight
 		}
 	};
 }
@@ -4270,8 +4270,8 @@ function _Browser_getScene()
 	var body = _Browser_doc.body;
 	var elem = _Browser_doc.documentElement;
 	return {
-		bn: Math.max(body.scrollWidth, body.offsetWidth, elem.scrollWidth, elem.offsetWidth, elem.clientWidth),
-		aO: Math.max(body.scrollHeight, body.offsetHeight, elem.scrollHeight, elem.offsetHeight, elem.clientHeight)
+		br: Math.max(body.scrollWidth, body.offsetWidth, elem.scrollWidth, elem.offsetWidth, elem.clientWidth),
+		aS: Math.max(body.scrollHeight, body.offsetHeight, elem.scrollHeight, elem.offsetHeight, elem.clientHeight)
 	};
 }
 
@@ -4294,15 +4294,15 @@ function _Browser_getViewportOf(id)
 	return _Browser_withNode(id, function(node)
 	{
 		return {
-			ba: {
-				bn: node.scrollWidth,
-				aO: node.scrollHeight
+			be: {
+				br: node.scrollWidth,
+				aS: node.scrollHeight
 			},
-			bl: {
-				bo: node.scrollLeft,
-				bp: node.scrollTop,
-				bn: node.clientWidth,
-				aO: node.clientHeight
+			bp: {
+				bs: node.scrollLeft,
+				bt: node.scrollTop,
+				br: node.clientWidth,
+				aS: node.clientHeight
 			}
 		};
 	});
@@ -4332,18 +4332,18 @@ function _Browser_getElement(id)
 		var x = _Browser_window.pageXOffset;
 		var y = _Browser_window.pageYOffset;
 		return {
-			ba: _Browser_getScene(),
-			bl: {
-				bo: x,
-				bp: y,
-				bn: _Browser_doc.documentElement.clientWidth,
-				aO: _Browser_doc.documentElement.clientHeight
+			be: _Browser_getScene(),
+			bp: {
+				bs: x,
+				bt: y,
+				br: _Browser_doc.documentElement.clientWidth,
+				aS: _Browser_doc.documentElement.clientHeight
 			},
-			bF: {
-				bo: x + rect.left,
-				bp: y + rect.top,
-				bn: rect.width,
-				aO: rect.height
+			bK: {
+				bs: x + rect.left,
+				bt: y + rect.top,
+				br: rect.width,
+				aS: rect.height
 			}
 		};
 	});
@@ -4388,25 +4388,25 @@ var _Http_toTask = F3(function(router, toTask, request)
 	return _Scheduler_binding(function(callback)
 	{
 		function done(response) {
-			callback(toTask(request.bH.a(response)));
+			callback(toTask(request.bM.a(response)));
 		}
 
 		var xhr = new XMLHttpRequest();
 		xhr.addEventListener('error', function() { done($elm$http$Http$NetworkError_); });
 		xhr.addEventListener('timeout', function() { done($elm$http$Http$Timeout_); });
-		xhr.addEventListener('load', function() { done(_Http_toResponse(request.bH.b, xhr)); });
-		$elm$core$Maybe$isJust(request.bk) && _Http_track(router, xhr, request.bk.a);
+		xhr.addEventListener('load', function() { done(_Http_toResponse(request.bM.b, xhr)); });
+		$elm$core$Maybe$isJust(request.bo) && _Http_track(router, xhr, request.bo.a);
 
 		try {
-			xhr.open(request.bT, request.cn, true);
+			xhr.open(request.b$, request.cF, true);
 		} catch (e) {
-			return done($elm$http$Http$BadUrl_(request.cn));
+			return done($elm$http$Http$BadUrl_(request.cF));
 		}
 
 		_Http_configureRequest(xhr, request);
 
-		request.bw.a && xhr.setRequestHeader('Content-Type', request.bw.a);
-		xhr.send(request.bw.b);
+		request.aE.a && xhr.setRequestHeader('Content-Type', request.aE.a);
+		xhr.send(request.aE.b);
 
 		return function() { xhr.c = true; xhr.abort(); };
 	});
@@ -4417,13 +4417,13 @@ var _Http_toTask = F3(function(router, toTask, request)
 
 function _Http_configureRequest(xhr, request)
 {
-	for (var headers = request.aN; headers.b; headers = headers.b) // WHILE_CONS
+	for (var headers = request.aR; headers.b; headers = headers.b) // WHILE_CONS
 	{
 		xhr.setRequestHeader(headers.a.a, headers.a.b);
 	}
-	xhr.timeout = request.cj.a || 0;
-	xhr.responseType = request.bH.d;
-	xhr.withCredentials = request.bs;
+	xhr.timeout = request.cB.a || 0;
+	xhr.responseType = request.bM.d;
+	xhr.withCredentials = request.bx;
 }
 
 
@@ -4444,10 +4444,10 @@ function _Http_toResponse(toBody, xhr)
 function _Http_toMetadata(xhr)
 {
 	return {
-		cn: xhr.responseURL,
-		ce: xhr.status,
-		cf: xhr.statusText,
-		aN: _Http_parseHeaders(xhr.getAllResponseHeaders())
+		cF: xhr.responseURL,
+		cv: xhr.status,
+		cw: xhr.statusText,
+		aR: _Http_parseHeaders(xhr.getAllResponseHeaders())
 	};
 }
 
@@ -4542,18 +4542,55 @@ function _Http_track(router, xhr, tracker)
 	xhr.upload.addEventListener('progress', function(event) {
 		if (xhr.c) { return; }
 		_Scheduler_rawSpawn(A2($elm$core$Platform$sendToSelf, router, _Utils_Tuple2(tracker, $elm$http$Http$Sending({
-			cd: event.loaded,
-			bd: event.total
+			cq: event.loaded,
+			bh: event.total
 		}))));
 	});
 	xhr.addEventListener('progress', function(event) {
 		if (xhr.c) { return; }
 		_Scheduler_rawSpawn(A2($elm$core$Platform$sendToSelf, router, _Utils_Tuple2(tracker, $elm$http$Http$Receiving({
-			b7: event.loaded,
-			bd: event.lengthComputable ? $elm$core$Maybe$Just(event.total) : $elm$core$Maybe$Nothing
+			cj: event.loaded,
+			bh: event.lengthComputable ? $elm$core$Maybe$Just(event.total) : $elm$core$Maybe$Nothing
 		}))));
 	});
-}var $elm$core$Basics$always = F2(
+}
+
+
+var _Bitwise_and = F2(function(a, b)
+{
+	return a & b;
+});
+
+var _Bitwise_or = F2(function(a, b)
+{
+	return a | b;
+});
+
+var _Bitwise_xor = F2(function(a, b)
+{
+	return a ^ b;
+});
+
+function _Bitwise_complement(a)
+{
+	return ~a;
+};
+
+var _Bitwise_shiftLeftBy = F2(function(offset, a)
+{
+	return a << offset;
+});
+
+var _Bitwise_shiftRightBy = F2(function(offset, a)
+{
+	return a >> offset;
+});
+
+var _Bitwise_shiftRightZfBy = F2(function(offset, a)
+{
+	return a >>> offset;
+});
+var $elm$core$Basics$always = F2(
 	function (a, _v0) {
 		return a;
 	});
@@ -4966,22 +5003,22 @@ var $elm$core$Array$builderToArray = F2(
 		if (!builder.f) {
 			return A4(
 				$elm$core$Array$Array_elm_builtin,
-				$elm$core$Elm$JsArray$length(builder.i),
+				$elm$core$Elm$JsArray$length(builder.h),
 				$elm$core$Array$shiftStep,
 				$elm$core$Elm$JsArray$empty,
-				builder.i);
+				builder.h);
 		} else {
 			var treeLen = builder.f * $elm$core$Array$branchFactor;
 			var depth = $elm$core$Basics$floor(
 				A2($elm$core$Basics$logBase, $elm$core$Array$branchFactor, treeLen - 1));
-			var correctNodeList = reverseNodeList ? $elm$core$List$reverse(builder.j) : builder.j;
+			var correctNodeList = reverseNodeList ? $elm$core$List$reverse(builder.i) : builder.i;
 			var tree = A2($elm$core$Array$treeFromBuilder, correctNodeList, builder.f);
 			return A4(
 				$elm$core$Array$Array_elm_builtin,
-				$elm$core$Elm$JsArray$length(builder.i) + treeLen,
+				$elm$core$Elm$JsArray$length(builder.h) + treeLen,
 				A2($elm$core$Basics$max, 5, depth * $elm$core$Array$shiftStep),
 				tree,
-				builder.i);
+				builder.h);
 		}
 	});
 var $elm$core$Basics$idiv = _Basics_idiv;
@@ -4994,7 +5031,7 @@ var $elm$core$Array$initializeHelp = F5(
 				return A2(
 					$elm$core$Array$builderToArray,
 					false,
-					{j: nodeList, f: (len / $elm$core$Array$branchFactor) | 0, i: tail});
+					{i: nodeList, f: (len / $elm$core$Array$branchFactor) | 0, h: tail});
 			} else {
 				var leaf = $elm$core$Array$Leaf(
 					A3($elm$core$Elm$JsArray$initialize, $elm$core$Array$branchFactor, fromIndex, fn));
@@ -5061,7 +5098,7 @@ var $elm$url$Url$Http = 0;
 var $elm$url$Url$Https = 1;
 var $elm$url$Url$Url = F6(
 	function (protocol, host, port_, path, query, fragment) {
-		return {aJ: fragment, aP: host, a_: path, a0: port_, a3: protocol, a4: query};
+		return {aN: fragment, aT: host, ci: path, a4: port_, a7: protocol, a8: query};
 	});
 var $elm$core$String$contains = _String_contains;
 var $elm$core$String$length = _String_length;
@@ -5341,7 +5378,14 @@ var $elm$core$Task$perform = F2(
 	});
 var $elm$browser$Browser$element = _Browser_element;
 var $author$project$Main$Checking = {$: 0};
-var $author$project$Main$GotHealth = $elm$core$Basics$identity;
+var $author$project$Main$GotHealth = function (a) {
+	return {$: 0, a: a};
+};
+var $author$project$Main$GotSongs = function (a) {
+	return {$: 1, a: a};
+};
+var $author$project$Page$Library$Loading = {$: 0};
+var $elm$core$Platform$Cmd$batch = _Platform_batch;
 var $elm$json$Json$Decode$decodeString = _Json_runOnString;
 var $elm$http$Http$BadStatus_ = F2(
 	function (a, b) {
@@ -5934,7 +5978,7 @@ var $elm$http$Http$resolve = F2(
 			case 3:
 				var metadata = response.a;
 				return $elm$core$Result$Err(
-					$elm$http$Http$BadStatus(metadata.ce));
+					$elm$http$Http$BadStatus(metadata.cv));
 			default:
 				var body = response.b;
 				return A2(
@@ -5963,7 +6007,7 @@ var $elm$http$Http$Request = function (a) {
 };
 var $elm$http$Http$State = F2(
 	function (reqs, subs) {
-		return {a6: reqs, bh: subs};
+		return {ba: reqs, bl: subs};
 	});
 var $elm$http$Http$init = $elm$core$Task$succeed(
 	A2($elm$http$Http$State, $elm$core$Dict$empty, _List_Nil));
@@ -6007,7 +6051,7 @@ var $elm$http$Http$updateReqs = F3(
 					return A2(
 						$elm$core$Task$andThen,
 						function (pid) {
-							var _v4 = req.bk;
+							var _v4 = req.bo;
 							if (_v4.$ === 1) {
 								return A3($elm$http$Http$updateReqs, router, otherCmds, reqs);
 							} else {
@@ -6037,7 +6081,7 @@ var $elm$http$Http$onEffects = F4(
 				return $elm$core$Task$succeed(
 					A2($elm$http$Http$State, reqs, subs));
 			},
-			A3($elm$http$Http$updateReqs, router, cmds, state.a6));
+			A3($elm$http$Http$updateReqs, router, cmds, state.ba));
 	});
 var $elm$core$List$maybeCons = F3(
 	function (f, mx, xs) {
@@ -6080,7 +6124,7 @@ var $elm$http$Http$onSelfMsg = F3(
 				A2(
 					$elm$core$List$filterMap,
 					A3($elm$http$Http$maybeSend, router, tracker, progress),
-					state.bh)));
+					state.bl)));
 	});
 var $elm$http$Http$Cancel = function (a) {
 	return {$: 0, a: a};
@@ -6094,14 +6138,14 @@ var $elm$http$Http$cmdMap = F2(
 			var r = cmd.a;
 			return $elm$http$Http$Request(
 				{
-					bs: r.bs,
-					bw: r.bw,
-					bH: A2(_Http_mapExpect, func, r.bH),
-					aN: r.aN,
-					bT: r.bT,
-					cj: r.cj,
-					bk: r.bk,
-					cn: r.cn
+					bx: r.bx,
+					aE: r.aE,
+					bM: A2(_Http_mapExpect, func, r.bM),
+					aR: r.aR,
+					b$: r.b$,
+					cB: r.cB,
+					bo: r.bo,
+					cF: r.cF
 				});
 		}
 	});
@@ -6124,27 +6168,227 @@ var $elm$http$Http$subscription = _Platform_leaf('Http');
 var $elm$http$Http$request = function (r) {
 	return $elm$http$Http$command(
 		$elm$http$Http$Request(
-			{bs: false, bw: r.bw, bH: r.bH, aN: r.aN, bT: r.bT, cj: r.cj, bk: r.bk, cn: r.cn}));
+			{bx: false, aE: r.aE, bM: r.bM, aR: r.aR, b$: r.b$, cB: r.cB, bo: r.bo, cF: r.cF}));
 };
 var $elm$http$Http$get = function (r) {
 	return $elm$http$Http$request(
-		{bw: $elm$http$Http$emptyBody, bH: r.bH, aN: _List_Nil, bT: 'GET', cj: $elm$core$Maybe$Nothing, bk: $elm$core$Maybe$Nothing, cn: r.cn});
+		{aE: $elm$http$Http$emptyBody, bM: r.bM, aR: _List_Nil, b$: 'GET', cB: $elm$core$Maybe$Nothing, bo: $elm$core$Maybe$Nothing, cF: r.cF});
 };
+var $elm$json$Json$Decode$list = _Json_decodeList;
+var $author$project$Api$Song = F8(
+	function (id, path, title, durationS, sampleRate, separationStatus, stems, addedAt) {
+		return {bw: addedAt, bJ: durationS, aU: id, ci: path, cp: sampleRate, cr: separationStatus, cx: stems, cC: title};
+	});
+var $NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$custom = $elm$json$Json$Decode$map2($elm$core$Basics$apR);
+var $elm$json$Json$Decode$float = _Json_decodeFloat;
+var $elm$json$Json$Decode$int = _Json_decodeInt;
+var $elm$json$Json$Decode$null = _Json_decodeNull;
+var $elm$json$Json$Decode$oneOf = _Json_oneOf;
+var $elm$json$Json$Decode$nullable = function (decoder) {
+	return $elm$json$Json$Decode$oneOf(
+		_List_fromArray(
+			[
+				$elm$json$Json$Decode$null($elm$core$Maybe$Nothing),
+				A2($elm$json$Json$Decode$map, $elm$core$Maybe$Just, decoder)
+			]));
+};
+var $elm$json$Json$Decode$andThen = _Json_andThen;
+var $elm$json$Json$Decode$at = F2(
+	function (fields, decoder) {
+		return A3($elm$core$List$foldr, $elm$json$Json$Decode$field, decoder, fields);
+	});
+var $elm$json$Json$Decode$decodeValue = _Json_run;
+var $elm$json$Json$Decode$value = _Json_decodeValue;
+var $NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$optionalDecoder = F3(
+	function (path, valDecoder, fallback) {
+		var nullOr = function (decoder) {
+			return $elm$json$Json$Decode$oneOf(
+				_List_fromArray(
+					[
+						decoder,
+						$elm$json$Json$Decode$null(fallback)
+					]));
+		};
+		var handleResult = function (input) {
+			var _v0 = A2(
+				$elm$json$Json$Decode$decodeValue,
+				A2($elm$json$Json$Decode$at, path, $elm$json$Json$Decode$value),
+				input);
+			if (!_v0.$) {
+				var rawValue = _v0.a;
+				var _v1 = A2(
+					$elm$json$Json$Decode$decodeValue,
+					nullOr(valDecoder),
+					rawValue);
+				if (!_v1.$) {
+					var finalResult = _v1.a;
+					return $elm$json$Json$Decode$succeed(finalResult);
+				} else {
+					return A2(
+						$elm$json$Json$Decode$at,
+						path,
+						nullOr(valDecoder));
+				}
+			} else {
+				return $elm$json$Json$Decode$succeed(fallback);
+			}
+		};
+		return A2($elm$json$Json$Decode$andThen, handleResult, $elm$json$Json$Decode$value);
+	});
+var $NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$optional = F4(
+	function (key, valDecoder, fallback, decoder) {
+		return A2(
+			$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$custom,
+			A3(
+				$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$optionalDecoder,
+				_List_fromArray(
+					[key]),
+				valDecoder,
+				fallback),
+			decoder);
+	});
+var $NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required = F3(
+	function (key, valDecoder, decoder) {
+		return A2(
+			$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$custom,
+			A2($elm$json$Json$Decode$field, key, valDecoder),
+			decoder);
+	});
+var $author$project$Api$Fallback = function (a) {
+	return {$: 3, a: a};
+};
+var $author$project$Api$NotSeparated = {$: 0};
+var $author$project$Api$Separated = {$: 2};
+var $author$project$Api$Separating = {$: 1};
+var $author$project$Api$SeparationFailed = function (a) {
+	return {$: 4, a: a};
+};
+var $elm$json$Json$Decode$fail = _Json_fail;
+var $elm$core$Tuple$pair = F2(
+	function (a, b) {
+		return _Utils_Tuple2(a, b);
+	});
 var $elm$json$Json$Decode$string = _Json_decodeString;
+var $elm$core$Maybe$withDefault = F2(
+	function (_default, maybe) {
+		if (!maybe.$) {
+			var value = maybe.a;
+			return value;
+		} else {
+			return _default;
+		}
+	});
+var $author$project$Api$separationStatus = A2(
+	$elm$json$Json$Decode$andThen,
+	function (_v0) {
+		var status = _v0.a;
+		var reason = _v0.b;
+		switch (status) {
+			case 'pending':
+				return $elm$json$Json$Decode$succeed($author$project$Api$NotSeparated);
+			case 'running':
+				return $elm$json$Json$Decode$succeed($author$project$Api$Separating);
+			case 'done':
+				return $elm$json$Json$Decode$succeed($author$project$Api$Separated);
+			case 'fallback':
+				return $elm$json$Json$Decode$succeed(
+					$author$project$Api$Fallback(
+						A2($elm$core$Maybe$withDefault, 'no reason given', reason)));
+			case 'failed':
+				return $elm$json$Json$Decode$succeed(
+					$author$project$Api$SeparationFailed(
+						A2($elm$core$Maybe$withDefault, 'no reason given', reason)));
+			default:
+				var other = status;
+				return $elm$json$Json$Decode$fail('unknown separation_status: ' + other);
+		}
+	},
+	A3(
+		$elm$json$Json$Decode$map2,
+		$elm$core$Tuple$pair,
+		A2($elm$json$Json$Decode$field, 'separation_status', $elm$json$Json$Decode$string),
+		A2(
+			$elm$json$Json$Decode$field,
+			'separation_reason',
+			$elm$json$Json$Decode$nullable($elm$json$Json$Decode$string))));
+var $author$project$Api$song = A3(
+	$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+	'added_at',
+	$elm$json$Json$Decode$string,
+	A4(
+		$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$optional,
+		'stems',
+		A2(
+			$elm$json$Json$Decode$map,
+			$elm$core$Maybe$withDefault(_List_Nil),
+			$elm$json$Json$Decode$nullable(
+				$elm$json$Json$Decode$list($elm$json$Json$Decode$string))),
+		_List_Nil,
+		A2(
+			$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$custom,
+			$author$project$Api$separationStatus,
+			A3(
+				$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+				'sample_rate',
+				$elm$json$Json$Decode$int,
+				A3(
+					$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+					'duration_s',
+					$elm$json$Json$Decode$float,
+					A3(
+						$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+						'title',
+						$elm$json$Json$Decode$string,
+						A3(
+							$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+							'path',
+							$elm$json$Json$Decode$string,
+							A3(
+								$NoRedInk$elm_json_decode_pipeline$Json$Decode$Pipeline$required,
+								'id',
+								$elm$json$Json$Decode$string,
+								$elm$json$Json$Decode$succeed($author$project$Api$Song)))))))));
+var $author$project$Request$songs = function (toMsg) {
+	return $elm$http$Http$get(
+		{
+			bM: A2(
+				$elm$http$Http$expectJson,
+				toMsg,
+				A2(
+					$elm$json$Json$Decode$field,
+					'songs',
+					$elm$json$Json$Decode$list($author$project$Api$song))),
+			cF: '/api/songs'
+		});
+};
 var $author$project$Main$init = function (_v0) {
 	return _Utils_Tuple2(
-		{Y: $author$project$Main$Checking},
-		$elm$http$Http$get(
-			{
-				bH: A2(
-					$elm$http$Http$expectJson,
-					$elm$core$Basics$identity,
-					A2($elm$json$Json$Decode$field, 'version', $elm$json$Json$Decode$string)),
-				cn: '/api/health'
-			}));
+		{Y: $author$project$Main$Checking, Z: $elm$core$Maybe$Nothing, D: false, aa: $author$project$Page$Library$Loading, F: '', am: $elm$core$Maybe$Nothing},
+		$elm$core$Platform$Cmd$batch(
+			_List_fromArray(
+				[
+					$elm$http$Http$get(
+					{
+						bM: A2(
+							$elm$http$Http$expectJson,
+							$author$project$Main$GotHealth,
+							A2($elm$json$Json$Decode$field, 'version', $elm$json$Json$Decode$string)),
+						cF: '/api/health'
+					}),
+					$author$project$Request$songs($author$project$Main$GotSongs)
+				])));
 };
 var $elm$core$Platform$Sub$batch = _Platform_batch;
 var $elm$core$Platform$Sub$none = $elm$core$Platform$Sub$batch(_List_Nil);
+var $author$project$Page$Library$Failed = function (a) {
+	return {$: 2, a: a};
+};
+var $author$project$Main$Imported = function (a) {
+	return {$: 4, a: a};
+};
+var $author$project$Page$Library$Loaded = function (a) {
+	return {$: 1, a: a};
+};
 var $author$project$Main$Ready = function (a) {
 	return {$: 1, a: a};
 };
@@ -6168,32 +6412,142 @@ var $author$project$Main$httpErrorToString = function (err) {
 			return 'could not read the server\u0027s answer: ' + detail;
 	}
 };
-var $elm$core$Platform$Cmd$batch = _Platform_batch;
+var $elm$http$Http$jsonBody = function (value) {
+	return A2(
+		_Http_pair,
+		'application/json',
+		A2($elm$json$Json$Encode$encode, 0, value));
+};
+var $elm$json$Json$Encode$object = function (pairs) {
+	return _Json_wrap(
+		A3(
+			$elm$core$List$foldl,
+			F2(
+				function (_v0, obj) {
+					var k = _v0.a;
+					var v = _v0.b;
+					return A3(_Json_addField, k, v, obj);
+				}),
+			_Json_emptyObject(0),
+			pairs));
+};
+var $elm$http$Http$post = function (r) {
+	return $elm$http$Http$request(
+		{aE: r.aE, bM: r.bM, aR: _List_Nil, b$: 'POST', cB: $elm$core$Maybe$Nothing, bo: $elm$core$Maybe$Nothing, cF: r.cF});
+};
+var $elm$json$Json$Encode$string = _Json_wrap;
+var $author$project$Request$importSong = F2(
+	function (path, toMsg) {
+		return $elm$http$Http$post(
+			{
+				aE: $elm$http$Http$jsonBody(
+					$elm$json$Json$Encode$object(
+						_List_fromArray(
+							[
+								_Utils_Tuple2(
+								'path',
+								$elm$json$Json$Encode$string(path))
+							]))),
+				bM: A2($elm$http$Http$expectJson, toMsg, $author$project$Api$song),
+				cF: '/api/songs'
+			});
+	});
 var $elm$core$Platform$Cmd$none = $elm$core$Platform$Cmd$batch(_List_Nil);
 var $author$project$Main$update = F2(
 	function (msg, model) {
-		if (!msg.$) {
-			var version = msg.a;
-			return _Utils_Tuple2(
-				_Utils_update(
-					model,
-					{
-						Y: $author$project$Main$Ready(version)
-					}),
-				$elm$core$Platform$Cmd$none);
-		} else {
-			var err = msg.a;
-			return _Utils_Tuple2(
-				_Utils_update(
-					model,
-					{
-						Y: $author$project$Main$Unreachable(
-							$author$project$Main$httpErrorToString(err))
-					}),
-				$elm$core$Platform$Cmd$none);
+		switch (msg.$) {
+			case 0:
+				if (!msg.a.$) {
+					var version = msg.a.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{
+								Y: $author$project$Main$Ready(version)
+							}),
+						$elm$core$Platform$Cmd$none);
+				} else {
+					var err = msg.a.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{
+								Y: $author$project$Main$Unreachable(
+									$author$project$Main$httpErrorToString(err))
+							}),
+						$elm$core$Platform$Cmd$none);
+				}
+			case 1:
+				if (!msg.a.$) {
+					var songs = msg.a.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{
+								aa: $author$project$Page$Library$Loaded(songs)
+							}),
+						$elm$core$Platform$Cmd$none);
+				} else {
+					var err = msg.a.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{
+								aa: $author$project$Page$Library$Failed(
+									$author$project$Main$httpErrorToString(err))
+							}),
+						$elm$core$Platform$Cmd$none);
+				}
+			case 2:
+				var path = msg.a;
+				return _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{F: path}),
+					$elm$core$Platform$Cmd$none);
+			case 3:
+				return (model.D || $elm$core$String$isEmpty(model.F)) ? _Utils_Tuple2(model, $elm$core$Platform$Cmd$none) : _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{Z: $elm$core$Maybe$Nothing, D: true}),
+					A2($author$project$Request$importSong, model.F, $author$project$Main$Imported));
+			case 4:
+				if (!msg.a.$) {
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{D: false, F: ''}),
+						$author$project$Request$songs($author$project$Main$GotSongs));
+				} else {
+					var err = msg.a.a;
+					return _Utils_Tuple2(
+						_Utils_update(
+							model,
+							{
+								Z: $elm$core$Maybe$Just(
+									$author$project$Main$httpErrorToString(err)),
+								D: false
+							}),
+						$elm$core$Platform$Cmd$none);
+				}
+			default:
+				var songId = msg.a;
+				return _Utils_Tuple2(
+					_Utils_update(
+						model,
+						{
+							am: $elm$core$Maybe$Just(songId)
+						}),
+					$elm$core$Platform$Cmd$none);
 		}
 	});
-var $elm$json$Json$Encode$string = _Json_wrap;
+var $author$project$Main$ImportClicked = {$: 3};
+var $author$project$Main$PathChanged = function (a) {
+	return {$: 2, a: a};
+};
+var $author$project$Main$SelectedSong = function (a) {
+	return {$: 5, a: a};
+};
 var $elm$html$Html$Attributes$stringProperty = F2(
 	function (key, string) {
 		return A2(
@@ -6207,6 +6561,258 @@ var $elm$html$Html$h1 = _VirtualDom_node('h1');
 var $elm$html$Html$p = _VirtualDom_node('p');
 var $elm$virtual_dom$VirtualDom$text = _VirtualDom_text;
 var $elm$html$Html$text = $elm$virtual_dom$VirtualDom$text;
+var $elm$html$Html$button = _VirtualDom_node('button');
+var $elm$json$Json$Encode$bool = _Json_wrap;
+var $elm$html$Html$Attributes$boolProperty = F2(
+	function (key, bool) {
+		return A2(
+			_VirtualDom_property,
+			key,
+			$elm$json$Json$Encode$bool(bool));
+	});
+var $elm$html$Html$Attributes$disabled = $elm$html$Html$Attributes$boolProperty('disabled');
+var $elm$html$Html$input = _VirtualDom_node('input');
+var $elm$virtual_dom$VirtualDom$Normal = function (a) {
+	return {$: 0, a: a};
+};
+var $elm$virtual_dom$VirtualDom$on = _VirtualDom_on;
+var $elm$html$Html$Events$on = F2(
+	function (event, decoder) {
+		return A2(
+			$elm$virtual_dom$VirtualDom$on,
+			event,
+			$elm$virtual_dom$VirtualDom$Normal(decoder));
+	});
+var $elm$html$Html$Events$onClick = function (msg) {
+	return A2(
+		$elm$html$Html$Events$on,
+		'click',
+		$elm$json$Json$Decode$succeed(msg));
+};
+var $elm$html$Html$Events$alwaysStop = function (x) {
+	return _Utils_Tuple2(x, true);
+};
+var $elm$virtual_dom$VirtualDom$MayStopPropagation = function (a) {
+	return {$: 1, a: a};
+};
+var $elm$html$Html$Events$stopPropagationOn = F2(
+	function (event, decoder) {
+		return A2(
+			$elm$virtual_dom$VirtualDom$on,
+			event,
+			$elm$virtual_dom$VirtualDom$MayStopPropagation(decoder));
+	});
+var $elm$html$Html$Events$targetValue = A2(
+	$elm$json$Json$Decode$at,
+	_List_fromArray(
+		['target', 'value']),
+	$elm$json$Json$Decode$string);
+var $elm$html$Html$Events$onInput = function (tagger) {
+	return A2(
+		$elm$html$Html$Events$stopPropagationOn,
+		'input',
+		A2(
+			$elm$json$Json$Decode$map,
+			$elm$html$Html$Events$alwaysStop,
+			A2($elm$json$Json$Decode$map, tagger, $elm$html$Html$Events$targetValue)));
+};
+var $elm$html$Html$Attributes$placeholder = $elm$html$Html$Attributes$stringProperty('placeholder');
+var $elm$core$Basics$modBy = _Basics_modBy;
+var $elm$core$String$cons = _String_cons;
+var $elm$core$String$fromChar = function (_char) {
+	return A2($elm$core$String$cons, _char, '');
+};
+var $elm$core$Bitwise$and = _Bitwise_and;
+var $elm$core$Bitwise$shiftRightBy = _Bitwise_shiftRightBy;
+var $elm$core$String$repeatHelp = F3(
+	function (n, chunk, result) {
+		return (n <= 0) ? result : A3(
+			$elm$core$String$repeatHelp,
+			n >> 1,
+			_Utils_ap(chunk, chunk),
+			(!(n & 1)) ? result : _Utils_ap(result, chunk));
+	});
+var $elm$core$String$repeat = F2(
+	function (n, chunk) {
+		return A3($elm$core$String$repeatHelp, n, chunk, '');
+	});
+var $elm$core$String$padLeft = F3(
+	function (n, _char, string) {
+		return _Utils_ap(
+			A2(
+				$elm$core$String$repeat,
+				n - $elm$core$String$length(string),
+				$elm$core$String$fromChar(_char)),
+			string);
+	});
+var $elm$core$Basics$round = _Basics_round;
+var $author$project$Page$Library$duration = function (seconds) {
+	var total = $elm$core$Basics$round(seconds);
+	var remainder = A2($elm$core$Basics$modBy, 60, total);
+	var minutes = (total / 60) | 0;
+	return $elm$core$String$fromInt(minutes) + (':' + A3(
+		$elm$core$String$padLeft,
+		2,
+		'0',
+		$elm$core$String$fromInt(remainder)));
+};
+var $elm$html$Html$li = _VirtualDom_node('li');
+var $elm$html$Html$span = _VirtualDom_node('span');
+var $author$project$Api$statusLabel = function (status) {
+	switch (status.$) {
+		case 0:
+			return 'not separated';
+		case 1:
+			return 'separating…';
+		case 2:
+			return 'separated';
+		case 3:
+			return 'one stem only';
+		default:
+			return 'separation failed';
+	}
+};
+var $author$project$Page$Library$songRow = F2(
+	function (onSelect, s) {
+		return A2(
+			$elm$html$Html$li,
+			_List_fromArray(
+				[
+					$elm$html$Html$Attributes$class('song'),
+					$elm$html$Html$Events$onClick(
+					onSelect(s.aU))
+				]),
+			_List_fromArray(
+				[
+					A2(
+					$elm$html$Html$span,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('title')
+						]),
+					_List_fromArray(
+						[
+							$elm$html$Html$text(s.cC)
+						])),
+					A2(
+					$elm$html$Html$span,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('dim')
+						]),
+					_List_fromArray(
+						[
+							$elm$html$Html$text(
+							$author$project$Page$Library$duration(s.bJ))
+						])),
+					A2(
+					$elm$html$Html$span,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('dim')
+						]),
+					_List_fromArray(
+						[
+							$elm$html$Html$text(
+							$author$project$Api$statusLabel(s.cr))
+						]))
+				]));
+	});
+var $author$project$Page$Library$summary = function (state) {
+	switch (state.$) {
+		case 0:
+			return 'Loading your library…';
+		case 1:
+			if (!state.a.b) {
+				return 'Nothing imported yet.';
+			} else {
+				var songs = state.a;
+				var _v1 = $elm$core$List$length(songs);
+				if (_v1 === 1) {
+					return '1 song';
+				} else {
+					var n = _v1;
+					return $elm$core$String$fromInt(n) + ' songs';
+				}
+			}
+		default:
+			var reason = state.a;
+			return 'Could not load the library — ' + reason;
+	}
+};
+var $elm$html$Html$ul = _VirtualDom_node('ul');
+var $elm$html$Html$Attributes$value = $elm$html$Html$Attributes$stringProperty('value');
+var $author$project$Page$Library$view = function (config) {
+	return A2(
+		$elm$html$Html$div,
+		_List_fromArray(
+			[
+				$elm$html$Html$Attributes$class('library')
+			]),
+		_List_fromArray(
+			[
+				A2(
+				$elm$html$Html$p,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('dim')
+					]),
+				_List_fromArray(
+					[
+						$elm$html$Html$text(
+						$author$project$Page$Library$summary(config.ct))
+					])),
+				A2(
+				$elm$html$Html$div,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('import')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$input,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$placeholder('/path/to/song.flac'),
+								$elm$html$Html$Attributes$value(config.F),
+								$elm$html$Html$Events$onInput(config.cc)
+							]),
+						_List_Nil),
+						A2(
+						$elm$html$Html$button,
+						_List_fromArray(
+							[
+								$elm$html$Html$Events$onClick(config.cb),
+								$elm$html$Html$Attributes$disabled(
+								config.D || $elm$core$String$isEmpty(config.F))
+							]),
+						_List_fromArray(
+							[
+								$elm$html$Html$text(
+								config.D ? 'Importing…' : 'Import')
+							]))
+					])),
+				function () {
+				var _v0 = config.ct;
+				if (_v0.$ === 1) {
+					var songs = _v0.a;
+					return A2(
+						$elm$html$Html$ul,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('songs')
+							]),
+						A2(
+							$elm$core$List$map,
+							$author$project$Page$Library$songRow(config.cd),
+							songs));
+				} else {
+					return $elm$html$Html$text('');
+				}
+			}()
+			]));
+};
 var $author$project$Main$view = function (model) {
 	return A2(
 		$elm$html$Html$div,
@@ -6238,7 +6844,10 @@ var $author$project$Main$view = function (model) {
 						var version = _v0.a;
 						return A2(
 							$elm$html$Html$p,
-							_List_Nil,
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$class('dim')
+								]),
 							_List_fromArray(
 								[
 									$elm$html$Html$text('Connected to sleepmix ' + (version + '.'))
@@ -6256,15 +6865,53 @@ var $author$project$Main$view = function (model) {
 									$elm$html$Html$text('Not connected — ' + reason)
 								]));
 				}
+			}(),
+				$author$project$Page$Library$view(
+				{D: model.D, cb: $author$project$Main$ImportClicked, cc: $author$project$Main$PathChanged, cd: $author$project$Main$SelectedSong, F: model.F, ct: model.aa}),
+				function () {
+				var _v1 = model.Z;
+				if (_v1.$ === 1) {
+					return $elm$html$Html$text('');
+				} else {
+					var reason = _v1.a;
+					return A2(
+						$elm$html$Html$p,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('error')
+							]),
+						_List_fromArray(
+							[
+								$elm$html$Html$text('Could not import that file — ' + reason)
+							]));
+				}
+			}(),
+				function () {
+				var _v2 = model.am;
+				if (_v2.$ === 1) {
+					return $elm$html$Html$text('');
+				} else {
+					var songId = _v2.a;
+					return A2(
+						$elm$html$Html$p,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('dim')
+							]),
+						_List_fromArray(
+							[
+								$elm$html$Html$text('Selected song ' + (songId + ' — song screen not built yet.'))
+							]));
+				}
 			}()
 			]));
 };
 var $author$project$Main$main = $elm$browser$Browser$element(
 	{
-		bP: $author$project$Main$init,
-		cg: $elm$core$Basics$always($elm$core$Platform$Sub$none),
-		cm: $author$project$Main$update,
-		co: $author$project$Main$view
+		bV: $author$project$Main$init,
+		cy: $elm$core$Basics$always($elm$core$Platform$Sub$none),
+		cE: $author$project$Main$update,
+		cG: $author$project$Main$view
 	});
 _Platform_export({'Main':{'init':$author$project$Main$main(
 	$elm$json$Json$Decode$succeed(0))(0)}});}(this));
