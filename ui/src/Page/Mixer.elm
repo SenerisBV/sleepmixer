@@ -30,6 +30,7 @@ import Dict exposing (Dict)
 import Html exposing (Attribute, Html, button, details, div, h2, h3, input, label, option, p, span, summary, text)
 import Html.Attributes as Attr exposing (class, disabled, type_)
 import Html.Events exposing (onCheck, onClick, onInput)
+import Json.Decode as Decode
 import Preview
 import Schema
 import Waveform
@@ -632,12 +633,33 @@ typedBox wiring state target spec kind bounds =
             (type_ kind
                 :: class "field-box"
                 :: Attr.value (reading state target)
-                :: onInput (wiring.onField target)
+                :: onCommit (wiring.onField target)
                 :: disabled (not wiring.enabled)
                 :: bounds
             )
             []
         ]
+
+
+{-| A typed box reports when you leave it, not on every keystroke.
+
+Not a preference — `onInput` makes these boxes unusable. Half-typed text is not
+a number, `Config.set` drops the key for anything it cannot parse, and the
+value attribute then re-renders as empty and takes the half-typed text with it:
+you can enter `1`, and you cannot enter `1.5`, because `1.` never survives long
+enough to become it.
+
+It is also the right economics. `loop.start_s` and `loop.end_s` each re-fetch
+the loop region, which decodes the whole file and runs beat tracking with no
+cache — five keystrokes would be five of those, where this is one.
+
+A range or a select has neither problem: every value they can produce is a
+value, so those keep firing continuously, which is the drag the preview state
+machine exists to coalesce.
+-}
+onCommit : (String -> msg) -> Attribute msg
+onCommit toMsg =
+    Html.Events.on "change" (Decode.map toMsg Html.Events.targetValue)
 
 
 chooser :

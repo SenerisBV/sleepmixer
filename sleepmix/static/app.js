@@ -9136,6 +9136,12 @@ var $author$project$Page$Mixer$chooser = F5(
 						choices))
 				]));
 	});
+var $author$project$Page$Mixer$onCommit = function (toMsg) {
+	return A2(
+		$elm$html$Html$Events$on,
+		'change',
+		A2($elm$json$Json$Decode$map, toMsg, $elm$html$Html$Events$targetValue));
+};
 var $author$project$Page$Mixer$unitSuffix = function (unit) {
 	if (!unit.$) {
 		var u = unit.a;
@@ -9182,7 +9188,7 @@ var $author$project$Page$Mixer$typedBox = F6(
 									A2($author$project$Page$Mixer$reading, state, target)),
 								A2(
 									$elm$core$List$cons,
-									$elm$html$Html$Events$onInput(
+									$author$project$Page$Mixer$onCommit(
 										wiring.cL(target)),
 									A2(
 										$elm$core$List$cons,
