@@ -63,7 +63,9 @@
 <div id="app"></div>
 <script src="/static/app.js"></script>
 <script type="module">
-  import { wire } from "/static/events.js";
+  import { wire as wireEvents } from "/static/events.js";
+  import { wire as wireAudio } from "/static/audio.js";
   const app = Elm.Main.init({ node: document.getElementById("app") });
-  wire(app);
+  wireEvents(app);
+  wireAudio(app);
 </script>

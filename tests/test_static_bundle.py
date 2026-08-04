@@ -31,6 +31,7 @@ def test_the_page_references_the_bundle_and_the_ports():
     html = (STATIC / "index.html").read_text()
     assert "app.js" in html
     assert "events.js" in html
+    assert "audio.js" in html
     assert "Elm.Main.init" in html
 
 
@@ -51,21 +52,23 @@ def test_the_root_page_is_served(client):
     assert "text/html" in r.headers["content-type"]
 
 
-def test_the_served_ports_module_matches_its_source():
-    """`sleepmix/static/events.js` is a copy, and the copy is what ships.
+@pytest.mark.parametrize("filename", ["events.js", "audio.js"])
+def test_the_served_ports_module_matches_its_source(filename):
+    """`sleepmix/static/{events,audio}.js` are copies, and the copies are what ship.
 
-    `ui/ports/events.js` is the file anyone edits and the file `ui/README.md`
-    documents; `make ui` copies it next to the bundle because that is what the
-    page loads. Nothing but this compares them, so a change made to the copy —
-    or a `make ui` nobody ran — leaves two versions of the port layer in the
-    repository with the served one silently winning.
+    `ui/ports/events.js` and `ui/ports/audio.js` are the files anyone edits and
+    the files `ui/README.md` documents; `make ui` copies each next to the
+    bundle because that is what the page loads. Nothing but this compares
+    them, so a change made to a copy — or a `make ui` nobody ran — leaves two
+    versions of the port layer in the repository with the served one silently
+    winning.
     """
     root = Path(sleepmix.__file__).resolve().parent.parent
-    source = (root / "ui" / "ports" / "events.js").read_bytes()
-    served = (STATIC / "events.js").read_bytes()
+    source = (root / "ui" / "ports" / filename).read_bytes()
+    served = (STATIC / filename).read_bytes()
     assert served == source, (
-        "sleepmix/static/events.js has drifted from ui/ports/events.js — "
-        "edit ui/ports/events.js and run `make ui`"
+        f"sleepmix/static/{filename} has drifted from ui/ports/{filename} — "
+        f"edit ui/ports/{filename} and run `make ui`"
     )
 
 

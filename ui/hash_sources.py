@@ -13,11 +13,12 @@ which leaves two ways to commit a bundle nobody would notice:
 * `make ui-dev` writes an `elm make --debug` build over `app.js` and correctly
   leaves the recorded hash alone — so a 326 KB debug bundle carrying the
   time-travelling debugger passed the entire test suite.
-* `sleepmix/static/events.js` is a copy of `ui/ports/events.js` and is the file
-  actually served. Editing the copy changed nothing any check looked at.
+* `sleepmix/static/events.js` and `sleepmix/static/audio.js` are copies of
+  `ui/ports/events.js` and `ui/ports/audio.js`, and the copies are what ship.
+  Editing a copy changed nothing any check looked at.
 
-Including `app.js` and `events.js` in the digest makes both a test failure.
-(The second is also asserted directly, byte for byte, in
+Including `app.js`, `events.js`, and `audio.js` in the digest makes all three a
+test failure. (The second is also asserted directly, byte for byte, in
 `tests/test_static_bundle.py` — a hash says "something moved", the byte compare
 says which file and in which direction.)
 
@@ -36,12 +37,16 @@ STATIC = ROOT / "sleepmix" / "static"
 # than globbed: `index.html` lives in the same directory and is hand-edited,
 # not built, so folding it in would make every stylesheet tweak look like a
 # stale bundle.
-OUTPUTS = [STATIC / "app.js", STATIC / "events.js"]
+OUTPUTS = [STATIC / "app.js", STATIC / "events.js", STATIC / "audio.js"]
 
 
 def main() -> int:
     inputs = sorted((ROOT / "ui" / "src").rglob("*.elm"))
-    inputs += [ROOT / "ui" / "elm.json", ROOT / "ui" / "ports" / "events.js"]
+    inputs += [
+        ROOT / "ui" / "elm.json",
+        ROOT / "ui" / "ports" / "events.js",
+        ROOT / "ui" / "ports" / "audio.js",
+    ]
     digest = hashlib.sha256()
     for path in inputs + OUTPUTS:
         # Include the name: renaming a module changes the bundle even when the

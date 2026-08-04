@@ -15,6 +15,7 @@
 ui:
 	cd ui && elm make src/Main.elm --optimize --output=../sleepmix/static/app.js
 	cp ui/ports/events.js sleepmix/static/events.js
+	cp ui/ports/audio.js sleepmix/static/audio.js
 	python3 ui/hash_sources.py > sleepmix/static/app.js.sha256
 
 ui-dev:
