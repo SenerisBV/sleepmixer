@@ -1,4 +1,7 @@
-module Request exposing (importSong, loop, peaks, schema, song, songs, startSeparation)
+module Request exposing
+    ( cancelJob, deleteRender, importSong, jobs, loop, peaks, renders
+    , schema, song, songs, startRender, startSeparation
+    )
 
 {-| Every HTTP call the application makes, in one place.
 
@@ -115,4 +118,73 @@ peaks songId buckets toMsg =
                         )
                     )
                 )
+        }
+
+
+renders : (Result Http.Error (List Api.Render) -> msg) -> Cmd msg
+renders toMsg =
+    Http.get
+        { url = Url.Builder.absolute [ "api", "renders" ] []
+        , expect = Http.expectJson toMsg (Decode.field "renders" (Decode.list Api.render))
+        }
+
+
+{-| Start a full mix render for a song under the given config.
+
+`POST /api/renders` answers 202 with `{"job": ..., "render": ...}` — the row it
+creates up front so the UI has something to show even before the worker picks
+the job up. This decodes just the `job` field out of that envelope, matching
+what `startSeparation` already returns for the same reason: the caller tracks
+progress through the job, and can fetch the render row separately once it
+wants to.
+-}
+startRender : String -> Encode.Value -> (Result Http.Error Api.Job -> msg) -> Cmd msg
+startRender songId config toMsg =
+    Http.post
+        { url = Url.Builder.absolute [ "api", "renders" ] []
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "song_id", Encode.string songId )
+                    , ( "config", config )
+                    ]
+                )
+        , expect = Http.expectJson toMsg (Decode.field "job" Api.job)
+        }
+
+
+{-| Remove a render and its file.
+
+`DELETE /api/renders/{id}` answers 204 with no body, so this goes through
+`Http.request` with `Http.expectWhatever` rather than `Http.post` with
+`expectJson` — `expectJson` would fail trying to parse an empty response as
+JSON.
+-}
+deleteRender : String -> (Result Http.Error () -> msg) -> Cmd msg
+deleteRender renderId toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = Url.Builder.absolute [ "api", "renders", renderId ] []
+        , body = Http.emptyBody
+        , expect = Http.expectWhatever toMsg
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+jobs : (Result Http.Error (List Api.Job) -> msg) -> Cmd msg
+jobs toMsg =
+    Http.get
+        { url = Url.Builder.absolute [ "api", "jobs" ] []
+        , expect = Http.expectJson toMsg (Decode.field "jobs" (Decode.list Api.job))
+        }
+
+
+cancelJob : String -> (Result Http.Error Api.Job -> msg) -> Cmd msg
+cancelJob jobId toMsg =
+    Http.post
+        { url = Url.Builder.absolute [ "api", "jobs", jobId, "cancel" ] []
+        , body = Http.emptyBody
+        , expect = Http.expectJson toMsg (Decode.field "job" Api.job)
         }

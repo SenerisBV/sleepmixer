@@ -1,6 +1,6 @@
 module Api exposing
-    ( Job, JobStatus(..), LoopRegion, Song, SeparationStatus(..)
-    , isFinished, job, loopRegion, song, statusLabel
+    ( Job, JobStatus(..), LoopRegion, Render, RenderStatus(..), Song, SeparationStatus(..)
+    , isFinished, isRenderFinished, job, loopRegion, render, renderStatusLabel, song, statusLabel
     )
 
 {-| Types and decoders for the sleepmix API.
@@ -65,6 +65,48 @@ type alias Job =
     , fraction : Float
     , message : String
     , songId : Maybe String
+    , createdAt : String
+    }
+
+
+{-| The status of a full mix render.
+
+Mirrors `RenderStatus` on the server (`sleepmix/server/store.py`'s `renders`
+table): a render row starts `queued`, moves to `running`, and ends at exactly
+one of `done`, `failed` or `cancelled` — never both failed and cancelled, even
+when the pipeline throws after the cancel token was already set (the server
+classifies by exception type, not by the token, so the two rows always agree).
+-}
+type RenderStatus
+    = RenderQueued
+    | RenderRunning
+    | RenderDone
+    | RenderFailed
+    | RenderCancelled
+
+
+{-| A render's row, as `GET /api/renders` and `GET /api/renders/{id}` return
+it.
+
+`config` stays an opaque `Decode.Value` rather than a typed record: it is
+whatever `MixConfig` produced for this render, echoed back by the server as a
+real JSON object (`store._render_from_row` does `json.loads` on the column
+before the route ever sees it — it is not a string of JSON to parse again).
+Nothing here needs to read inside it; `path`, `status` and `durationMin` are
+what a renders list or a queue screen shows.
+
+`durationMin` is `Nothing` until the render finishes — the column is `NULL` in
+SQLite until `POST /api/renders`'s background work sets it alongside
+`status = "done"`.
+-}
+type alias Render =
+    { id : String
+    , songId : String
+    , status : RenderStatus
+    , path : String
+    , durationMin : Maybe Float
+    , config : Decode.Value
+    , createdAt : String
     }
 
 
@@ -85,6 +127,44 @@ isFinished status =
 
         Failed _ ->
             True
+
+
+isRenderFinished : RenderStatus -> Bool
+isRenderFinished status =
+    case status of
+        RenderQueued ->
+            False
+
+        RenderRunning ->
+            False
+
+        RenderDone ->
+            True
+
+        RenderFailed ->
+            True
+
+        RenderCancelled ->
+            True
+
+
+renderStatusLabel : RenderStatus -> String
+renderStatusLabel status =
+    case status of
+        RenderQueued ->
+            "queued"
+
+        RenderRunning ->
+            "rendering…"
+
+        RenderDone ->
+            "done"
+
+        RenderFailed ->
+            "failed"
+
+        RenderCancelled ->
+            "cancelled"
 
 
 statusLabel : SeparationStatus -> String
@@ -164,6 +244,7 @@ job =
         |> Pipeline.required "fraction" Decode.float
         |> Pipeline.required "message" Decode.string
         |> Pipeline.required "song_id" (Decode.nullable Decode.string)
+        |> Pipeline.required "created_at" Decode.string
 
 
 jobStatus : Decoder JobStatus
@@ -191,4 +272,42 @@ jobStatus =
 
                     other ->
                         Decode.fail ("unknown job status: " ++ other)
+            )
+
+
+render : Decoder Render
+render =
+    Decode.succeed Render
+        |> Pipeline.required "id" Decode.string
+        |> Pipeline.required "song_id" Decode.string
+        |> Pipeline.custom renderStatus
+        |> Pipeline.required "path" Decode.string
+        |> Pipeline.required "duration_min" (Decode.nullable Decode.float)
+        |> Pipeline.required "config" Decode.value
+        |> Pipeline.required "created_at" Decode.string
+
+
+renderStatus : Decoder RenderStatus
+renderStatus =
+    Decode.field "status" Decode.string
+        |> Decode.andThen
+            (\status ->
+                case status of
+                    "queued" ->
+                        Decode.succeed RenderQueued
+
+                    "running" ->
+                        Decode.succeed RenderRunning
+
+                    "done" ->
+                        Decode.succeed RenderDone
+
+                    "failed" ->
+                        Decode.succeed RenderFailed
+
+                    "cancelled" ->
+                        Decode.succeed RenderCancelled
+
+                    other ->
+                        Decode.fail ("unknown render status: " ++ other)
             )
