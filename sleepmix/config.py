@@ -178,7 +178,15 @@ class OutputConfig:
 
 @dataclass
 class MixConfig:
-    seed: int = 0
+    # ``min`` is not decoration: ``validate`` rejects a negative seed, and the
+    # UI builds its controls from this metadata alone. Without a floor here the
+    # generated control can produce a value the config refuses, and the failure
+    # lands as a 400 on a preview rather than as a control that will not go
+    # there.
+    seed: int = field(default=0, metadata={
+        "label": "Seed", "min": 0, "step": 1,
+        "help": "Fixes the random parts of the decay — dropouts, noise, "
+                "spectral holes — so the same settings render the same mix."})
     separation_model: str = "htdemucs_ft"
     stems: list[StemConfig] = field(default_factory=lambda: [
         StemConfig(name="vocals", decay=StemDecayConfig(

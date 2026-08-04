@@ -1,0 +1,124 @@
+module Fixtures exposing (schema, suite)
+
+{-| A schema to build controls and configs from in tests.
+
+Copied field-for-field out of a live `GET /api/schema`, trimmed to a
+representative subset: all six `Schema.Field` kinds, both sections the mixer
+consumes per stem (`stem`, `stem_decay`), two ordinary sections, and both
+top-level fields. It is deliberately *not* the whole thing — a full copy would
+be four hundred lines of JSON that rots the first time a parameter changes,
+and nothing here is testing that the mixer can render every parameter the
+server happens to have today.
+
+`suite` exists so this module earns its place in `elm-test`'s run: it asserts
+the fixture still decodes through the real decoder, so a change to `Schema.elm`
+that this JSON no longer satisfies fails here rather than quietly leaving every
+test that uses it running against `Dict.empty`.
+
+-}
+
+import Dict
+import Expect
+import Json.Decode as Decode
+import Schema
+import Test exposing (Test, describe, test)
+
+
+schema : Schema.Schema
+schema =
+    case Decode.decodeString Schema.decoder json of
+        Ok decoded ->
+            decoded
+
+        Err _ ->
+            { fields = Dict.empty, sections = Dict.empty }
+
+
+suite : Test
+suite =
+    describe "the schema fixture"
+        [ test "decodes through the real decoder" <|
+            \_ ->
+                Decode.decodeString Schema.decoder json
+                    |> Result.map (\s -> ( Dict.keys s.fields, Dict.keys s.sections ))
+                    |> Expect.equal
+                        (Ok
+                            ( [ "seed", "separation_model" ]
+                            , [ "loop", "output", "soundbed", "stem", "stem_decay", "tempo" ]
+                            )
+                        )
+        ]
+
+
+json : String
+json =
+    """
+{
+  "fields": {
+    "seed": {"type": "int", "default": 0, "label": "Seed",
+             "help": "Fixes the random parts of the decay.", "min": 0, "step": 1},
+    "separation_model": {"type": "str", "default": "htdemucs_ft",
+                         "label": "Separation model", "help": null}
+  },
+  "sections": {
+    "loop": {"fields": {
+      "bars": {"type": "int", "default": 8, "label": "Bars", "help": null,
+               "min": 1, "max": 64, "step": 1},
+      "crossfade_ms": {"type": "float", "default": 120.0, "label": "Seam crossfade",
+                       "help": null, "min": 0.0, "max": 2000.0, "step": 10.0,
+                       "unit": "ms"},
+      "search_start": {"type": "float", "default": 0.2, "label": "Search from",
+                       "help": "Fraction of the track to start searching from.",
+                       "min": 0.0, "max": 1.0, "step": 0.01},
+      "start_s": {"type": "float", "default": null, "label": "Loop start",
+                  "help": "Leave empty to auto-detect a beat-aligned loop.",
+                  "min": 0.0, "unit": "s"},
+      "end_s": {"type": "float", "default": null, "label": "Loop end",
+                "help": "Leave empty to auto-detect a beat-aligned loop.",
+                "min": 0.0, "unit": "s"}
+    }},
+    "tempo": {"fields": {
+      "speed": {"type": "float", "default": 0.7, "label": "Speed", "help": null,
+                "min": 0.05, "max": 1.0, "step": 0.01, "unit": "\\u00d7"},
+      "pitch_semitones": {"type": "float", "default": -2.0, "label": "Pitch",
+                          "help": null, "min": -12.0, "max": 12.0, "step": 0.5,
+                          "unit": "st"}
+    }},
+    "output": {"fields": {
+      "duration_min": {"type": "float", "default": 20.0, "label": "Duration",
+                       "help": null, "min": 1.0, "max": 480.0, "step": 1.0,
+                       "unit": "min"},
+      "sample_rate": {"type": "int", "default": 44100, "label": "Sample rate",
+                      "help": null, "unit": "Hz", "choices": [22050, 44100, 48000]},
+      "channels": {"type": "int", "default": 2, "label": "Channels", "help": null,
+                   "choices": [1, 2]}
+    }},
+    "soundbed": {"fields": {
+      "enabled": {"type": "bool", "default": false, "label": "Sound bed", "help": null},
+      "noise_type": {"type": "str", "default": "pink", "label": "Noise type",
+                     "help": null, "choices": ["pink", "brown", "white", "none"]}
+    }},
+    "stem": {"fields": {
+      "name": {"type": "str", "default": "other", "label": "Stem", "help": null,
+               "choices": ["vocals", "drums", "bass", "other", "mix"]},
+      "enabled": {"type": "bool", "default": true, "label": "Enabled", "help": null},
+      "gain_db": {"type": "float", "default": 0.0, "label": "Gain", "help": null,
+                  "min": -24.0, "max": 12.0, "step": 0.5, "unit": "dB"},
+      "reverb_send": {"type": "float", "default": 1.0, "label": "Reverb send",
+                      "help": null, "min": 0.0, "max": 2.0, "step": 0.01}
+    }},
+    "stem_decay": {"fields": {
+      "enabled": {"type": "bool", "default": true, "label": "Enabled", "help": null},
+      "curve": {"type": "str", "default": "linear", "label": "Curve",
+                "help": "linear \\u00b7 exp \\u00b7 log",
+                "choices": ["linear", "exp", "log"]},
+      "lowpass_start_hz": {"type": "float", "default": 18000.0,
+                           "label": "Lowpass start", "help": null, "min": 20.0,
+                           "max": 20000.0, "step": 100.0, "unit": "Hz"},
+      "amp_end_db": {"type": "float", "default": -9.0, "label": "Amplitude end",
+                     "help": null, "min": -60.0, "max": 0.0, "step": 0.5,
+                     "unit": "dB"}
+    }}
+  }
+}
+"""

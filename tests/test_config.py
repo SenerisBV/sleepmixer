@@ -112,3 +112,16 @@ def test_from_dict_rejects_a_negative_seed():
 def test_from_dict_accepts_zero_and_positive_seeds():
     assert MixConfig.from_dict({"seed": 0}).seed == 0
     assert MixConfig.from_dict({"seed": 7}).seed == 7
+
+
+def test_schema_gives_seed_the_floor_validate_enforces():
+    """The UI generates its controls from this metadata and nothing else.
+
+    ``validate`` rejects a negative seed, so a schema that does not say so
+    describes a control which can produce a config the server will refuse —
+    the rejection then arrives as a 400 on a preview instead of as a slider
+    that will not go below zero."""
+    seed = config_schema()["fields"]["seed"]
+    assert seed["type"] == "int"
+    assert seed["default"] == 0
+    assert seed["min"] == 0
