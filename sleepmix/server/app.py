@@ -21,7 +21,7 @@ import sleepmix
 
 from ..config import MixConfig
 from .api import jobs as jobs_api
-from .api import preview, renders, schema, songs
+from .api import presets, preview, renders, schema, songs
 from .jobs import JobManager
 from .sessions import SessionRegistry
 from .store import Store
@@ -71,6 +71,7 @@ def create_app(store: Store | None = None) -> FastAPI:
     app.include_router(jobs_api.router)
     app.include_router(preview.router)
     app.include_router(renders.router)
+    app.include_router(presets.router)
 
     @app.get("/")
     def index() -> FileResponse:
