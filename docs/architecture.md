@@ -657,15 +657,42 @@ state, the playing source and the in-flight fetch, and "decides nothing" —
 "a queue here would be a bug."
 
 The decision `Preview.elm` exists to make is *when to coalesce*.
-`POST /api/preview` serializes per song — the server holds one lock across
-the whole render, and building a session from nothing (separation already
-cached, but the loop still needs finding and every stem still needs slicing
-and stretching) was measured at **117 seconds cold and 73 milliseconds
-warm**. A scrubber drag fires a control-change event on roughly every
-animation frame, so one request per event would queue dozens of renders
-behind each other, each pinning one of FastAPI's threadpool threads for the
-render ahead of it rather than its own. `Preview.State` — `Cold | Warming |
-Idle | InFlight Params | Queued Params` — allows at most one request in
+`POST /api/preview` serializes per song — `SessionRegistry.session_for` holds
+one lock across the whole request — and the very first request against a
+song with nothing cached anywhere stacks three separate costs into that one
+HTTP call: **separating the stems** (`separation.py`, Demucs, minutes, paid
+once ever per `(file, model)` and cached to disk under `paths.cache_dir()`
+after that), **building the session** (`session.py`'s `RenderSession` —
+finding the loop and time-stretching every stem, paid once per song per
+server process because `SessionRegistry` then keeps the built session warm),
+and **rendering the requested window** itself (`preview.render_window` — one
+decayed, reverbed iteration, tens of milliseconds per stem). Coalescing has
+to guard against the sum of all three, not just the last one.
+
+Two independent measurements of that sum exist, on two different tracks, and
+they agree once the difference in track length is accounted for rather than
+contradicting each other. Plan 2b's own verification measured it at **117 s**
+cold, **73 ms** warm, against a 2:43 file (`nackmandela.mp3`) with nothing
+cached at all — separation included, per that task's own report
+(`.superpowers/sdd/2026-08-04-interactive-server/final-fix-report.md`). This
+plan's own Task 7 repeated the same experiment — cache cleared, server
+restarted, a fresh request against the same song with no separation on
+disk — on a different, 4:06 file, and measured **180.55 s** cold and
+**97–340 ms** warm. 117 s scaled by the ~1.51× difference in track length
+(246.6 s ÷ 162.8 s) predicts ≈177 s, close to the 180.55 s actually measured;
+the two figures corroborate each other rather than disagreeing. (The warm
+figure's own spread, 97 ms at progress 0 up to ~340 ms deeper into the arc,
+is `preview._reverbed_window`: iteration 0 has no preceding iteration to
+supply reverb context, so it costs one `decayed_iteration` call per stem,
+while every later iteration costs two — the context and the window itself.)
+Track length and hardware will move the exact numbers; what carries across
+both measurements is the *ratio* — three to four orders of magnitude between
+the first request against a song and every one after it — which is the
+argument coalescing actually rests on. A scrubber drag fires a control-change
+event on roughly every animation frame, so one request per event would queue
+dozens of renders behind each other, each pinning one of FastAPI's threadpool
+threads for the render ahead of it rather than its own. `Preview.State` —
+`Cold | Warming | Idle | InFlight Params | Queued Params` — allows at most one request in
 flight and at most one waiting; a request arriving while one is already in
 flight *replaces* whatever was queued rather than joining a line, because the
 position the user has already scrubbed past is worthless by the time the

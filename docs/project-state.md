@@ -65,8 +65,13 @@ What it does not do yet, and what to know before changing it:
   finishing also discards the warm session and can change the stem list under
   an open mixer, which is the other half of the gate.
 - **"Preparing…" is indeterminate on purpose.** The first preview is the
-  117-second path and nothing in it reports progress, so the bar animates and
-  claims nothing. Do not replace it with a fraction; there is no fraction. If
+  slow path — separation if nothing's cached, then finding the loop and
+  time-stretching every stem, then the render itself, all behind one lock —
+  and nothing in it reports progress, so the bar animates and claims nothing.
+  Measured at 117 s / 180.55 s on two different tracks (`docs/architecture.md`
+  has the breakdown); the number moves with track length, the absence of
+  progress reporting does not. Do not replace it with a fraction; there is
+  no fraction. If
   that preview *fails*, `Preview.failed` puts the session back to `Cold` rather
   than to `Idle`: nothing came back, so nothing is known to be playable, and
   opening the controls over silence would break the one promise this screen
@@ -170,37 +175,47 @@ case. See `ui/README.md` for how to build, develop, and test this, and
 `docs/architecture.md`'s new frontend section for the design reasoning behind
 each of those choices.
 
-**What it deliberately does not do yet — all of it Plan 3b.** Kept as written
-rather than edited into the past tense, because the reasoning is the record of
-why the next plan was shaped the way it was. Plan 3b has since closed: audio
-playback, orphaned `running` rows, the loop region and its endpoint, the mixer,
-preview playback, and schema-driven controls. Still open from this list: the
-import-size warning, the two-point separation progress bar, the render screen,
-and presets.
+**What this section originally listed as not done yet — Plan 3b has since
+closed most of it.** Audio playback, orphaned `running` rows, the loop region
+and its endpoint, the mixer, preview playback, and schema-driven controls are
+all closed now; each entry below is written in the past tense, names what
+closed it, and keeps whatever reasoning is still worth having on hand rather
+than being deleted outright. Still open from this list: the import-size
+warning, the two-point separation progress bar, the render screen, and
+presets — those stay in the present tense because they still are.
 
-- **Nothing in the interface plays audio, and nothing says so.** This is the
-  gap that actually bit during testing. `Page.Song` announces "separated" with
-  four stem names and then offers no next action — no preview, no render, no
-  player. Grep `ui/src` for anything audio-related and you get three code
-  comments. The API can do all of it (`POST /api/preview` returns WAV bytes in
-  well under a second once a session is warm; `POST /api/renders` produces a
-  file), but no view calls those endpoints. A reasonable person separates a
-  song, finds no way to hear anything, and concludes the tool is broken. Until
-  Plan 3b lands, the song view should say plainly that preview and render
-  arrive later — announcing success while offering nothing is worse than
-  announcing nothing.
+- **Nothing in the interface played audio, and nothing said so — closed by
+  Plan 3b's mixer.** This was the gap that actually bit during testing:
+  `Page.Song` announced "separated" with four stem names and then offered no
+  next action — no preview, no render, no player. `POST /api/preview` already
+  returned WAV bytes in well under a second once a session was warm, and
+  `POST /api/renders` already produced a file, but no view called either
+  endpoint, so a reasonable person separated a song, found no way to hear
+  anything, and concluded the tool was broken. Plan 3b's mixer
+  (`Page/Mixer.elm`, `ui/ports/audio.js`) closes it: opening a separated song
+  now offers a scrubber that plays, with soloing and every decay control
+  reachable from the same screen. The reasoning worth keeping is the standard
+  this gap set for the time in between — announcing success while offering
+  nothing is worse than announcing nothing — which is why Plan 3a's own song
+  view, while this was still open, said plainly that preview and render would
+  arrive later rather than staying quiet about the missing capability.
 
-- **Orphaned `running` rows survive a server restart.** `separation_status` is
-  set to `running` before the job starts, and only a terminal status or one of
-  `separate_song`'s two exception handlers clears it. Process death bypasses
-  both, so killing or suspending the server mid-separation leaves the song
-  claiming to separate forever, with no job behind it — the in-memory
-  `JobManager` died with the process. Observed in practice: two rows stranded
-  at `running` after a `Ctrl-Z`, which suspends rather than kills and looks
-  identical to having exited. The fix is small and belongs at startup: the job
-  manager is in-memory, so **any `running` row at boot is definitionally
-  orphaned** and should be reset to `pending`. Plan 2b fixed this class of bug
-  for exceptions; process death is the case that was missed.
+- **Orphaned `running` rows used to survive a server restart — closed by Plan
+  3b's Task 1.** `separation_status` is set to `running` before a job starts,
+  and was cleared only by a terminal status or one of `separate_song`'s two
+  exception handlers; process death bypassed both, so killing or suspending
+  the server mid-separation left the song claiming to separate forever, with
+  no job behind it — the in-memory `JobManager` had died with the process.
+  Observed in practice: two rows stranded at `running` after a `Ctrl-Z`, which
+  suspends rather than kills and looked identical to having exited. Plan 2b
+  had already fixed this class of bug for exceptions; process death was the
+  case that was missed, and the fix was exactly as small as it looked:
+  `Store.reconcile_orphaned_separations()`, called from `lifespan` immediately
+  after the store opens (before the job manager or session registry exist),
+  resets every `running` row to `pending` at boot, since **any `running` row
+  at that moment is definitionally orphaned** — the job manager is in-memory
+  and nothing else could still be tracking it. See `docs/architecture.md`'s
+  server section for where this sits.
 
 - **No warning about how long a large import will take.** A 70-minute file
   imports instantly and then queues a separation that takes a very long time
@@ -209,25 +224,31 @@ and presets.
   smaller one behind it, and the interface shows neither an estimate nor the
   queue depth. `GET /api/jobs` lists them, but no view renders it.
 
-- **No loop region on the waveform, and no route that could draw one.** The
-  spec's Song view asks for the detected loop region marked plus a tempo
-  readout, and Plan 3a's goal line promised "see its waveform and detected
-  loop" — but nothing in that plan could have delivered it, because **no
-  endpoint exposes a detected loop or a tempo.** `server/api/songs.py` has
-  import, list, get, peaks and separate, and nothing else; `analysis.find_loop`
-  and `_estimate_tempo` are reachable only from inside a render or a
-  `RenderSession`, never over HTTP. `Waveform.loopRegion` was written anyway
-  and is dead code on this branch: `Page/Song.elm` passes `loop = Nothing` and
-  has nothing else it could pass. The plan's goal line has since been corrected
-  (see the note at the top of
-  `docs/superpowers/plans/2026-08-04-elm-shell.md`), and the shipped docs never
-  claimed the loop, so nothing else needs unsaying. **This is a stated
-  dependency for the next plan, not an implementation detail:** drawing the
-  loop region needs a new server route — something like
-  `GET /api/songs/{id}/loop` returning start/end seconds and a tempo — and that
-  route is where the cost lives, since a cold `find_loop` is the ~1 s librosa
-  call the session cache exists to avoid paying twice. Do not plan the Elm half
-  as though the data is already there.
+- **No loop region on the waveform, and no route that could draw one — closed
+  by Plan 3b's Task 2.** The spec's Song view asked for the detected loop
+  region marked plus a tempo readout, and Plan 3a's goal line had promised
+  "see its waveform and detected loop" — but nothing in that plan could have
+  delivered it, because no endpoint exposed a detected loop or a tempo:
+  `server/api/songs.py` had import, list, get, peaks and separate, and nothing
+  else; `analysis.find_loop` and `_estimate_tempo` were reachable only from
+  inside a render or a `RenderSession`, never over HTTP. `Waveform.loopRegion`
+  had been written anyway and was dead code on that branch: `Page/Song.elm`
+  passed `loop = Nothing` and had nothing else it could pass.
+  `GET /api/songs/{id}/loop` (added in this plan's Task 2, documented in
+  `docs/architecture.md`'s server section) closes it: it calls `find_loop`
+  directly against the whole file, needing no separated stems and no warm
+  session, so it answers before separation has even happened — and both
+  `Page.Song` and the mixer now fetch it and pass a real region through. The
+  reasoning worth keeping: the plan's goal line was corrected before this
+  closed (see the note at the top of
+  `docs/superpowers/plans/2026-08-04-elm-shell.md`) precisely because
+  promising a feature with no route behind it is worse than not promising it,
+  and this entry is the record of why that route had to exist before the Elm
+  half could be built — a caution worth keeping for whatever the next
+  endpoint-shaped gap turns out to be. **The route itself still has no cache**
+  and re-runs beat tracking on every call, which the mixer now calls more
+  often than anything before it did; that remains open and is recorded
+  separately above, under Plan 3b.
 
 - **The separation progress bar is real but has nothing to animate.** The SSE
   machinery works end to end — `watchJob` opens the stream, events decode,
@@ -242,20 +263,25 @@ and presets.
   this bar for separation should either accept the two-point behaviour or make
   `separation.separate` report per-stem progress first.
 
-- **No mixer.** Nothing in this UI reads `/api/schema` or lets a user touch a
-  single decay/reverb/tempo parameter. Separation is the only action a song
-  screen offers.
-- **No preview playback.** `POST /api/preview` exists and is tested on the
-  server side, but nothing in this frontend calls it, and there is no
-  `ports/audio.js` yet — no `decodeAudioData`, no looped playback, no buffer
-  swap at a loop boundary.
+- **No mixer — closed by Plan 3b's Task 6.** Nothing in this UI read
+  `/api/schema` or let a user touch a single decay/reverb/tempo parameter;
+  separation was the only action a song screen offered. `Page/Mixer.elm` is
+  the mixer now.
+- **No preview playback — closed alongside the mixer.** `POST /api/preview`
+  existed and was tested on the server side, but nothing in this frontend
+  called it, and there was no `ports/audio.js` — no `decodeAudioData`, no
+  looped playback, no buffer swap at a loop boundary. All of that exists now;
+  see `docs/architecture.md`'s frontend section for the gapless-swap and
+  coalescing design.
+- **No schema-driven controls — closed alongside the mixer.**
+  `config.config_schema()` — bounds, labels, and help text for every
+  `MixConfig` field — was not consumed anywhere in `ui/`. `Schema.elm` and
+  `Config.elm` consume it now, and generate the mixer's controls from it.
 - **No render screen.** Starting, watching, cancelling, or downloading a full
-  render (`server/api/renders.py`, all built in Plan 2b) has no frontend at
-  all.
-- **No schema-driven controls.** `config.config_schema()` — bounds, labels,
-  and help text for every `MixConfig` field — is not consumed anywhere in
-  `ui/`.
-- **No presets.** `server/api/presets.py`'s CRUD has no corresponding screen.
+  render (`server/api/renders.py`, all built in Plan 2b) still has no
+  frontend at all. Open — Plan 3c.
+- **No presets.** `server/api/presets.py`'s CRUD still has no corresponding
+  screen. Open — Plan 3c.
 
 **What the final whole-branch review changed.** Six things, all of which had
 shipped looking finished. (1) `sleepmix/static/index.html`'s stylesheet was
@@ -303,7 +329,13 @@ a forgotten `make ui` is caught without a toolchain.
 Plan 2b's own document (below, under "Jobs, progress, and sessions") measured
 that `POST /api/preview` serializes per song — including the cold path, where
 building a `RenderSession` from scratch (separation + loop detection +
-time-stretch) was measured at **117 s cold versus 73 ms warm**. Every request
+time-stretch) was measured at **117 s cold versus 73 ms warm** against a
+2:43 test file. Plan 3b's own Task 7 repeated the measurement against a
+different, 4:06 file with the separation cache freshly cleared and got
+**180.55 s cold, 97–340 ms warm** — consistent with the older figure once the
+~1.5× difference in track length is accounted for, not a contradiction of it;
+see `docs/architecture.md` for the full breakdown of what each number
+includes. Every request
 against a cold song's session queues behind whichever request got there
 first, and each queued request occupies one of FastAPI's AnyIO threadpool
 threads for the whole wait, not just its own render time. A scrubber that

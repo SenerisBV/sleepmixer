@@ -108,10 +108,14 @@ metadata, and `Config.set` clamps every number to what the schema states. A
 control that can produce a value the config refuses turns a slider into a 400
 on a preview, which is a much worse way to find out.
 
-**Entering the mixer costs one long request and says so.** Building the session
-— slicing the loop out of every stem and time-stretching each one — was
-measured at 117 seconds cold against 73 milliseconds warm, all of it inside a
-per-song lock, and that first render is also what `preview.master_gain`
+**Entering the mixer costs one long request and says so.** The very first
+preview of a song stacks separation (if nothing is cached yet), building the
+session (finding the loop, time-stretching every stem), and rendering the
+requested window into one call behind a per-song lock — measured at 117 s
+cold / 73 ms warm on one test file and, separately, 180.55 s cold / 97–340 ms
+warm on another; see `docs/architecture.md` for the full breakdown of what
+each figure includes and why the two agree once track length is accounted
+for. That first render is also what `preview.master_gain`
 calibrates from. So `Preview.warm` fires exactly one preview at progress 0,
 `Preview.isPlayable` holds every control inert until it returns, and the screen
 shows an *indeterminate* bar with an explanation. There is no progress to
