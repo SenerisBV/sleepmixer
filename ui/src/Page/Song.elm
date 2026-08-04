@@ -11,6 +11,7 @@ import Api
 import Html exposing (Html, button, div, h2, p, span, text)
 import Html.Attributes exposing (class, disabled)
 import Html.Events exposing (onClick)
+import Warn
 import Waveform
 
 
@@ -124,12 +125,35 @@ separationPanel config =
         , reasonFor status
         , stemList config.song.stems
         , progressBar config.progress
+        , longSourceWarning config.song.durationS
         , button
             [ onClick (config.onSeparate (needsForce status))
             , disabled config.separating
             ]
             [ text (buttonLabel status config.separating) ]
         ]
+
+
+{-| Said before the button, not after the queue has already filled up.
+
+The same sentence the mixer's Render button shows, out of the same module, and
+that is the point of `Warn` existing at all: separation and rendering go onto
+one worker between them, so a screen that stated the constraint differently
+from the other would be describing a queue that does not exist. Only the markup
+is local; `.warn` is the class on both.
+
+It warns and does not disable. A long file is a legitimate thing to separate —
+this exists to catch the seventy-minute import nobody meant to make, which is
+the incident that produced the queue screen.
+-}
+longSourceWarning : Float -> Html msg
+longSourceWarning durationS =
+    case Warn.forSource durationS of
+        Warn.Long words ->
+            p [ class "warn" ] [ text words ]
+
+        Warn.NoWarning ->
+            text ""
 
 
 reasonFor : Api.SeparationStatus -> Html msg

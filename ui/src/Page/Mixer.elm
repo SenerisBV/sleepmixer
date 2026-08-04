@@ -1,6 +1,7 @@
 module Page.Mixer exposing
     ( State
-    , everyStemDisabled, init, loopOverride, params, setField, setProgress, soloedStems, toggleField, toggleSolo
+    , everyStemDisabled, init, loopOverride, params, preflight, renderBlock
+    , renderConfig, setField, setProgress, soloedStems, toggleField, toggleSolo
     , view
     )
 
@@ -32,8 +33,11 @@ import Html exposing (Attribute, Html, button, details, div, h2, h3, input, labe
 import Html.Attributes as Attr exposing (class, disabled, type_)
 import Html.Events exposing (onCheck, onClick, onInput)
 import Json.Decode as Decode
+import Json.Encode as Encode
+import Page.Renders as Renders
 import Preview
 import Schema
+import Warn
 import Waveform
 
 
@@ -198,6 +202,117 @@ everyStemDisabled state =
         && List.all (stemEnabled >> not) state.config.stems
 
 
+-- STARTING A RENDER
+
+
+{-| The config a render should be made from.
+
+`Config.encode` and nothing else — the same encoder every preview carries, so
+the mix that comes out is the one you have been listening to. It is a function
+here rather than `Config.encode state.config` written out in `Main` so that the
+thing which must *not* travel with it has somewhere to be said: `params` also
+carries a `stems` list holding the soloed stem, and a render must not honour
+it. Solo is a way to hear one stem while you shape it, not a decision about
+what goes into the mix — a render that obeyed it would produce half an hour of
+drums from a screen whose every other control said otherwise.
+-}
+renderConfig : State -> Encode.Value
+renderConfig state =
+    Config.encode state.config
+
+
+{-| Why the Render button cannot be pressed, if it cannot.
+
+The sentence rather than a `Bool`, for the reason `Page.Song.mixerPanel` gives
+one screen along: a control that is greyed out and says nothing about why is a
+screen refusing to explain itself.
+
+Two reasons, and deliberately not a third. It is **not** gated on the preview
+being playable, although every other control here is. A render is server-side
+work that has nothing to do with whether this browser could decode a preview
+WAV, so gating on that would turn a playback failure into "you cannot produce a
+mix at all" — which is the exact thing this button exists to stop being true.
+What you get in that case is the config as it stands, which the pre-flight line
+above states in full.
+-}
+renderBlock : Bool -> State -> Maybe String
+renderBlock starting state =
+    if starting then
+        Just
+            ("Starting it — this moves to the renders screen as soon as the "
+                ++ "server has taken it."
+            )
+
+    else if everyStemDisabled state then
+        Just
+            ("Every stem is switched off, so there is nothing to render — the "
+                ++ "server refuses a mix of nothing, and it would be right to."
+            )
+
+    else
+        Nothing
+
+
+{-| What pressing Render is about to do, said before it does it.
+
+Two facts, and which two is the point. The mix length, because it is the number
+that decides how much work this is and it is one the operator has just been
+moving — the scrubber's own readout quotes the same `output.duration_min`.
+And whether the stems are already separated, because that is the difference
+between a render that starts on the render and one that runs Demucs first:
+minutes before anything else happens, and by far the largest term in how long
+this takes.
+
+**And no estimate of that time.** Nothing in this project measures the ratio
+between a track's length and its render's, so a number here would be invented.
+The "Preparing…" panel a few lines up is deliberately indeterminate for the
+same reason, and a bar that lies about time left is the one lie this interface
+is built not to tell. If a measured ratio ever proves stable, an estimate can
+become something this line claims; until then it does not.
+-}
+preflight : Bool -> State -> String
+preflight stemsSeparated state =
+    lengthPhrase state ++ " " ++ stemsPhrase stemsSeparated
+
+
+{-| `Renders.minutesLabel` rather than a rounding written here, so the length
+this screen promises and the length the renders screen reports are said by one
+function. It also handles the case a bare `round` gets wrong: the 0.05-minute
+configs this project's own tests render would otherwise read "0 min".
+
+Absent is a real state and gets its own sentence rather than a zero.
+`Config.set` removes a key it cannot parse, and absent means "whatever the
+server decides" throughout this module — so claiming a length here would be
+claiming one nobody has stated.
+-}
+lengthPhrase : State -> String
+lengthPhrase state =
+    case Maybe.andThen Config.asFloat (Config.valueAt (Config.InSection "output" "duration_min") state.config) of
+        Just minutes ->
+            "About to render a " ++ Renders.minutesLabel minutes ++ " mix."
+
+        Nothing ->
+            "About to render a mix of whatever length the server defaults to — "
+                ++ "this config is not carrying one."
+
+
+{-| Asked rather than assumed, though the answer is always yes today:
+`Page.Song.mixerPanel` refuses to open this screen on a song with no stems, so
+a mixer without them is unreachable. The gate is one screen away and could move;
+a sentence that asserts the stems are cached without looking would be a claim
+this module never checked, and it would be wrong silently — the render would
+simply take an extra Demucs run that nothing had mentioned.
+-}
+stemsPhrase : Bool -> String
+stemsPhrase stemsSeparated =
+    if stemsSeparated then
+        "The stems are already separated, so the worker starts on the render itself."
+
+    else
+        "The stems are not separated yet, so that runs first — minutes of it, "
+            ++ "before the render begins."
+
+
 {-| The loop region the config is currently asking for, if it is asking for one.
 
 Both absent is the ordinary case and means "detect it" — which is exactly what
@@ -234,12 +349,15 @@ view :
     , preview : Preview.State
     , previewError : Maybe String
     , loopSeconds : Maybe Float
+    , startingRender : Bool
+    , renderError : Maybe String
     , onBack : msg
     , onProgress : String -> msg
     , onSolo : String -> msg
     , onField : Config.Target -> String -> msg
     , onToggle : Config.Target -> Bool -> msg
     , onRetry : msg
+    , onRender : msg
     }
     -> Html msg
 view config =
@@ -262,9 +380,83 @@ view config =
             }
         , Waveform.caption config.loop
         , arcPanel config
+
+        -- Directly under the arc rather than at the foot of the screen. A
+        -- render is the arc committed to a file: it quotes the same
+        -- `output.duration_min` the scrubber's readout just quoted, and
+        -- putting it here means the one control that produces a mix is not
+        -- below four stem panels and every generated settings section. Nobody
+        -- writing this can open a browser to check what is above the fold, so
+        -- it goes where it is certainly visible.
+        , renderPanel config
         , stemsPanel wiring config.state config.schema config.onSolo
         , settingsPanel wiring config.state config.schema
         ]
+
+
+
+-- THE RENDER BUTTON
+
+
+{-| The way out of auditioning and into a file.
+
+Every decision on it is in a pure function above — what the line says, and
+whether the button can be pressed — so `elm-test` can reach both. What is left
+here is markup.
+-}
+renderPanel :
+    { a
+        | state : State
+        , song : Api.Song
+        , startingRender : Bool
+        , renderError : Maybe String
+        , onRender : msg
+    }
+    -> Html msg
+renderPanel config =
+    let
+        blocked =
+            renderBlock config.startingRender config.state
+    in
+    div [ class "render-start" ]
+        [ p [] [ text (preflight (not (List.isEmpty config.song.stems)) config.state) ]
+        , longSourceWarning config.song.durationS
+        , button
+            [ class "render-go"
+            , onClick config.onRender
+            , disabled (blocked /= Nothing)
+            ]
+            [ text "Render this mix" ]
+        , case blocked of
+            Just words ->
+                p [ class "dim" ] [ text words ]
+
+            Nothing ->
+                text ""
+        , case config.renderError of
+            Just reason ->
+                p [ class "error" ] [ text ("Could not start that render — " ++ reason) ]
+
+            Nothing ->
+                text ""
+        ]
+
+
+{-| The long-source warning, taken from `Warn` rather than written here.
+
+The song screen shows the same sentence beside its Separate button, and the two
+must not drift into stating different rules about the same single worker — that
+is the whole reason `Warn` is a module. Only the markup is local, and `.warn`
+is the class on both sides so they read alike as well.
+-}
+longSourceWarning : Float -> Html msg
+longSourceWarning durationS =
+    case Warn.forSource durationS of
+        Warn.Long words ->
+            p [ class "warn" ] [ text words ]
+
+        Warn.NoWarning ->
+            text ""
 
 
 

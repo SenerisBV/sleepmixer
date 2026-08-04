@@ -214,6 +214,15 @@ type alias Model =
     , preview : Preview.State
     , previewError : Maybe String
     , loopSeconds : Maybe Float
+
+    -- The render POST the mixer's button has in flight, by request id, and why
+    -- the last one failed. A `Maybe Int` rather than a `Bool` for the reason
+    -- `issue` gives: it is the id that says whether an arriving response is the
+    -- one this screen is waiting for. Nothing on the server deduplicates a
+    -- render the way `separate_song` deduplicates a separation, so two clicks
+    -- inside one round trip are two half-hour renders on a single worker.
+    , startingRender : Maybe Int
+    , renderError : Maybe String
     , separation : Separation
     , separateError : Maybe String
     , eventError : Maybe String
@@ -428,6 +437,8 @@ type Msg
     | RetryPreview
     | PreviewPlaying (Maybe Float)
     | PreviewFailed String
+    | RenderClicked
+    | RenderStarted Int (Result Http.Error Api.Job)
     | OpenRenders
     | CloseRenders
     | GotRenders (Result Http.Error (List Api.Render))
@@ -545,6 +556,8 @@ init _ =
       , preview = Preview.Cold
       , previewError = Nothing
       , loopSeconds = Nothing
+      , startingRender = Nothing
+      , renderError = Nothing
       , separation = Idle
       , separateError = Nothing
       , eventError = Nothing
@@ -942,27 +955,77 @@ update msg model =
             , sendPreview toSend
             )
 
-        OpenRenders ->
-            -- Through `leaveMixer` rather than beside it: a preview loops until
-            -- something stops it, and a mixer left open under this screen would
-            -- go on playing with nothing on screen to stop it.
-            let
-                ( closed, stopped ) =
-                    leaveMixer model
-            in
-            ( { closed
-                | renders = Just Renders.Loading
-                , rendersProblem = Nothing
+        RenderClicked ->
+            case model.mixer of
+                Nothing ->
+                    ( model, Cmd.none )
 
-                -- The two nav screens are alternatives, not layers. Closing
-                -- the queue here is what makes `routeFor`'s order between them
-                -- not matter, and it is also what ends the queue's poll: the
-                -- next tick reads `Nothing` and stops.
-                , queue = Nothing
-                , queueProblem = Nothing
-              }
-            , Cmd.batch [ stopped, refreshRenders ]
-            )
+                Just state ->
+                    if model.startingRender /= Nothing || Mixer.everyStemDisabled state then
+                        -- Both halves of `Mixer.renderBlock`, because the model
+                        -- does not rely on a button being disabled. The first
+                        -- is the one that costs something: `POST /api/renders`
+                        -- submits unconditionally — unlike `separate_song`,
+                        -- which returns the job already in flight — so a second
+                        -- click inside one round trip is a second half-hour
+                        -- render queued behind the first on the one worker.
+                        ( model, Cmd.none )
+
+                    else
+                        let
+                            ( request, issued ) =
+                                issue model
+                        in
+                        ( { issued | startingRender = Just request, renderError = Nothing }
+                          -- `Mixer.renderConfig`, which is `Config.encode` and
+                          -- nothing else — the same encoder every preview
+                          -- carries, so the mix that comes out is the one you
+                          -- have been listening to. Not `Mixer.params`, whose
+                          -- `stems` field holds the soloed stem: a solo is an
+                          -- audition, not a decision about the mix.
+                        , Request.startRender state.songId
+                            (Mixer.renderConfig state)
+                            (RenderStarted request)
+                        )
+
+        RenderStarted request result ->
+            if model.startingRender /= Just request then
+                -- A POST we have since abandoned or already answered. Nothing
+                -- issues a second one while the first is in flight, so this is
+                -- belt and braces rather than a state anyone should reach.
+                ( model, Cmd.none )
+
+            else
+                case result of
+                    Ok _ ->
+                        -- Straight to the renders screen, where the row and its
+                        -- job are already visible: `start_render` writes the
+                        -- render row before it returns, so the fetch this opens
+                        -- with cannot miss it.
+                        --
+                        -- The job in the response is not written into
+                        -- `renderJobs` here. `openRenders` re-fetches both
+                        -- lists in the order that keeps them consistent, and a
+                        -- job inserted beside that would be a second source for
+                        -- the same row.
+                        openRenders { model | startingRender = Nothing }
+
+                    Err err ->
+                        -- Stays on the mixer, which is where the button was and
+                        -- where `renderError` is rendered. If the user has left
+                        -- it in the round trip this took, `leaveMixer` has
+                        -- already cleared the field and the message is lost —
+                        -- the alternative, keeping it, is a failure from a
+                        -- previous mixer session appearing under the next one.
+                        ( { model
+                            | startingRender = Nothing
+                            , renderError = Just (httpErrorToString err)
+                          }
+                        , Cmd.none
+                        )
+
+        OpenRenders ->
+            openRenders model
 
         CloseRenders ->
             -- The list goes; the watch stays. The render is on the server's
@@ -1277,6 +1340,40 @@ unreadableEvent bad model =
                 )
 
 
+{-| Open the renders screen, from the nav strip or from a render just started.
+
+One function rather than the same six fields written twice, because the two
+callers must not drift: a render started from the mixer that opened the screen
+without closing the queue would leave `routeFor`'s order between them
+load-bearing, which the docstring there says it is not.
+
+Through `leaveMixer` rather than beside it: a preview loops until something
+stops it, and a mixer left open under this screen would go on playing with
+nothing on screen to stop it. That applies to the render path too — starting a
+render does not stop the audio, but arriving at this screen does, exactly as
+arriving from the nav strip always has.
+-}
+openRenders : Model -> ( Model, Cmd Msg )
+openRenders model =
+    let
+        ( closed, stopped ) =
+            leaveMixer model
+    in
+    ( { closed
+        | renders = Just Renders.Loading
+        , rendersProblem = Nothing
+
+        -- The two nav screens are alternatives, not layers. Closing the queue
+        -- here is what makes `routeFor`'s order between them not matter, and it
+        -- is also what ends the queue's poll: the next tick reads `Nothing` and
+        -- stops.
+        , queue = Nothing
+        , queueProblem = Nothing
+      }
+    , Cmd.batch [ stopped, refreshRenders ]
+    )
+
+
 {-| The renders, and then the jobs behind them.
 
 Two requests, deliberately sequenced rather than batched. Concurrently, the
@@ -1514,6 +1611,12 @@ sendPreview toSend =
 Closing it, opening another song, and going back to the library all come
 through here, because a preview loops until something stops it and only one of
 those three is the obvious one to remember.
+
+`renderError` goes with the screen that shows it. `startingRender` deliberately
+does not: the render is on the server whether or not anyone is still looking at
+the mixer, and clearing the id would make an arriving success land nowhere
+rather than at the renders screen the click asked for. It is the same call
+`CloseRenders` makes about `watchedRender` one screen along.
 -}
 leaveMixer : Model -> ( Model, Cmd Msg )
 leaveMixer model =
@@ -1527,6 +1630,7 @@ leaveMixer model =
                 , preview = Preview.Cold
                 , previewError = Nothing
                 , loopSeconds = Nothing
+                , renderError = Nothing
               }
             , stopPreview ()
             )
@@ -1799,12 +1903,15 @@ mixerView model state =
                     , preview = model.preview
                     , previewError = model.previewError
                     , loopSeconds = model.loopSeconds
+                    , startingRender = model.startingRender /= Nothing
+                    , renderError = model.renderError
                     , onBack = CloseMixer
                     , onProgress = ProgressChanged
                     , onSolo = SoloToggled
                     , onField = FieldChanged
                     , onToggle = FieldToggled
                     , onRetry = RetryPreview
+                    , onRender = RenderClicked
                     }
                 , errorLine (\reason -> "Could not find the loop — " ++ reason) model.loopError
                 ]

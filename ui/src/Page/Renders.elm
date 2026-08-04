@@ -1,6 +1,7 @@
 module Page.Renders exposing
     ( State(..), Summary
-    , audioUrl, deleteMessage, durationLabel, jobFor, keepStreamed, liveRenderJob, momentOf, newestFirst, reasonFor, replaceJob, summarise, titleFor
+    , audioUrl, deleteMessage, durationLabel, jobFor, keepStreamed, liveRenderJob
+    , minutesLabel, momentOf, newestFirst, reasonFor, replaceJob, summarise, titleFor
     , view
     )
 
@@ -264,6 +265,12 @@ durationLabel duration =
 A whole-minute rounding alone would render the 0.05-minute configs this
 project's own tests use as "0 min", which reads as a bug in the renderer rather
 than as a three-second file.
+
+Exposed as well as used here, because `Page.Mixer`'s pre-flight line states the
+length of the mix it is *about* to render and this screen states the length of
+the file that came out. Two answers to "how long is this mix" that could
+disagree — one saying "0 min" where the other said "3 s" — would be exactly the
+drift `Page.Queue` avoids by taking `titleFor` from here rather than copying it.
 -}
 minutesLabel : Float -> String
 minutesLabel minutes =

@@ -21,7 +21,9 @@ carries which screen is showing (derived from `selectedSongId`, `mixer`,
 `renders = Nothing` and `queue = Nothing` *are* "that screen is closed", which
 is also what stops the queue's poll), the state of a library fetch, the song
 currently open, its peaks and loop region, the config schema, any in-flight
-separation job, and — while the mixer is open — the mixer's own state beside
+separation job, any in-flight render POST (by request id, so a response that
+arrives after the button has been abandoned is recognised rather than adopted),
+and — while the mixer is open — the mixer's own state beside
 the preview state machine. `update` is a
 plain `Msg -> Model -> ( Model, Cmd Msg )`; every HTTP call sleepmix makes
 lives in one file, `ui/src/Request.elm`, so a change to the API surface is a
@@ -148,6 +150,20 @@ shows an *indeterminate* bar with an explanation. There is no progress to
 report from that call, so it does not draw a fraction; a bar that invents one
 would be a lie in the place this project cares most about not telling one.
 
+**The Render button is on the mixer, because that is where the config is.** It
+sends `Config.encode` — the identical encoder every preview carries, so what
+comes out is what you have been listening to — and deliberately *not*
+`Mixer.params`, whose `stems` field holds the soloed stem: a solo is a way to
+hear one stem while shaping it, not a decision about the mix. Above it is a
+pre-flight line saying two things and no third: how long the finished mix will
+be, and whether the stems are already separated, which is the largest term in
+how long this takes. **It states no estimate of that time**, for the same
+reason the "Preparing…" panel above it draws no fraction — nothing in this
+project measures the ratio between a track's length and its render's, so any
+number there would be invented. On success the screen moves to the renders
+screen, which stops the preview: every door into that screen goes through
+`leaveMixer`, because a preview loops until told otherwise.
+
 ### Strict decoders
 
 `ui/src/Api.elm` is the seam where an untyped HTTP response becomes a typed
@@ -238,7 +254,7 @@ cd /Users/moopius/projects/sleepmixer/ui
 elm-test
 ```
 
-`ui/tests/` has twelve suites:
+`ui/tests/` has thirteen suites:
 
 - `ApiTest.elm` — the `Api.elm` decoders, including that an unknown status
   fails rather than falling through.
@@ -268,9 +284,18 @@ elm-test
   wrong config here is the worst bug this frontend can have: the preview plays,
   and it is a preview of a mix nobody asked for.
 - `MixerTest.elm` — solo (what `stems` a preview carries, where "none" and
-  "all" are one empty list apart), and `Main`'s half of the preview lifecycle:
+  "all" are one empty list apart), `Main`'s half of the preview lifecycle:
   nothing sent before the session is warm, one request in flight at a time, and
-  every door out of the mixer stopping the audio.
+  every door out of the mixer stopping the audio — and the Render button: what
+  its pre-flight line says, when it refuses to be pressed, and that a second
+  press inside one round trip issues nothing, since `POST /api/renders` submits
+  unconditionally where `separate_song` returns the job already in flight.
+- `WarnTest.elm` — `Warn.forSource`, the one sentence shown before a long job
+  starts. Every case asserts the sentence carries *this* file's length and the
+  single-worker constraint, so a fixed string would fail: the whole reason the
+  module exists is that the mixer and the song screen must not drift into
+  saying different things about the same queue. The 4188-second case is the
+  real file — seventy minutes imported by accident, which is the incident.
 - `RendersTest.elm` — `Page.Renders`: the joins and summaries a renders row is
   built from, including the id-based pairing of a render with the job that
   produced it, which exists because pairing by song and timestamp put a live

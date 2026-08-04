@@ -19,9 +19,11 @@ import Api
 import Config
 import Expect
 import Fixtures
+import Http
 import Json.Decode as Decode
 import Main
 import Page.Mixer as Mixer
+import Page.Renders as Renders
 import Preview
 import Test exposing (Test, describe, test)
 
@@ -140,6 +142,38 @@ oneStemLeft =
 everyStemOff : Main.Model
 everyStemOff =
     idle (oneStemLeft |> step (enabling 2 False))
+
+
+{-| What `POST /api/renders` answers with: the job, out of the envelope
+`Request.startRender` decodes.
+-}
+startedJob : Api.Job
+startedJob =
+    { id = "job-1"
+    , kind = "render"
+    , status = Api.Queued
+    , fraction = 0
+    , message = ""
+    , songId = Just "song-1"
+    , renderId = Just "render-1"
+    , createdAt = "2026-08-05T22:10:00.123456+00:00"
+    }
+
+
+{-| Answer whichever render POST this model has in flight.
+
+Reads the request id off the model rather than assuming one, because it is
+issued by the same counter every other request uses and hard-coding a number
+would make these tests depend on how many requests happened to precede them.
+-}
+answered : Result Http.Error Api.Job -> Main.Model -> Main.Model
+answered result model =
+    case model.startingRender of
+        Just request ->
+            step (Main.RenderStarted request result) model
+
+        Nothing ->
+            model
 
 
 suite : Test
@@ -544,6 +578,235 @@ suite =
                         |> .preview
                         |> phase
                         |> Expect.equal "Cold"
+            ]
+        , describe "starting a render"
+            [ describe "the pre-flight line"
+                -- Two facts, and both of them read off the thing they are about
+                -- rather than written into a fixed sentence. A hard-coded
+                -- string would pass none of these.
+                [ test "states how long the mix it is about to make will be" <|
+                    \_ ->
+                        Mixer.preflight True mixer
+                            |> String.contains "20 min"
+                            |> Expect.equal True
+                , test "and follows the duration control rather than a default" <|
+                    \_ ->
+                        mixer
+                            |> Mixer.setField Fixtures.schema
+                                (Config.InSection "output" "duration_min")
+                                "45"
+                            |> Mixer.preflight True
+                            |> String.contains "45 min"
+                            |> Expect.equal True
+                , test "says the stems are already there when they are" <|
+                    \_ ->
+                        Mixer.preflight True mixer
+                            |> String.contains "already separated"
+                            |> Expect.equal True
+                , test "and that separation runs first when they are not" <|
+                    \_ ->
+                        Mixer.preflight False mixer
+                            |> String.contains "not separated yet"
+                            |> Expect.equal True
+                , test "a config carrying no length says so rather than claiming zero" <|
+                    \_ ->
+                        -- `Config.set` drops a key it cannot parse, and absent
+                        -- means "whatever the server decides" everywhere else
+                        -- in this module. Rendering that as "0 min" would be
+                        -- the screen inventing a length nobody stated.
+                        mixer
+                            |> Mixer.setField Fixtures.schema
+                                (Config.InSection "output" "duration_min")
+                                ""
+                            |> Mixer.preflight True
+                            |> String.contains "server defaults to"
+                            |> Expect.equal True
+                ]
+            , describe "whether the button can be pressed"
+                [ test "an ordinary mixer can" <|
+                    \_ -> Mixer.renderBlock False mixer |> Expect.equal Nothing
+                , test "not while a render POST is already in flight" <|
+                    \_ -> Mixer.renderBlock True mixer |> Expect.notEqual Nothing
+                , test "and not with every stem switched off" <|
+                    \_ ->
+                        everyStemOff.mixer
+                            |> Maybe.map (Mixer.renderBlock False >> (/=) Nothing)
+                            |> Expect.equal (Just True)
+                , test "one stem left is not that state" <|
+                    \_ ->
+                        oneStemLeft.mixer
+                            |> Maybe.map (Mixer.renderBlock False)
+                            |> Expect.equal (Just Nothing)
+                ]
+            , describe "the config it would send"
+                [ test "is the one the previews have been carrying" <|
+                    \_ ->
+                        warm
+                            |> step (Main.FieldChanged (Config.InStem 1 "gain_db") "-6.5")
+                            |> .mixer
+                            |> Maybe.map
+                                (Mixer.renderConfig
+                                    >> Decode.decodeValue (stemField 1 "gain_db" Decode.float)
+                                )
+                            |> Expect.equal (Just (Ok -6.5))
+                , test "with every stem in it, whatever is soloed" <|
+                    \_ ->
+                        -- A solo is a way to hear one stem while shaping it,
+                        -- not a decision about the mix. `Mixer.params` carries
+                        -- it in a field of its own for the preview; the config
+                        -- a render is made from must not.
+                        warm
+                            |> step (Main.SoloToggled "drums")
+                            |> .mixer
+                            |> Maybe.map
+                                (Mixer.renderConfig
+                                    >> Decode.decodeValue
+                                        (Decode.field "stems"
+                                            (Decode.list (Decode.field "name" Decode.string))
+                                        )
+                                )
+                            |> Expect.equal (Just (Ok [ "vocals", "drums", "bass" ]))
+                ]
+            , describe "through the button"
+                [ test "pressing it puts a request in flight" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> .startingRender
+                            |> Expect.notEqual Nothing
+                , test "even before the first preview has come back" <|
+                    \_ ->
+                        -- Deliberately not gated on the session being playable:
+                        -- a render is server-side work, and a browser that
+                        -- could not decode a preview WAV must not be the thing
+                        -- that stops a mix being made at all.
+                        opened
+                            |> step Main.RenderClicked
+                            |> .startingRender
+                            |> Expect.notEqual Nothing
+                , test "a second press while one is in flight issues nothing" <|
+                    \_ ->
+                        -- `POST /api/renders` submits unconditionally, so a
+                        -- second click inside one round trip is a second mix
+                        -- queued behind the first. `nextRequest` is the witness:
+                        -- it moves once per issued request and nothing else
+                        -- touches it here.
+                        let
+                            once =
+                                step Main.RenderClicked warm
+                        in
+                        step Main.RenderClicked once
+                            |> Expect.all
+                                [ \m -> Expect.equal once.startingRender m.startingRender
+                                , \m -> Expect.equal once.nextRequest m.nextRequest
+                                ]
+                , test "and with every stem switched off, nothing is sent" <|
+                    \_ ->
+                        everyStemOff
+                            |> step Main.RenderClicked
+                            |> .startingRender
+                            |> Expect.equal Nothing
+                ]
+            , describe "when the server has taken it"
+                [ test "the renders screen opens on the row it just made" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Ok startedJob)
+                            |> .renders
+                            |> Expect.equal (Just Renders.Loading)
+                , test "the mixer closes and the preview stops with it" <|
+                    \_ ->
+                        -- Not something this task chose: every door into the
+                        -- renders screen goes through `leaveMixer`, because a
+                        -- preview loops until told otherwise and one left
+                        -- running under a screen with no transport is music
+                        -- with no way to stop it.
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Ok startedJob)
+                            |> Expect.all
+                                [ \m -> Expect.equal Nothing m.mixer
+                                , \m -> Expect.equal "Cold" (phase m.preview)
+                                ]
+                , test "and the queue screen is not left open underneath it" <|
+                    \_ ->
+                        warm
+                            |> step Main.OpenQueue
+                            |> step Main.OpenMixer
+                            |> step Main.RenderClicked
+                            |> answered (Ok startedJob)
+                            |> .queue
+                            |> Expect.equal Nothing
+                , test "the button is free again" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Ok startedJob)
+                            |> .startingRender
+                            |> Expect.equal Nothing
+                ]
+            , describe "when it is refused"
+                [ test "the mixer stays where it was" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Err (Http.BadStatus 400))
+                            |> Expect.all
+                                [ \m -> Expect.notEqual Nothing m.mixer
+                                , \m -> Expect.equal Nothing m.renders
+                                ]
+                , test "and says why, where the button was" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Err (Http.BadStatus 400))
+                            |> .renderError
+                            |> Expect.equal (Just "the server answered 400")
+                , test "the button is free to try again" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Err (Http.BadStatus 400))
+                            |> .startingRender
+                            |> Expect.equal Nothing
+                , test "and pressing it again clears the last failure" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Err (Http.BadStatus 400))
+                            |> step Main.RenderClicked
+                            |> .renderError
+                            |> Expect.equal Nothing
+                , test "leaving the mixer takes the failure with it" <|
+                    \_ ->
+                        -- Rather than keeping it to show under the *next* mixer
+                        -- session, which would report a failure that has
+                        -- nothing to do with the song then on screen.
+                        warm
+                            |> step Main.RenderClicked
+                            |> answered (Err (Http.BadStatus 400))
+                            |> step Main.CloseMixer
+                            |> .renderError
+                            |> Expect.equal Nothing
+                ]
+            , describe "an answer nobody is waiting for"
+                [ test "does not open the renders screen" <|
+                    \_ ->
+                        -- Nothing issues a second POST while one is in flight,
+                        -- so this should not happen; if it does, it must not
+                        -- navigate a screen that never asked to move.
+                        warm
+                            |> step (Main.RenderStarted 4321 (Ok startedJob))
+                            |> .renders
+                            |> Expect.equal Nothing
+                , test "and does not write an error nobody caused" <|
+                    \_ ->
+                        warm
+                            |> step (Main.RenderStarted 4321 (Err Http.NetworkError))
+                            |> .renderError
+                            |> Expect.equal Nothing
+                ]
             ]
         ]
 

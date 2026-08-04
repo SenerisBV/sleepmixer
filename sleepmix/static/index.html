@@ -159,6 +159,32 @@
   .field-box { flex: 0 1 7rem; min-width: 0; }
   .field-select { flex: 0 1 12rem; min-width: 0; }
 
+  /* Starting a render, from the mixer. Emitted by `Page.Mixer.renderPanel`
+     inside `div [ class "mixer" ]`, directly under the arc — read these
+     against that markup rather than against the class-coverage test, which
+     proves a rule exists somewhere and not that it applies where the class is
+     emitted. Left unscoped because nothing else emits `.render-start`, and
+     because `.renders .render-*` is a different screen entirely: every rule
+     there is scoped under `.renders`, so none of them reaches this. */
+  .render-start { border-top: 1px solid var(--line); margin-top: 1.25rem;
+                  padding-top: 1rem; }
+  /* Even spacing above and below every paragraph in the panel, because two of
+     the four sit *after* the button — the reason it cannot be pressed, and the
+     failure if the POST came back an error. */
+  .render-start p { margin: .35rem 0; max-width: 46rem; }
+  /* The one control on this screen that produces a file, so it carries the
+     accent rather than sitting in the same grey as a section header. */
+  .render-go { margin-top: .5rem; border-color: var(--accent); color: var(--accent); }
+
+  /* The long-source warning, from `Warn.forSource`. Emitted on two screens —
+     inside `.render-start` on the mixer and inside `.separation` on the song
+     view — so it is deliberately unscoped: the whole reason `Warn` is one
+     module is that both screens say the same thing about the same single
+     worker, and a rule scoped to one of them would have them look different
+     while saying it. Amber rather than the error red: nothing has gone wrong,
+     and this does not disable anything. */
+  .warn { color: #e0af68; max-width: 46rem; }
+
   /* The way out of the library and into anything that is not a song. One rule
      for the strip; the buttons in it are ordinary buttons. */
   .nav { display: flex; gap: .5rem; margin-bottom: 1rem; }
