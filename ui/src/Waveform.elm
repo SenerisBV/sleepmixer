@@ -1,4 +1,4 @@
-module Waveform exposing (Bar, barFor, view)
+module Waveform exposing (Bar, Box, barFor, regionBox, view)
 
 {-| Peaks as SVG.
 
@@ -47,7 +47,8 @@ view :
     { peaks : List ( Float, Float )
     , width : Float
     , height : Float
-    , loop : Maybe { start : Float, end : Float }
+    , durationS : Float
+    , loop : Maybe { startS : Float, endS : Float }
     }
     -> Svg msg
 view config =
@@ -85,23 +86,67 @@ view config =
         (loopRegion config ++ List.indexedMap bar config.peaks)
 
 
+type alias Box =
+    { x : Float, width : Float }
+
+
+{-| Where a stretch of *seconds* falls across a waveform of a given pixel width.
+
+Seconds and a duration rather than the two fractions this used to take. The
+fractions were the arithmetic the caller had to remember to do, and the API
+that supplies a loop region — `GET /api/songs/{id}/loop` — answers in seconds:
+handing those straight to a multiply-by-width drew the region several thousand
+pixels off the right-hand edge, with no error anywhere, because nothing in
+either type said which unit it wanted. Asking for the duration in the same
+record is what makes that mistake fail to compile.
+
+`Nothing` for a duration that is zero or negative (a song row with no duration
+would otherwise divide by zero and emit `NaN` into an SVG attribute, which
+browsers ignore silently) and for a region with no width. The result is clamped
+to the drawing, so an override past the end of the track marks the end of the
+track rather than running off it.
+-}
+regionBox : { durationS : Float, width : Float } -> { startS : Float, endS : Float } -> Maybe Box
+regionBox canvas region =
+    if canvas.durationS <= 0 || region.endS <= region.startS then
+        Nothing
+
+    else
+        let
+            toX seconds =
+                clamp 0 canvas.width (seconds / canvas.durationS * canvas.width)
+
+            left =
+                toX region.startS
+
+            right =
+                toX region.endS
+        in
+        if right <= left then
+            Nothing
+
+        else
+            Just { x = left, width = right - left }
+
+
 loopRegion :
     { a
         | width : Float
         , height : Float
-        , loop : Maybe { start : Float, end : Float }
+        , durationS : Float
+        , loop : Maybe { startS : Float, endS : Float }
     }
     -> List (Svg msg)
 loopRegion config =
-    case config.loop of
+    case Maybe.andThen (regionBox { durationS = config.durationS, width = config.width }) config.loop of
         Nothing ->
             []
 
-        Just { start, end } ->
+        Just box ->
             [ Svg.rect
-                [ A.x (String.fromFloat (start * config.width))
+                [ A.x (String.fromFloat box.x)
                 , A.y "0"
-                , A.width (String.fromFloat ((end - start) * config.width))
+                , A.width (String.fromFloat box.width)
                 , A.height (String.fromFloat config.height)
                 , A.fill "#7aa2f7"
                 , A.opacity "0.14"

@@ -17,9 +17,11 @@ import Waveform
 view :
     { song : Api.Song
     , peaks : List ( Float, Float )
+    , loop : Maybe Api.LoopRegion
     , separating : Bool
     , progress : Maybe Float
     , onSeparate : Bool -> msg
+    , onMixer : msg
     , onBack : msg
     }
     -> Html msg
@@ -32,9 +34,95 @@ view config =
             { peaks = config.peaks
             , width = 960
             , height = 140
-            , loop = Nothing
+            , durationS = config.song.durationS
+            , loop = Maybe.map (\region -> { startS = region.startS, endS = region.endS }) config.loop
             }
+        , loopLine config.loop
         , separationPanel config
+        , mixerPanel config
+        ]
+
+
+{-| What the shaded region on the waveform is, in words. The region is the part
+of the song every one of the next several hundred repetitions is made of, which
+is worth stating plainly rather than leaving as an unexplained rectangle.
+-}
+loopLine : Maybe Api.LoopRegion -> Html msg
+loopLine loop =
+    case loop of
+        Nothing ->
+            text ""
+
+        Just region ->
+            p [ class "dim" ]
+                [ text
+                    ("Loop "
+                        ++ clock region.startS
+                        ++ " – "
+                        ++ clock region.endS
+                        ++ " · "
+                        ++ String.fromInt (round (region.endS - region.startS))
+                        ++ " s · "
+                        ++ String.fromInt (round region.tempo)
+                        ++ " BPM"
+                    )
+                ]
+
+
+clock : Float -> String
+clock seconds =
+    let
+        total =
+            round seconds
+    in
+    String.fromInt (total // 60)
+        ++ ":"
+        ++ String.padLeft 2 '0' (String.fromInt (modBy 60 total))
+
+
+{-| The way into the mixer, and — when there is no way in — why.
+
+Gated on the song actually having stems rather than on a status, because the
+mixer's rows *are* the stems: with none there is nothing to put in it, and the
+first preview would sit inside the per-song lock running Demucs with no
+progress to report. Separation has a progress bar of its own two lines up;
+this sends you to it instead of hiding the same wait behind a different label.
+-}
+mixerPanel :
+    { a | song : Api.Song, separating : Bool, onMixer : msg }
+    -> Html msg
+mixerPanel config =
+    let
+        hasStems =
+            not (List.isEmpty config.song.stems)
+
+        running =
+            config.separating || config.song.separationStatus == Api.Separating
+
+        reason =
+            if not hasStems then
+                Just "Separate this song first — the mixer is built out of its stems."
+
+            else if running then
+                -- A separation finishing throws away the warm session and can
+                -- change the stem list underneath an open mixer, so the door
+                -- stays shut until it has. Read from the server's status as
+                -- well as our own flag: a reload mid-separation forgets the
+                -- flag but not the status.
+                Just "The mixer opens once this separation finishes."
+
+            else
+                Nothing
+    in
+    div [ class "mixer-entry" ]
+        [ button [ onClick config.onMixer, disabled (reason /= Nothing) ]
+            [ text "Open the mixer" ]
+        , case reason of
+            Just words ->
+                p [ class "dim" ] [ text words ]
+
+            Nothing ->
+                text ""
         ]
 
 

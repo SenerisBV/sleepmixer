@@ -1,6 +1,6 @@
 module Preview exposing
     ( Params, State(..)
-    , arrived, encode, isPlayable, request, warmed
+    , arrived, encode, isPlayable, request, warm, warmed
     )
 
 {-| When to ask the server for a preview, and when not to.
@@ -84,6 +84,29 @@ isPlayable state =
 
         Queued _ ->
             True
+
+
+{-| The one request no control asks for: opening the mixer.
+
+`request` refuses to send while `Cold` — that is the whole point of `Cold`, and
+it is what stops a control change firing a request into a session that has no
+stems yet. But *something* has to make the first call, because the cold render
+is also what calibrates `master_gain`, and until it has happened every later
+preview would play at a level the finished mix never reaches.
+
+It lives here rather than in `Main` for the reason the rest of this module
+does: it is a decision about whether to send, and every one of those is
+testable only while it stays on this side of the port. Entering a mixer that is
+already warm sends nothing, so re-opening a song costs no render at all.
+-}
+warm : Params -> State -> ( State, Maybe Params )
+warm params state =
+    case state of
+        Cold ->
+            ( Warming, Just params )
+
+        other ->
+            ( other, Nothing )
 
 
 warmed : State -> State

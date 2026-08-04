@@ -1,6 +1,6 @@
 module Api exposing
-    ( Job, JobStatus(..), Song, SeparationStatus(..)
-    , isFinished, job, song, statusLabel
+    ( Job, JobStatus(..), LoopRegion, Song, SeparationStatus(..)
+    , isFinished, job, loopRegion, song, statusLabel
     )
 
 {-| Types and decoders for the sleepmix API.
@@ -32,6 +32,21 @@ type alias Song =
     , separationStatus : SeparationStatus
     , stems : List String
     , addedAt : String
+    }
+
+
+{-| The stretch of the song a render will loop, and the tempo it was found at.
+
+Seconds, because that is what `GET /api/songs/{id}/loop` returns and what the
+`loop.start_s` / `loop.end_s` config fields take. Anything that wants a
+fraction of the track divides by the song's duration at the point of use —
+notably `Waveform.view`, which asks for both so the conversion cannot be
+skipped by accident.
+-}
+type alias LoopRegion =
+    { startS : Float
+    , endS : Float
+    , tempo : Float
     }
 
 
@@ -130,6 +145,14 @@ separationStatus =
                     other ->
                         Decode.fail ("unknown separation_status: " ++ other)
             )
+
+
+loopRegion : Decoder LoopRegion
+loopRegion =
+    Decode.map3 LoopRegion
+        (Decode.field "start_s" Decode.float)
+        (Decode.field "end_s" Decode.float)
+        (Decode.field "tempo" Decode.float)
 
 
 job : Decoder Job

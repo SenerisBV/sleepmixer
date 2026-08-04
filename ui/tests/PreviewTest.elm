@@ -27,6 +27,35 @@ suite =
                 \_ -> Expect.equal True (Preview.isPlayable Preview.Idle)
             , test "warmed moves Warming to Idle" <|
                 \_ -> Expect.equal Preview.Idle (Preview.warmed Preview.Warming)
+            , test "warming a cold session sends the one request that starts it" <|
+                \_ ->
+                    -- `request` refuses while Cold, which is what stops a
+                    -- control change reaching a session with no stems. So the
+                    -- opening preview — the one master_gain calibrates from —
+                    -- needs its own door, and this is it.
+                    Preview.warm (params 0) Preview.Cold
+                        |> Expect.equal ( Preview.Warming, Just (params 0) )
+            , test "warming an already-warming session sends nothing" <|
+                \_ ->
+                    Preview.warm (params 0) Preview.Warming
+                        |> Expect.equal ( Preview.Warming, Nothing )
+            , test "warming a session that is already warm sends nothing" <|
+                \_ ->
+                    -- Re-entering a mixer whose song is still open costs no
+                    -- render at all.
+                    Preview.warm (params 0) Preview.Idle
+                        |> Expect.equal ( Preview.Idle, Nothing )
+            , test "the opening preview gets exactly one arrived, via warmed" <|
+                \_ ->
+                    -- `audio.js` answers every request it starts exactly once,
+                    -- and this is the pair `Main` applies to that answer.
+                    -- `arrived` alone would leave Warming untouched and the
+                    -- screen would say "preparing" with audio playing.
+                    Preview.warm (params 0) Preview.Cold
+                        |> Tuple.first
+                        |> Preview.warmed
+                        |> Preview.arrived
+                        |> Expect.equal ( Preview.Idle, Nothing )
             ]
         , describe "request"
             [ test "an idle session sends immediately" <|

@@ -1,4 +1,4 @@
-module Request exposing (importSong, peaks, schema, song, songs, startSeparation)
+module Request exposing (importSong, loop, peaks, schema, song, songs, startSeparation)
 
 {-| Every HTTP call the application makes, in one place.
 
@@ -67,6 +67,35 @@ schema toMsg =
     Http.get
         { url = Url.Builder.absolute [ "api", "schema" ] []
         , expect = Http.expectJson toMsg Schema.decoder
+        }
+
+
+{-| The loop region a render would use, in seconds, with the tempo it implies.
+
+The overrides are the same two values `loop.start_s` and `loop.end_s` carry in
+the config, and passing them asks the server to echo that region back with a
+tempo rather than detect one — so the region drawn on the waveform stays the
+region a render would actually loop. Passing neither asks for detection.
+
+Note what the endpoint does *not* take: `bars`, `beats_per_bar` and the search
+window are config fields a render honours and this call cannot express, so a
+detected region here is detected under `LoopConfig`'s defaults.
+-}
+loop :
+    String
+    -> { startS : Maybe Float, endS : Maybe Float }
+    -> (Result Http.Error Api.LoopRegion -> msg)
+    -> Cmd msg
+loop songId override toMsg =
+    Http.get
+        { url =
+            Url.Builder.absolute [ "api", "songs", songId, "loop" ]
+                (List.filterMap identity
+                    [ Maybe.map (Url.Builder.string "start_s" << String.fromFloat) override.startS
+                    , Maybe.map (Url.Builder.string "end_s" << String.fromFloat) override.endS
+                    ]
+                )
+        , expect = Http.expectJson toMsg Api.loopRegion
         }
 
 

@@ -4,6 +4,7 @@ port module Main exposing
     , Msg(..)
     , SelectOutcome
     , Separation(..)
+    , Settings(..)
     , StreamFailure(..)
     , init
     , isSeparating
@@ -28,13 +29,18 @@ parameters out and receives outcomes back; it never touches audio bytes.
 
 import Api
 import Browser
+import Config
 import Html exposing (Html, div, h1, p, text)
 import Html.Attributes exposing (class)
 import Http
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Page.Library as Library
+import Page.Mixer as Mixer
 import Page.Song
+import Preview
 import Request
+import Schema
 
 
 {-| Elm cannot open an `EventSource` — `elm/http` has no server-sent-events
@@ -65,6 +71,40 @@ them and Elm, which knows whether it already saw a terminal event, decides
 whether this was expected. See `streamFailureFor`.
 -}
 port jobStreamFailed : (String -> msg) -> Sub msg
+
+
+{-| Preview playback, in `ui/ports/audio.js`.
+
+Elm never sees a sample. `requestPreview` carries the parameters — always
+`Preview.encode`'s output, never a `Params` record, whose Elm field names the
+API would reject — and `audio.js` fetches `/api/preview` itself, decodes the
+WAV, and swaps it in at the next loop boundary.
+
+Exactly one reply per request is the contract this side depends on: `audio.js`
+answers every request it starts with `previewReady` or `previewFailed` unless
+`stopPreview` has told it to forget the request, and `Preview.arrived` is
+called once for each of those. A reply Elm did not cause would advance the
+state machine past a request that is still in flight; a request with no reply
+would leave it in `InFlight` forever, and the scrubber would stop responding
+with nothing on screen to say why.
+
+`previewReady` takes a `Decode.Value` and not `()` for a reason worth writing
+down: `audio.js` sends `{ durationS }`, and a `()` port compiles to
+`Json.Decode.null`, which rejects an object at runtime with a port error the
+Elm side cannot see or handle. The screen would sit at "Preparing…" forever
+while the audio played underneath it. The payload is the length of the loop
+that is now playing, which the mixer shows.
+-}
+port requestPreview : Encode.Value -> Cmd msg
+
+
+port stopPreview : () -> Cmd msg
+
+
+port previewReady : (Decode.Value -> msg) -> Sub msg
+
+
+port previewFailed : (String -> msg) -> Sub msg
 
 
 {-| What is happening to the separation of the song on screen.
@@ -128,6 +168,20 @@ watchedJobId separation =
             Nothing
 
 
+{-| The config schema, which every control in the mixer is generated from.
+
+Fetched once at startup rather than on entering the mixer: it is the same
+answer for the life of the process, and asking for it while someone is waiting
+on a preview would be one more thing between them and hearing something. A
+union rather than a `Maybe` beside an error string, for the reason `Separation`
+gives at length — the fourth combination is unrepresentable this way.
+-}
+type Settings
+    = SettingsLoading
+    | SettingsReady Schema.Schema
+    | SettingsUnavailable String
+
+
 type alias Model =
     { health : Health
     , library : Library.State
@@ -139,11 +193,19 @@ type alias Model =
     , songError : Maybe String
     , peaks : List ( Float, Float )
     , peaksError : Maybe String
+    , loop : Maybe Api.LoopRegion
+    , loopError : Maybe String
+    , settings : Settings
+    , mixer : Maybe Mixer.State
+    , preview : Preview.State
+    , previewError : Maybe String
+    , loopSeconds : Maybe Float
     , separation : Separation
     , separateError : Maybe String
     , eventError : Maybe String
     , songRequest : Int
     , peaksRequest : Int
+    , loopRequest : Int
     , nextRequest : Int
     }
 
@@ -241,23 +303,35 @@ separationOnSelect songId separation =
 
 {-| Which screen is showing.
 
-Not stored in the model directly — it is derived from `selectedSongId` by
-`routeFor`, so there is exactly one source of truth for "which song, if any,
-is open" rather than two things that could disagree.
+Not stored in the model directly — it is derived from `selectedSongId` and
+`mixer` by `routeFor`, so there is exactly one source of truth for "which song,
+if any, is open" and one for "is the mixer open on it", rather than a separate
+field that could disagree with either.
+
+The mixer's own state *is* the mixer being open: it exists only while the
+screen does, and `leaveMixer` throws it away and stops the audio in the same
+step. There is no way to be on the mixer with nothing to mix, and no way to
+leave it while a preview keeps looping underneath the library.
 -}
 type Route
     = Library
     | SongView String
+    | MixerView Mixer.State
 
 
 routeFor : Model -> Route
 routeFor model =
-    case model.selectedSongId of
-        Nothing ->
-            Library
+    case model.mixer of
+        Just state ->
+            MixerView state
 
-        Just songId ->
-            SongView songId
+        Nothing ->
+            case model.selectedSongId of
+                Nothing ->
+                    Library
+
+                Just songId ->
+                    SongView songId
 
 
 {-| How many peak buckets to ask for. 200 buckets across the 960px-wide
@@ -279,6 +353,7 @@ type Health
 type Msg
     = GotHealth (Result Http.Error String)
     | GotSongs (Result Http.Error (List Api.Song))
+    | GotSchema (Result Http.Error Schema.Schema)
     | PathChanged String
     | ImportClicked
     | Imported (Result Http.Error Api.Song)
@@ -286,10 +361,20 @@ type Msg
     | BackToLibrary
     | GotSongDetail Int (Result Http.Error Api.Song)
     | GotPeaks Int (Result Http.Error (List ( Float, Float )))
+    | GotLoop Int (Result Http.Error Api.LoopRegion)
     | SeparateClicked Bool
     | Separated Int (Result Http.Error Api.Job)
     | JobEventReceived (Result Decode.Error Api.Job)
     | JobStreamFailed String
+    | OpenMixer
+    | CloseMixer
+    | ProgressChanged String
+    | SoloToggled String
+    | FieldChanged Config.Target String
+    | FieldToggled Config.Target Bool
+    | RetryPreview
+    | PreviewPlaying (Maybe Float)
+    | PreviewFailed String
 
 
 main : Program () Model Msg
@@ -310,7 +395,23 @@ subscriptions _ =
     Sub.batch
         [ jobEvent (Decode.decodeValue Api.job >> JobEventReceived)
         , jobStreamFailed JobStreamFailed
+        , previewReady (playingLoopSeconds >> PreviewPlaying)
+        , previewFailed PreviewFailed
         ]
+
+
+{-| How long the loop that just started playing is.
+
+Read leniently, and deliberately: this is a readout, not a decision. A payload
+this build does not understand costs a line of text, where the strictness
+`Api.elm` argues for would cost the whole mixer — the preview *is* playing by
+the time this arrives, and refusing to acknowledge it would strand the state
+machine in `InFlight` with audio in the room.
+-}
+playingLoopSeconds : Decode.Value -> Maybe Float
+playingLoopSeconds value =
+    Decode.decodeValue (Decode.field "durationS" Decode.float) value
+        |> Result.toMaybe
 
 
 init : () -> ( Model, Cmd Msg )
@@ -325,11 +426,19 @@ init _ =
       , songError = Nothing
       , peaks = []
       , peaksError = Nothing
+      , loop = Nothing
+      , loopError = Nothing
+      , settings = SettingsLoading
+      , mixer = Nothing
+      , preview = Preview.Cold
+      , previewError = Nothing
+      , loopSeconds = Nothing
       , separation = Idle
       , separateError = Nothing
       , eventError = Nothing
       , songRequest = 0
       , peaksRequest = 0
+      , loopRequest = 0
       , nextRequest = 1
       }
     , Cmd.batch
@@ -338,6 +447,7 @@ init _ =
             , expect = Http.expectJson GotHealth (Decode.field "version" Decode.string)
             }
         , Request.songs GotSongs
+        , Request.schema GotSchema
         ]
     )
 
@@ -366,6 +476,12 @@ update msg model =
 
         GotSongs (Err err) ->
             ( { model | library = Library.Failed (httpErrorToString err) }, Cmd.none )
+
+        GotSchema (Ok schema) ->
+            ( { model | settings = SettingsReady schema }, Cmd.none )
+
+        GotSchema (Err err) ->
+            ( { model | settings = SettingsUnavailable (httpErrorToString err) }, Cmd.none )
 
         PathChanged path ->
             ( { model | pathInput = path }, Cmd.none )
@@ -406,25 +522,36 @@ update msg model =
                 ( songRequest, withSong ) =
                     issue model
 
-                ( peaksRequest, issued ) =
+                ( peaksRequest, withPeaks ) =
                     issue withSong
+
+                ( loopRequest, issued ) =
+                    issue withPeaks
+
+                ( closed, stopped ) =
+                    leaveMixer issued
             in
-            ( { issued
+            ( { closed
                 | selectedSongId = Just songId
                 , currentSong = Nothing
                 , songError = Nothing
                 , peaks = []
                 , peaksError = Nothing
+                , loop = Nothing
+                , loopError = Nothing
                 , separation = outcome.separation
                 , separateError = Nothing
                 , eventError = Nothing
                 , songRequest = songRequest
                 , peaksRequest = peaksRequest
+                , loopRequest = loopRequest
               }
             , Cmd.batch
                 [ Request.song songId (GotSongDetail songRequest)
                 , Request.peaks songId peakBuckets (GotPeaks peaksRequest)
+                , Request.loop songId noOverride (GotLoop loopRequest)
                 , stopWatching outcome.stopWatching
+                , stopped
                 ]
             )
 
@@ -433,7 +560,15 @@ update msg model =
             -- its stream is still ours, and re-entering the song picks it back
             -- up; a terminal event arriving while the library is on screen
             -- re-fetches the list instead of the song (see `Finished`).
-            ( { model | selectedSongId = Nothing }, Cmd.none )
+            --
+            -- A preview is not left alone: it loops forever by design, so
+            -- walking away from the mixer without stopping it leaves music
+            -- playing under the library with nothing on screen to stop it.
+            let
+                ( closed, stopped ) =
+                    leaveMixer model
+            in
+            ( { closed | selectedSongId = Nothing }, stopped )
 
         GotSongDetail request result ->
             -- Guard against a slow response landing after the user has moved
@@ -460,6 +595,18 @@ update msg model =
 
                     Err err ->
                         ( { model | peaksError = Just (httpErrorToString err) }, Cmd.none )
+
+        GotLoop request result ->
+            if model.loopRequest /= request then
+                ( model, Cmd.none )
+
+            else
+                case result of
+                    Ok region ->
+                        ( { model | loop = Just region, loopError = Nothing }, Cmd.none )
+
+                    Err err ->
+                        ( { model | loopError = Just (httpErrorToString err) }, Cmd.none )
 
         SeparateClicked force ->
             case model.selectedSongId of
@@ -573,6 +720,73 @@ update msg model =
                     , Cmd.none
                     )
 
+        OpenMixer ->
+            case ( model.currentSong, model.settings ) of
+                ( Just song, SettingsReady schema ) ->
+                    if List.isEmpty song.stems then
+                        -- The button is disabled without stems; the model does
+                        -- not rely on that being true. A mixer with no stems
+                        -- would ask the server for a preview of a song it has
+                        -- not separated, which runs Demucs inside the preview
+                        -- lock with nothing reporting progress.
+                        ( model, Cmd.none )
+
+                    else
+                        let
+                            state =
+                                Mixer.init song.id schema song.stems
+
+                            -- One preview at progress 0, which is also what
+                            -- `master_gain` calibrates from: until it returns
+                            -- there is no level to play anything at, so every
+                            -- control on the screen is inert and says so.
+                            ( preview, toSend ) =
+                                Preview.warm (Mixer.params state) model.preview
+                        in
+                        ( { model
+                            | mixer = Just state
+                            , preview = preview
+                            , previewError = Nothing
+                            , loopSeconds = Nothing
+                          }
+                        , sendPreview toSend
+                        )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        CloseMixer ->
+            leaveMixer model
+
+        ProgressChanged raw ->
+            withMixer (Mixer.setProgress raw) model
+
+        SoloToggled name ->
+            withMixer (Mixer.toggleSolo name) model
+
+        FieldToggled target on ->
+            withMixer (Mixer.toggleField target on) model
+
+        FieldChanged target raw ->
+            case model.settings of
+                SettingsReady schema ->
+                    withMixer (Mixer.setField schema target raw) model
+                        |> andThen (refetchLoopFor target)
+
+                _ ->
+                    ( model, Cmd.none )
+
+        RetryPreview ->
+            -- The same parameters again. `Preview.request` decides whether
+            -- that actually goes anywhere, exactly as a control change does.
+            withMixer identity model
+
+        PreviewPlaying seconds ->
+            previewArrived { model | previewError = Nothing, loopSeconds = seconds }
+
+        PreviewFailed reason ->
+            previewArrived { model | previewError = Just reason, loopSeconds = Nothing }
+
 
 {-| What to re-fetch once a job reaches a terminal status.
 
@@ -599,6 +813,137 @@ refetchAfter job model =
 
         Nothing ->
             ( model, Request.songs GotSongs )
+
+
+{-| Ask the loop endpoint to detect a region rather than echo one back.
+-}
+noOverride : { startS : Maybe Float, endS : Maybe Float }
+noOverride =
+    { startS = Nothing, endS = Nothing }
+
+
+{-| Run a second step over the result of a first, keeping both commands.
+-}
+andThen : (Model -> ( Model, Cmd Msg )) -> ( Model, Cmd Msg ) -> ( Model, Cmd Msg )
+andThen next ( model, cmd ) =
+    let
+        ( updated, more ) =
+            next model
+    in
+    ( updated, Cmd.batch [ cmd, more ] )
+
+
+{-| Every change the mixer can make, in one place.
+
+Note what is *not* here: any test of whether a request should go out. The
+scrubber emits a message per pixel of drag and each one arrives here; which of
+them reaches the server is `Preview.request`'s decision alone, and this passes
+on whatever it hands back. A condition of the form "only if nothing is in
+flight" written here would be the same logic in a place `elm-test` cannot
+reach, which is the whole argument for `Preview.elm` existing.
+-}
+withMixer : (Mixer.State -> Mixer.State) -> Model -> ( Model, Cmd Msg )
+withMixer change model =
+    case model.mixer of
+        Nothing ->
+            ( model, Cmd.none )
+
+        Just state ->
+            let
+                updated =
+                    change state
+
+                ( preview, toSend ) =
+                    Preview.request (Mixer.params updated) model.preview
+            in
+            ( { model | mixer = Just updated, preview = preview }, sendPreview toSend )
+
+
+{-| A preview came back — played or failed, it makes no difference here.
+
+Either way the slot is free, and anything the user asked for while it was busy
+goes now. `warmed` first, so the reply to the opening preview both ends the
+wait and frees the slot: it is one request and it gets exactly one `arrived`,
+which is the invariant `audio.js` is written against.
+-}
+previewArrived : Model -> ( Model, Cmd Msg )
+previewArrived model =
+    let
+        ( preview, toSend ) =
+            Preview.arrived (Preview.warmed model.preview)
+    in
+    ( { model | preview = preview }, sendPreview toSend )
+
+
+sendPreview : Maybe Preview.Params -> Cmd msg
+sendPreview toSend =
+    case toSend of
+        Just params ->
+            -- `Preview.encode`, never the record: the API's keys are Python's
+            -- and the record's are Elm's, and the mismatch is a 422 on every
+            -- preview rather than a compile error.
+            requestPreview (Preview.encode params)
+
+        Nothing ->
+            Cmd.none
+
+
+{-| Leaving the mixer, by whichever door.
+
+Closing it, opening another song, and going back to the library all come
+through here, because a preview loops until something stops it and only one of
+those three is the obvious one to remember.
+-}
+leaveMixer : Model -> ( Model, Cmd Msg )
+leaveMixer model =
+    case model.mixer of
+        Nothing ->
+            ( model, Cmd.none )
+
+        Just _ ->
+            ( { model
+                | mixer = Nothing
+                , preview = Preview.Cold
+                , previewError = Nothing
+                , loopSeconds = Nothing
+              }
+            , stopPreview ()
+            )
+
+
+{-| Keep the region drawn on the waveform honest about what a render would
+loop.
+
+Only for the two fields the endpoint can actually take. `bars`, `beats_per_bar`
+and the search window are config fields a render honours and `GET
+/api/songs/{id}/loop` has no parameter for, so re-asking after one of those
+changed would redraw the same region and charge a full beat-tracking pass for
+it — the call decodes the whole file every time and caches nothing.
+-}
+refetchLoopFor : Config.Target -> Model -> ( Model, Cmd Msg )
+refetchLoopFor target model =
+    case ( isLoopRegion target, model.selectedSongId, model.mixer ) of
+        ( True, Just songId, Just state ) ->
+            let
+                ( request, issued ) =
+                    issue model
+            in
+            ( { issued | loopRequest = request }
+            , Request.loop songId (Mixer.loopOverride state) (GotLoop request)
+            )
+
+        _ ->
+            ( model, Cmd.none )
+
+
+isLoopRegion : Config.Target -> Bool
+isLoopRegion target =
+    case target of
+        Config.InSection "loop" key ->
+            key == "start_s" || key == "end_s"
+
+        _ ->
+            False
 
 
 stopWatching : Maybe String -> Cmd msg
@@ -649,6 +994,9 @@ view model =
 
             SongView songId ->
                 songView model songId
+
+            MixerView state ->
+                mixerView model state
         ]
 
 
@@ -720,13 +1068,69 @@ songView model songId =
                 Page.Song.view
                     { song = song
                     , peaks = model.peaks
+                    , loop = model.loop
                     , separating = isSeparating model.separation
                     , progress = progressFor songId model
                     , onSeparate = SeparateClicked
+                    , onMixer = OpenMixer
                     , onBack = BackToLibrary
                     }
         , errorLine (\reason -> "Could not load that song — " ++ reason) model.songError
         , errorLine (\reason -> "Could not load the waveform — " ++ reason) model.peaksError
+        , errorLine (\reason -> "Could not find the loop — " ++ reason) model.loopError
         , errorLine (\reason -> "Could not start separation — " ++ reason) model.separateError
         , errorLine identity model.eventError
+        , settingsProblem model.settings
         ]
+
+
+{-| The mixer needs two things this screen does not: the song it is mixing, and
+the schema its controls are generated from. Neither can be missing by the time
+`OpenMixer` has been handled — it refuses to open without them — so this is
+belt and braces rather than a state anyone should reach.
+-}
+mixerView : Model -> Mixer.State -> Html Msg
+mixerView model state =
+    case ( model.currentSong, model.settings ) of
+        ( Just song, SettingsReady schema ) ->
+            div []
+                [ Mixer.view
+                    { state = state
+                    , song = song
+                    , schema = schema
+                    , peaks = model.peaks
+                    , loop = model.loop
+                    , preview = model.preview
+                    , previewError = model.previewError
+                    , loopSeconds = model.loopSeconds
+                    , onBack = CloseMixer
+                    , onProgress = ProgressChanged
+                    , onSolo = SoloToggled
+                    , onField = FieldChanged
+                    , onToggle = FieldToggled
+                    , onRetry = RetryPreview
+                    }
+                , errorLine (\reason -> "Could not find the loop — " ++ reason) model.loopError
+                ]
+
+        _ ->
+            p [ class "dim" ] [ text "Loading the mixer…" ]
+
+
+{-| A schema that never arrived is not a detail: every control in the mixer is
+built out of it, so there is no mixer at all without one.
+-}
+settingsProblem : Settings -> Html msg
+settingsProblem settings =
+    case settings of
+        SettingsUnavailable reason ->
+            p [ class "error" ]
+                [ text
+                    ("Could not load the settings the mixer is built from — "
+                        ++ reason
+                        ++ ". The mixer will not open until that request succeeds."
+                    )
+                ]
+
+        _ ->
+            text ""

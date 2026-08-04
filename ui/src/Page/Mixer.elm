@@ -1,0 +1,699 @@
+module Page.Mixer exposing
+    ( State
+    , init, loopOverride, params, setField, setProgress, soloedStems, toggleField, toggleSolo
+    , view
+    )
+
+{-| The mixer: hear one point in the decay arc while you shape it.
+
+Everything on this screen except the scrubber and the solo buttons is generated
+from `/api/schema`. Not for elegance — because a hand-written control panel
+drifts from the config the moment a parameter is added on the Python side, and
+the drift is silent: the slider is simply missing, and the value it would have
+set stays at a default nobody chose. The rule for what a field becomes is the
+schema's own metadata: `min`/`max`/`step` makes a slider, `choices` makes a
+select, a bool makes a checkbox, and anything else falls back to a typed box
+carrying whatever bounds the schema does state.
+
+The screen is inert until the first preview returns, and says so. That first
+render is the expensive one — the loop is sliced out of every stem and
+time-stretched, which is the difference between 117 seconds and 73
+milliseconds — and it is also what `preview.master_gain` calibrates from, so
+until it has happened there is no level to play anything at. `Preview.isPlayable`
+is the single guard; nothing here decides for itself whether it is usable.
+
+-}
+
+import Api
+import Config
+import Dict exposing (Dict)
+import Html exposing (Attribute, Html, button, details, div, h2, h3, input, label, option, p, span, summary, text)
+import Html.Attributes as Attr exposing (class, disabled, type_)
+import Html.Events exposing (onCheck, onClick, onInput)
+import Preview
+import Schema
+import Waveform
+
+
+{-| What the mixer knows that nothing else does.
+
+The song, its peaks and its loop region live in `Main` — they belong to the
+song, not to this screen, and survive leaving it. Progress, solo and the config
+being shaped do not: closing the mixer stops the audio and forgets them, which
+is why they sit here and are thrown away wholesale.
+-}
+type alias State =
+    { songId : String
+    , progress : Float
+    , solo : Maybe String
+    , config : Config.Config
+    }
+
+
+init : String -> Schema.Schema -> List String -> State
+init songId schema stemNames =
+    { songId = songId
+    , progress = 0
+    , solo = Nothing
+    , config = Config.fromSchema schema stemNames
+    }
+
+
+{-| What a preview of this state would be.
+
+Total, so that `Main` never has to decide whether there is enough here to ask
+for one — the only decision about sending lives in `Preview.request`.
+-}
+params : State -> Preview.Params
+params state =
+    { songId = state.songId
+    , progress = state.progress
+    , stems = soloedStems state
+    , config = Config.encode state.config
+    }
+
+
+{-| The stems a preview should carry: one when something is soloed, and none at
+all otherwise.
+
+None is not silence. `Preview.encode` omits an empty list, and the server reads
+a missing `stems` as "every stem the render would process" — so unsoloing
+restores the whole mix by saying nothing, rather than by naming every stem and
+risking a list that disagrees with what separation actually produced.
+
+One soloed stem at a time. A set would allow every subset, including the empty
+one, which encodes as "all" and would play the opposite of what the buttons
+say.
+-}
+soloedStems : State -> List String
+soloedStems state =
+    case state.solo of
+        Just name ->
+            [ name ]
+
+        Nothing ->
+            []
+
+
+toggleSolo : String -> State -> State
+toggleSolo name state =
+    { state
+        | solo =
+            if state.solo == Just name then
+                Nothing
+
+            else
+                Just name
+    }
+
+
+{-| The scrubber's position, from the string an `<input type="range">` gives.
+
+Clamped rather than trusted: `POST /api/preview` bounds `progress` to 0..1 and
+422s outside it, and a value that cannot be parsed leaves the position where it
+was rather than snapping to zero.
+-}
+setProgress : String -> State -> State
+setProgress raw state =
+    case String.toFloat raw of
+        Just position ->
+            { state | progress = clamp 0 1 position }
+
+        Nothing ->
+            state
+
+
+setField : Schema.Schema -> Config.Target -> String -> State -> State
+setField schema target raw state =
+    { state | config = Config.set schema target raw state.config }
+
+
+toggleField : Config.Target -> Bool -> State -> State
+toggleField target on state =
+    { state | config = Config.toggle target on state.config }
+
+
+{-| The loop region the config is currently asking for, if it is asking for one.
+
+Both absent is the ordinary case and means "detect it" — which is exactly what
+`GET /api/songs/{id}/loop` does with no parameters, so the same call serves
+both.
+-}
+loopOverride : State -> { startS : Maybe Float, endS : Maybe Float }
+loopOverride state =
+    let
+        secondsAt key =
+            Config.valueAt (Config.InSection "loop" key) state.config
+                |> Maybe.andThen Config.asFloat
+    in
+    { startS = secondsAt "start_s", endS = secondsAt "end_s" }
+
+
+
+-- VIEW
+
+
+type alias Wiring msg =
+    { onField : Config.Target -> String -> msg
+    , onToggle : Config.Target -> Bool -> msg
+    , enabled : Bool
+    }
+
+
+view :
+    { state : State
+    , song : Api.Song
+    , schema : Schema.Schema
+    , peaks : List ( Float, Float )
+    , loop : Maybe Api.LoopRegion
+    , preview : Preview.State
+    , previewError : Maybe String
+    , loopSeconds : Maybe Float
+    , onBack : msg
+    , onProgress : String -> msg
+    , onSolo : String -> msg
+    , onField : Config.Target -> String -> msg
+    , onToggle : Config.Target -> Bool -> msg
+    , onRetry : msg
+    }
+    -> Html msg
+view config =
+    let
+        wiring =
+            { onField = config.onField
+            , onToggle = config.onToggle
+            , enabled = Preview.isPlayable config.preview
+            }
+    in
+    div [ class "mixer" ]
+        [ button [ class "back", onClick config.onBack ] [ text "← Song" ]
+        , h2 [] [ text config.song.title ]
+        , Waveform.view
+            { peaks = config.peaks
+            , width = 960
+            , height = 100
+            , durationS = config.song.durationS
+            , loop = Maybe.map (\r -> { startS = r.startS, endS = r.endS }) config.loop
+            }
+        , arcPanel config
+        , stemsPanel wiring config.state config.schema config.onSolo
+        , settingsPanel wiring config.state config.schema
+        ]
+
+
+
+-- THE ARC
+
+
+arcPanel :
+    { a
+        | state : State
+        , preview : Preview.State
+        , previewError : Maybe String
+        , loopSeconds : Maybe Float
+        , onProgress : String -> msg
+        , onRetry : msg
+    }
+    -> Html msg
+arcPanel config =
+    div [ class "arc" ]
+        (if Preview.isPlayable config.preview then
+            [ scrubber config, playingLine config, previewProblem config ]
+
+         else
+            [ preparing, previewProblem config ]
+        )
+
+
+scrubber :
+    { a | state : State, onProgress : String -> msg }
+    -> Html msg
+scrubber config =
+    div [ class "arc-row" ]
+        [ span [ class "arc-label" ] [ text "Decay arc" ]
+        , input
+            [ type_ "range"
+            , class "arc-scrub"
+            , Attr.min "0"
+            , Attr.max "1"
+            , Attr.step "0.005"
+            , Attr.value (String.fromFloat config.state.progress)
+            , onInput config.onProgress
+            ]
+            []
+        , span [ class "arc-value" ] [ text (arcPosition config.state) ]
+        ]
+
+
+{-| Where the scrubber is, said twice: as a fraction of the arc and as a point
+in the finished mix, which is the thing anyone is actually asking about.
+
+The minutes come from the config's own `output.duration_min`, so moving that
+slider moves this readout too. If it is missing — the only way being a server
+that stopped describing it — the percentage stands on its own.
+-}
+arcPosition : State -> String
+arcPosition state =
+    let
+        percent =
+            String.fromInt (round (state.progress * 100)) ++ "%"
+    in
+    case Config.valueAt (Config.InSection "output" "duration_min") state.config of
+        Just (Config.FloatValue minutes) ->
+            percent
+                ++ " · "
+                ++ String.fromInt (round (state.progress * minutes))
+                ++ " min into a "
+                ++ String.fromInt (round minutes)
+                ++ " min mix"
+
+        _ ->
+            percent
+
+
+playingLine : { a | loopSeconds : Maybe Float } -> Html msg
+playingLine config =
+    case config.loopSeconds of
+        Just seconds ->
+            p [ class "dim" ]
+                [ text
+                    ("Looping "
+                        ++ String.fromInt (round seconds)
+                        ++ " s of audio. Changes land at the next loop boundary, not "
+                        ++ "under your finger — this auditions points in the arc, it is not a DAW."
+                    )
+                ]
+
+        Nothing ->
+            text ""
+
+
+{-| The honest version of a spinner.
+
+The wait behind this is real and long: slicing the loop out of every stem and
+time-stretching each one, measured at 117 seconds on a full-length track, all
+of it inside a per-song lock with nothing reporting progress. There is no
+fraction to draw, so the bar does not pretend to be one — it moves because the
+page is alive, and the words say what is happening and roughly what it costs.
+A static "Preparing…" for two minutes reads as a hung application, and a
+progress bar with no progress behind it would be a lie told in the one place
+this project cares most about telling the truth.
+-}
+preparing : Html msg
+preparing =
+    div [ class "preparing" ]
+        [ div [ class "preparing-track" ] [ div [ class "preparing-fill" ] [] ]
+        , p []
+            [ text
+                ("Preparing the mixer — slicing the loop out of each stem and "
+                    ++ "stretching it to the tempo you will hear."
+                )
+            ]
+        , p [ class "dim" ]
+            [ text
+                ("On a full-length track this takes a minute or two. Everything after "
+                    ++ "it is close to instant, because the stretched loops stay in memory "
+                    ++ "for as long as this song is open. Nothing in that work reports "
+                    ++ "progress, so the bar above only tells you the page is alive."
+                )
+            ]
+        ]
+
+
+previewProblem : { a | previewError : Maybe String, onRetry : msg } -> Html msg
+previewProblem config =
+    case config.previewError of
+        Nothing ->
+            text ""
+
+        Just reason ->
+            div [ class "preview-error" ]
+                [ p [ class "error" ] [ text ("The preview did not play — " ++ reason) ]
+                , button [ onClick config.onRetry ] [ text "Try again" ]
+                ]
+
+
+
+-- STEMS
+
+
+stemsPanel : Wiring msg -> State -> Schema.Schema -> (String -> msg) -> Html msg
+stemsPanel wiring state schema onSolo =
+    div [ class "stems" ]
+        (h3 [] [ text "Stems" ]
+            :: List.indexedMap (stemRow wiring state schema onSolo) state.config.stems
+        )
+
+
+stemRow : Wiring msg -> State -> Schema.Schema -> (String -> msg) -> Int -> Config.Stem -> Html msg
+stemRow wiring state schema onSolo index stem =
+    let
+        enabled =
+            Config.valueAt (Config.InStem index "enabled") state.config
+                |> Maybe.andThen Config.asBool
+                |> Maybe.withDefault True
+
+        soloed =
+            state.solo == Just stem.name
+    in
+    div [ class "stem-row" ]
+        [ div [ class "stem-head" ]
+            [ span [ class "stem-name" ] [ text stem.name ]
+            , button
+                [ soloClass soloed
+                , onClick (onSolo stem.name)
+
+                -- Soloing a stem the config has switched off would ask the
+                -- server for a mix of nothing, which renders as silence and
+                -- reads as a broken preview.
+                , disabled (not wiring.enabled || not enabled)
+                ]
+                [ text "Solo" ]
+            ]
+        , div [ class "fields" ]
+            (controlsFor wiring state (Config.InStem index) (stemFields schema))
+        , details [ class "decay" ]
+            [ summary [] [ text "Decay" ]
+            , p [ class "dim" ]
+                [ text
+                    ("Each of these is interpolated from its start to its end across "
+                        ++ "the whole mix, so the loop erodes a little more every time round."
+                    )
+                ]
+            , div [ class "fields" ]
+                (controlsFor wiring state (Config.InStemDecay index) (sectionFields "stem_decay" schema))
+            ]
+        ]
+
+
+{-| Two whole class strings rather than one built out of pieces.
+
+`class (base ++ modifier)` reads better and hides the name: nothing can then
+check that `solo-on` has a rule, and a class with no rule is an element with no
+appearance. `tests/test_static_bundle.py` scans for string literals and rejects
+the other spelling outright.
+-}
+soloClass : Bool -> Attribute msg
+soloClass soloed =
+    if soloed then
+        class "solo solo-on"
+
+    else
+        class "solo"
+
+
+{-| A stem's own controls: everything the `stem` section describes except its
+name, which is the row you are looking at rather than something to choose. A
+select there would offer to rename `drums` to `vocals` and change nothing about
+what plays.
+-}
+stemFields : Schema.Schema -> Dict String Schema.Field
+stemFields schema =
+    Dict.remove "name" (sectionFields "stem" schema)
+
+
+sectionFields : String -> Schema.Schema -> Dict String Schema.Field
+sectionFields name schema =
+    Dict.get name schema.sections
+        |> Maybe.map .fields
+        |> Maybe.withDefault Dict.empty
+
+
+
+-- SETTINGS
+
+
+settingsPanel : Wiring msg -> State -> Schema.Schema -> Html msg
+settingsPanel wiring state schema =
+    div [ class "settings" ]
+        (section wiring state Config.Top "mix" schema.fields
+            :: List.map
+                (\( name, aSection ) ->
+                    section wiring state (Config.InSection name) name aSection.fields
+                )
+                (List.filter (\( name, _ ) -> not (List.member name [ "stem", "stem_decay" ]))
+                    (Dict.toList schema.sections)
+                )
+        )
+
+
+section : Wiring msg -> State -> (String -> Config.Target) -> String -> Dict String Schema.Field -> Html msg
+section wiring state toTarget name fields =
+    details [ class "section" ]
+        [ summary [] [ text (titleOf name) ]
+        , sectionNote name
+        , div [ class "fields" ] (controlsFor wiring state toTarget fields)
+        ]
+
+
+titleOf : String -> String
+titleOf name =
+    case String.uncons (String.replace "_" " " name) of
+        Just ( first, rest ) ->
+            String.toUpper (String.fromChar first) ++ rest
+
+        Nothing ->
+            name
+
+
+{-| What the server does with a section that the schema has no way to say.
+
+Three of these are about cost — a loop or tempo change throws away every
+stretched loop, and a different separation model throws away the stems as
+well — and one is about a section the preview does not render at all. Both
+kinds are the sort of thing you otherwise learn by changing a slider, hearing
+nothing, and concluding the mixer is broken. Sections not named here get no
+note, which is what makes this safe to leave alone as the config grows.
+-}
+sectionNote : String -> Html msg
+sectionNote name =
+    let
+        note =
+            case name of
+                "loop" ->
+                    Just
+                        ("Changing where the loop is means finding and stretching it "
+                            ++ "again, so the next preview takes as long as the first did. "
+                            ++ "The region drawn above follows an explicit start and end; "
+                            ++ "the rest of these apply when the loop is detected for you."
+                        )
+
+                "tempo" ->
+                    Just
+                        ("Every stem is stretched again after a change here, so the next "
+                            ++ "preview takes as long as the first did."
+                        )
+
+                "soundbed" ->
+                    Just "The sound bed is mixed in when you render. Previews never include it."
+
+                "output" ->
+                    Just
+                        ("Duration decides how many repetitions the arc is spread over, so "
+                            ++ "it changes what any point in it sounds like. The fades apply "
+                            ++ "to the finished mix only."
+                        )
+
+                "mix" ->
+                    Just
+                        ("A different separation model separates the song again from "
+                            ++ "scratch — minutes, not seconds."
+                        )
+
+                _ ->
+                    Nothing
+    in
+    case note of
+        Just words ->
+            p [ class "section-note" ] [ text words ]
+
+        Nothing ->
+            text ""
+
+
+
+-- CONTROLS
+
+
+controlsFor : Wiring msg -> State -> (String -> Config.Target) -> Dict String Schema.Field -> List (Html msg)
+controlsFor wiring state toTarget fields =
+    List.map
+        (\( key, spec ) -> control wiring state (toTarget key) spec)
+        (Dict.toList fields)
+
+
+control : Wiring msg -> State -> Config.Target -> Schema.Field -> Html msg
+control wiring state target spec =
+    case spec of
+        Schema.BoolField s ->
+            checkbox wiring state target s
+
+        Schema.FloatField s ->
+            number wiring state target s
+
+        Schema.IntField s ->
+            number wiring state target s
+
+        Schema.TextField s ->
+            typedBox wiring state target { label = s.label, help = s.help, unit = Nothing } "text" []
+
+        Schema.StringChoiceField s ->
+            chooser wiring state target { label = s.label, help = s.help } s.choices
+
+        Schema.IntChoiceField s ->
+            chooser wiring state target { label = s.label, help = s.help } (List.map String.fromInt s.choices)
+
+
+checkbox : Wiring msg -> State -> Config.Target -> { a | label : String, help : Maybe String, default : Bool } -> Html msg
+checkbox wiring state target spec =
+    let
+        on =
+            Config.valueAt target state.config
+                |> Maybe.andThen Config.asBool
+                |> Maybe.withDefault spec.default
+    in
+    label [ class "field field-check", help spec.help ]
+        [ input
+            [ type_ "checkbox"
+            , Attr.checked on
+            , onCheck (wiring.onToggle target)
+            , disabled (not wiring.enabled)
+            ]
+            []
+        , span [ class "field-label" ] [ text spec.label ]
+        ]
+
+
+{-| A slider where the schema gives a range to slide along, a typed box
+otherwise.
+
+All three of `min`, `max` and `step` or none of it: a range input with no step
+snaps to integers, which turns a 0..1 reverb send into an on/off switch, and one
+with no maximum has nowhere to put the thumb. `loop.start_s` is the field this
+matters for — it carries a minimum and nothing else, because the maximum is the
+length of whichever song you happen to have open.
+-}
+number :
+    Wiring msg
+    -> State
+    -> Config.Target
+    ->
+        { a
+            | label : String
+            , help : Maybe String
+            , min : Maybe Float
+            , max : Maybe Float
+            , step : Maybe Float
+            , unit : Maybe String
+        }
+    -> Html msg
+number wiring state target spec =
+    let
+        bounds =
+            List.filterMap identity
+                [ Maybe.map (Attr.min << String.fromFloat) spec.min
+                , Maybe.map (Attr.max << String.fromFloat) spec.max
+                , Maybe.map (Attr.step << String.fromFloat) spec.step
+                ]
+    in
+    case ( spec.min, spec.max, spec.step ) of
+        ( Just _, Just _, Just _ ) ->
+            div [ class "field", help spec.help ]
+                [ span [ class "field-label" ] [ text spec.label ]
+                , input
+                    (type_ "range"
+                        :: class "field-range"
+                        :: Attr.value (reading state target)
+                        :: onInput (wiring.onField target)
+                        :: disabled (not wiring.enabled)
+                        :: bounds
+                    )
+                    []
+                , span [ class "field-value" ]
+                    [ text (reading state target ++ unitSuffix spec.unit) ]
+                ]
+
+        _ ->
+            typedBox wiring state target { label = spec.label, help = spec.help, unit = spec.unit } "number" bounds
+
+
+typedBox :
+    Wiring msg
+    -> State
+    -> Config.Target
+    -> { label : String, help : Maybe String, unit : Maybe String }
+    -> String
+    -> List (Attribute msg)
+    -> Html msg
+typedBox wiring state target spec kind bounds =
+    div [ class "field", help spec.help ]
+        [ span [ class "field-label" ] [ text (spec.label ++ unitSuffix spec.unit) ]
+        , input
+            (type_ kind
+                :: class "field-box"
+                :: Attr.value (reading state target)
+                :: onInput (wiring.onField target)
+                :: disabled (not wiring.enabled)
+                :: bounds
+            )
+            []
+        ]
+
+
+chooser :
+    Wiring msg
+    -> State
+    -> Config.Target
+    -> { label : String, help : Maybe String }
+    -> List String
+    -> Html msg
+chooser wiring state target spec choices =
+    let
+        current =
+            reading state target
+    in
+    div [ class "field", help spec.help ]
+        [ span [ class "field-label" ] [ text spec.label ]
+        , Html.select
+            [ class "field-select"
+            , onInput (wiring.onField target)
+            , disabled (not wiring.enabled)
+            ]
+            (List.map
+                (\choice ->
+                    option [ Attr.value choice, Attr.selected (choice == current) ]
+                        [ text choice ]
+                )
+                choices
+            )
+        ]
+
+
+{-| The value a control should show. Empty when the config is not carrying the
+key, which is a real state and means "whatever the server decides" — see
+`Config`'s note on nullable defaults.
+-}
+reading : State -> Config.Target -> String
+reading state target =
+    Config.valueAt target state.config
+        |> Maybe.map Config.valueString
+        |> Maybe.withDefault ""
+
+
+unitSuffix : Maybe String -> String
+unitSuffix unit =
+    case unit of
+        Just u ->
+            " " ++ u
+
+        Nothing ->
+            ""
+
+
+{-| The schema's `help` as a tooltip. Empty rather than absent when there is
+none: browsers show nothing for an empty `title`, and an attribute that is
+sometimes there and sometimes not costs a conditional at every call site.
+-}
+help : Maybe String -> Attribute msg
+help words =
+    Attr.title (Maybe.withDefault "" words)
