@@ -31,20 +31,21 @@ class RenderSession:
     Whether that is safe depends entirely on *which* field you touch, because
     only some of them feed the memoized stages:
 
-    - **Safe to mutate in place on ``session.config``:** anything a preview
-      recomputes from scratch on every call — ``stems`` (including each
-      ``StemConfig``'s ``decay``, ``gain_db``, ``reverb_send`` and ``enabled``),
-      ``reverb``, ``soundbed``, ``output``, and ``seed``. Nothing downstream is
-      cached from these, so ``render_window`` picks the new value up
-      immediately. The existing tests rely on exactly this.
+    - **Safe to mutate in place on ``session.config``:** each stem's ``decay``
+      (curve, lowpass, amplitude, dropout, noise, spectral-hole settings) and
+      ``enabled``, plus ``soundbed`` and ``seed``. Nothing downstream is cached
+      from these, so ``render_window`` picks the new value up immediately. The
+      existing tests rely on exactly this.
 
-    - **Must go through :meth:`update_config`:** ``loop``, ``tempo``, and
-      ``separation_model``. These determine ``loop_point()``, the
-      ``prepared_loop()`` cache, and ``stems()`` respectively. Assigning them
-      directly leaves the caches populated with results computed from the *old*
-      values, and there is no error — the preview simply keeps showing the
-      previous time-stretch or the previous loop region, silently, which is the
-      one failure this whole class exists to prevent.
+    - **Must go through :meth:`update_config`:** ``loop``, ``tempo``,
+      ``separation_model``, ``reverb``, ``output``, and each stem's ``gain_db``
+      and ``reverb_send``. The first three determine ``loop_point()``, the
+      ``prepared_loop()`` cache, and ``stems()`` respectively, as before. The
+      latter three feed ``preview.master_gain``, which is now memoized on this
+      class (see ``self.master_gain``) — mutating them directly leaves that
+      cache holding a gain computed from the *old* values, and there is no
+      error — the preview simply plays at the previous loudness, silently,
+      which is exactly the defect this class exists to prevent.
 
     A server applying config edits to a long-lived session should therefore
     build the new ``MixConfig`` and hand it to :meth:`update_config` rather than
@@ -63,6 +64,7 @@ class RenderSession:
         self._prepared: dict[str, AudioBuffer] = {}
         self._loop_key = self._key(config.loop)
         self._tempo_key = self._key(config.tempo)
+        self._master_key_value = self._master_key(config)
         # Filled in by preview.master_gain. It lives here rather than in
         # preview.py because it is invalidated by exactly the config changes
         # this class already tracks — and preview imports session, so session
@@ -98,9 +100,9 @@ class RenderSession:
     # -- invalidation ---------------------------------------------------
     def update_config(self, config: MixConfig) -> None:
         """Swap in a new config, discarding only the stages it invalidates."""
-        self.master_gain = None
         loop_key = self._key(config.loop)
         tempo_key = self._key(config.tempo)
+        master_key = self._master_key(config)
         if loop_key != self._loop_key:
             self._loop_point = None
             self._prepared.clear()
@@ -110,9 +112,20 @@ class RenderSession:
             self._stems = None
             self._loop_point = None
             self._prepared.clear()
+        # master_gain is measured at progress 0, where apply_decay is a
+        # passthrough, so decay settings alone can never move it — clearing on
+        # every config swap (the registry does one per request) would double
+        # the render cost of every preview for no reason. A different loop
+        # means a different peak, so loop/tempo/model changes still clear it.
+        if (master_key != self._master_key_value
+                or loop_key != self._loop_key
+                or tempo_key != self._tempo_key
+                or config.separation_model != self.config.separation_model):
+            self.master_gain = None
         self.config = config
         self._loop_key = loop_key
         self._tempo_key = tempo_key
+        self._master_key_value = master_key
 
     # -- internals ------------------------------------------------------
     def _reference(self) -> AudioBuffer:
@@ -125,3 +138,18 @@ class RenderSession:
     @staticmethod
     def _key(section) -> tuple:
         return tuple(sorted(asdict(section).items()))
+
+    @staticmethod
+    def _master_key(config: MixConfig) -> tuple:
+        """What the master gain actually depends on.
+
+        It is measured from iteration 0, where ``apply_decay`` returns the loop
+        untouched — so no decay setting can move it. Dragging a decay slider
+        must not invalidate this, or every preview pays a second window render."""
+        return (
+            tuple(sorted(asdict(config.reverb).items())),
+            config.output.peak_db,
+            config.output.channels,
+            tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send)
+                  for sc in config.stems),
+        )

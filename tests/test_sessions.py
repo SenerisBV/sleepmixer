@@ -73,3 +73,60 @@ def test_a_changed_source_path_rebuilds(tmp_path, registry):
     first = registry.get("a", _song(tmp_path / "a.wav"), MixConfig())
     second = registry.get("a", _song(tmp_path / "moved.wav"), MixConfig())
     assert second is not first
+
+
+def test_master_gain_survives_a_decay_only_change(tmp_path, registry):
+    """A decay slider drag must not invalidate the gain.
+
+    master_gain is measured at progress 0, where apply_decay is a passthrough,
+    so decay cannot move it — and recomputing would double the cost of every
+    preview during a drag."""
+    from sleepmix.preview import master_gain
+
+    path = _song(tmp_path / "a.wav")
+    session = registry.get("a", path, MixConfig())
+    gain = master_gain(session)
+
+    changed = MixConfig()
+    changed.stems[0].decay.amp_end_db = -30.0
+    registry.get("a", path, changed)
+    assert session.master_gain == gain, "a decay change must not clear the gain"
+
+
+def test_master_gain_is_cleared_by_a_reverb_change(tmp_path, registry):
+    from sleepmix.preview import master_gain
+
+    path = _song(tmp_path / "a.wav")
+    session = registry.get("a", path, MixConfig())
+    master_gain(session)
+
+    changed = MixConfig()
+    changed.reverb.wet = 0.1
+    registry.get("a", path, changed)
+    assert session.master_gain is None
+
+
+def test_master_gain_is_cleared_by_a_tempo_change(tmp_path, registry):
+    """A different stretch means a different loop, so a different peak."""
+    from sleepmix.preview import master_gain
+
+    path = _song(tmp_path / "a.wav")
+    session = registry.get("a", path, MixConfig())
+    master_gain(session)
+
+    changed = MixConfig()
+    changed.tempo.speed = 0.4
+    registry.get("a", path, changed)
+    assert session.master_gain is None
+
+
+def test_an_unchanged_config_does_not_clear_the_gain(tmp_path, registry):
+    """This is the request-after-request case: the registry calls update_config
+    every time, and an identical config must be a no-op."""
+    from sleepmix.preview import master_gain
+
+    path = _song(tmp_path / "a.wav")
+    session = registry.get("a", path, MixConfig())
+    gain = master_gain(session)
+    registry.get("a", path, MixConfig())
+    assert session.master_gain == gain
