@@ -24,6 +24,10 @@ from typing import Any, Callable
 from ..progress import Cancelled, CancelToken, ProgressEvent, ProgressReporter
 
 JOB_STATUSES = ("queued", "running", "done", "cancelled", "failed")
+# The statuses after which no further events can arrive. The SSE stream ends
+# on these, so a status that belongs here and is missed would leave a stream
+# running forever.
+TERMINAL_STATUSES = ("done", "failed", "cancelled")
 
 JobFn = Callable[[ProgressReporter, CancelToken], dict]
 
@@ -79,7 +83,7 @@ class JobManager:
         with self._lock:
             token = self._tokens.get(job_id)
             job = self._jobs.get(job_id)
-        if token is None or job is None or job.status in ("done", "failed", "cancelled"):
+        if token is None or job is None or job.status in TERMINAL_STATUSES:
             return False
         token.cancel()
         return True
@@ -102,7 +106,7 @@ class JobManager:
                 return None
             queue: asyncio.Queue = asyncio.Queue()
             self._subscribers.setdefault(job_id, []).append(queue)
-            terminal = job.status in ("done", "failed", "cancelled")
+            terminal = job.status in TERMINAL_STATUSES
             snapshot = job.as_event()
         if terminal:
             queue.put_nowait(snapshot)

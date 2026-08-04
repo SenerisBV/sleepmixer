@@ -12,9 +12,10 @@ import json
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from ..jobs import TERMINAL_STATUSES
+
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
-_TERMINAL = ("done", "failed", "cancelled")
 _HEARTBEAT_SECONDS = 15.0
 
 
@@ -69,7 +70,7 @@ async def stream_job(job_id: str, request: Request) -> StreamingResponse:
                     yield ": keepalive\n\n"
                     continue
                 yield f"data: {json.dumps(event)}\n\n"
-                if event["status"] in _TERMINAL:
+                if event["status"] in TERMINAL_STATUSES:
                     return
         finally:
             manager.unsubscribe(job_id, queue)

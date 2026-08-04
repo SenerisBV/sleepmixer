@@ -172,3 +172,15 @@ async def test_subscribing_to_a_finished_job_yields_its_final_state():
         assert event["status"] == "done"
     finally:
         manager.shutdown(wait=True)
+
+
+def test_terminal_statuses_are_declared_and_partition_the_set():
+    """Adding a status must force a decision about whether it ends a stream.
+
+    The SSE generator returns on TERMINAL_STATUSES. A new status that belongs
+    there but is forgotten leaves the stream running forever, holding a
+    connection and a queue for the life of the process."""
+    from sleepmix.server.jobs import JOB_STATUSES, TERMINAL_STATUSES
+
+    assert set(TERMINAL_STATUSES) <= set(JOB_STATUSES)
+    assert set(JOB_STATUSES) - set(TERMINAL_STATUSES) == {"queued", "running"}
