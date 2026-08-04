@@ -301,3 +301,18 @@ def test_the_all_extra_includes_the_ui_dependencies():
     block = pyproject.split("all = [", 1)[1].split("]", 1)[0]
     assert "fastapi" in block, line
     assert "uvicorn" in block, line
+
+
+def test_startup_reconciles_an_orphaned_separation(tmp_path, monkeypatch):
+    """Starting the server must clear rows left running by a previous crash."""
+    from sleepmix.server.store import Store
+
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    seed = Store()
+    song = seed.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
+    seed.update_song(song["id"], separation_status="running")
+    seed.close()
+
+    with TestClient(create_app()) as client:
+        body = client.get(f"/api/songs/{song['id']}").json()
+        assert body["separation_status"] == "pending"

@@ -174,6 +174,21 @@ class Store:
                 self._conn.commit()
             return self.get_song(song_id)
 
+    def reconcile_orphaned_separations(self) -> int:
+        """Reset songs stuck at 'running' to 'pending'. Returns how many.
+
+        The job manager holds its jobs in memory, so a row still marked
+        running when the process starts has no job behind it and never will —
+        the server was killed or suspended mid-separation. Nothing else clears
+        those rows, and a song claiming to separate forever cannot be retried
+        from the interface."""
+        with self._lock:
+            cursor = self._conn.execute(
+                "UPDATE songs SET separation_status = 'pending', separation_reason = NULL"
+                " WHERE separation_status = 'running'")
+            self._conn.commit()
+            return cursor.rowcount
+
     # -- presets --------------------------------------------------------
     def add_preset(self, name: str, config: dict) -> dict:
         with self._lock:

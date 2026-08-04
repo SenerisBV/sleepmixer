@@ -211,3 +211,24 @@ def test_a_second_store_sees_the_first_store_s_data(store):
         assert other.get_song(song["id"])["title"] == "A"
     finally:
         other.close()
+
+
+def test_reconcile_resets_orphaned_separations(store):
+    """The job manager is in-memory, so a running row at boot has no job.
+
+    A killed or suspended server leaves songs claiming to separate forever;
+    nothing else can ever clear them."""
+    a = store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
+    b = store.add_song(path="/tmp/b.wav", title="B", duration_s=1.0, sample_rate=44100)
+    store.update_song(a["id"], separation_status="running")
+    store.update_song(b["id"], separation_status="done", stems=["mix"])
+
+    assert store.reconcile_orphaned_separations() == 1
+    assert store.get_song(a["id"])["separation_status"] == "pending"
+    assert store.get_song(a["id"])["separation_reason"] is None
+    assert store.get_song(b["id"])["separation_status"] == "done", "finished work is untouched"
+
+
+def test_reconcile_is_a_no_op_when_nothing_is_orphaned(store):
+    store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
+    assert store.reconcile_orphaned_separations() == 0

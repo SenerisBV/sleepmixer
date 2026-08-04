@@ -109,6 +109,10 @@ def create_app(store: Store | None = None,
         # app would rebind that closed connection and raise ProgrammingError.
         owned = store is None
         app.state.store = Store() if owned else store
+        orphaned = app.state.store.reconcile_orphaned_separations()
+        if orphaned:
+            print(f"sleepmix: reset {orphaned} separation(s) left running by a "
+                  f"previous run")
         # The manager needs the running loop so it can marshal progress events
         # from the worker thread into subscriber queues.
         app.state.jobs = JobManager(loop=asyncio.get_running_loop())
