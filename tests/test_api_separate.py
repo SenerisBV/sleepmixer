@@ -32,8 +32,24 @@ def _await_job(client, job_id, timeout=20.0):
     raise AssertionError("job never finished")
 
 
+def _inline_separation(path, model, cache_dir, reporter=None, cancel=None):
+    """Stand in for ``run_separation`` without spawning its worker subprocess.
+
+    These tests predate the supervisor and drive behaviour by monkeypatching
+    ``sleepmix.separation._demucs_separate`` in-process. A real subprocess
+    would import a fresh, unpatched ``sleepmix.separation`` and — since Demucs
+    is actually installed in this environment — would run a real separation
+    instead of honouring the test double. Calling ``separate_detailed``
+    directly keeps these tests exercising the same cache/fallback semantics
+    they always have, without the process boundary."""
+    from sleepmix.separation import separate_detailed
+
+    return separate_detailed(path, model, cache_dir)
+
+
 def test_separate_records_status_and_stems(client, tmp_path, monkeypatch):
     import sleepmix.separation as sep
+    import sleepmix.server.api.songs as songs_api
 
     from sleepmix.audio import load_audio
 
@@ -43,6 +59,7 @@ def test_separate_records_status_and_stems(client, tmp_path, monkeypatch):
                 for name in ("vocals", "drums", "bass", "other")}
 
     monkeypatch.setattr(sep, "_demucs_separate", working)
+    monkeypatch.setattr(songs_api, "run_separation", _inline_separation)
     song = _import_song(client, tmp_path)
 
     r = client.post(f"/api/songs/{song['id']}/separate")
@@ -58,9 +75,11 @@ def test_separate_records_status_and_stems(client, tmp_path, monkeypatch):
 def test_separate_records_the_fallback_reason(client, tmp_path, monkeypatch):
     """This is the whole point: a UI must be able to say why there is one stem."""
     import sleepmix.separation as sep
+    import sleepmix.server.api.songs as songs_api
 
     monkeypatch.setattr(sep, "_demucs_separate",
                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no torch")))
+    monkeypatch.setattr(songs_api, "run_separation", _inline_separation)
     song = _import_song(client, tmp_path)
 
     job = client.post(f"/api/songs/{song['id']}/separate").json()
@@ -88,11 +107,13 @@ def test_separate_404s_when_the_file_has_moved(client, tmp_path):
 
 def test_force_reseparates_after_a_fallback(client, tmp_path, monkeypatch):
     import sleepmix.separation as sep
+    import sleepmix.server.api.songs as songs_api
 
     from sleepmix.audio import load_audio
 
     monkeypatch.setattr(sep, "_demucs_separate",
                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no torch")))
+    monkeypatch.setattr(songs_api, "run_separation", _inline_separation)
     song = _import_song(client, tmp_path)
     _await_job(client, client.post(f"/api/songs/{song['id']}/separate").json()["id"])
     assert client.get(f"/api/songs/{song['id']}").json()["separation_status"] == "fallback"
@@ -122,7 +143,7 @@ def test_a_failed_separation_does_not_strand_the_song(client, tmp_path, monkeypa
     def boom(*_a, **_k):
         raise RuntimeError("disk gone")
 
-    monkeypatch.setattr(songs_api, "separate_detailed", boom)
+    monkeypatch.setattr(songs_api, "run_separation", boom)
     song = _import_song(client, tmp_path)
 
     job = client.post(f"/api/songs/{song['id']}/separate").json()
@@ -143,7 +164,7 @@ def test_a_cancelled_separation_returns_the_song_to_pending(client, tmp_path, mo
     def cancelled(*_a, **_k):
         raise Cancelled("cancelled")
 
-    monkeypatch.setattr(songs_api, "separate_detailed", cancelled)
+    monkeypatch.setattr(songs_api, "run_separation", cancelled)
     song = _import_song(client, tmp_path)
 
     job = client.post(f"/api/songs/{song['id']}/separate").json()

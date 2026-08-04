@@ -18,7 +18,8 @@ from ...config import LoopConfig
 from ...paths import cache_dir
 from ...peaks import compute_peaks
 from ...progress import Cancelled
-from ...separation import invalidate_cache, separate_detailed
+from ...separation import invalidate_cache
+from ...separation_process import run_separation
 
 router = APIRouter(prefix="/api/songs", tags=["songs"])
 
@@ -136,7 +137,8 @@ def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
             cancel.check()
             if force:
                 invalidate_cache(path, model, cache_dir=str(cache_dir()))
-            result = separate_detailed(path, model, cache_dir=str(cache_dir()))
+            result = run_separation(path, model, str(cache_dir()),
+                                     reporter=reporter, cancel=cancel)
         except Cancelled:
             # Nothing was produced, so the honest state is the one we started
             # from — not "failed", which would imply the song is broken.

@@ -1,8 +1,12 @@
+import functools
+import time
+
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from sleepmix.audio import AudioBuffer, save_audio
+from sleepmix.separation_process import run_separation
 from sleepmix.server.app import create_app
 
 
@@ -17,6 +21,25 @@ def _song_file(path, sr=22050, secs=3.0):
     y = (0.5 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
     save_audio(AudioBuffer(np.stack([y, y], axis=1), sr), str(path))
     return str(path)
+
+
+def _wait_for_terminal(client, job_id, deadline_s=15.0):
+    """Poll a job until it reaches done/failed/cancelled.
+
+    A hard deadline rather than a generic timeout wrapper: if this ever hangs,
+    the assertion failure names the last status seen, so it reads as a
+    diagnosis rather than an unexplained timeout."""
+    last_status = None
+    deadline = time.time() + deadline_s
+    while time.time() < deadline:
+        body = client.get(f"/api/jobs/{job_id}").json()
+        last_status = body["status"]
+        if last_status in ("done", "failed", "cancelled"):
+            return body
+        time.sleep(0.05)
+    raise AssertionError(
+        f"job {job_id} never reached a terminal status within {deadline_s}s "
+        f"— last status seen was {last_status!r}")
 
 
 def test_schema_endpoint_returns_config_metadata(client):
@@ -112,3 +135,25 @@ def test_peaks_404s_when_the_file_has_moved(client, tmp_path):
     r = client.get(f"/api/songs/{song['id']}/peaks")
     assert r.status_code == 404
     assert "unavailable" in r.json()["detail"].lower()
+
+
+def test_cancelling_a_separation_leaves_the_song_pending(client, tmp_path, monkeypatch):
+    """Cancel used to return success and change nothing — the job ran to the
+    end and the operator had to kill the server. The row must come back to
+    where it started, not to 'failed': nothing was produced and nothing is
+    broken."""
+    monkeypatch.setenv("STUB_SLEEP_S", "30")
+    monkeypatch.setattr(
+        "sleepmix.server.api.songs.run_separation",
+        functools.partial(run_separation, worker_module="tests.stub_separation_worker"))
+
+    song = client.post("/api/songs", json={"path": _song_file(tmp_path / "a.wav")}).json()
+    started = client.post(f"/api/songs/{song['id']}/separate")
+    assert started.status_code == 202
+    job_id = started.json()["id"]
+
+    assert client.post(f"/api/jobs/{job_id}/cancel").json()["cancelled"] is True
+    _wait_for_terminal(client, job_id)
+
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "cancelled"
+    assert client.get(f"/api/songs/{song['id']}").json()["separation_status"] == "pending"
