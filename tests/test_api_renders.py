@@ -133,3 +133,27 @@ def test_a_failed_render_is_marked_failed_even_after_a_cancel(client, tmp_path, 
     render = client.get(f"/api/renders/{body['render']['id']}").json()
     assert render["status"] == "failed"
     assert client.get(f"/api/renders/{body['render']['id']}/audio").status_code == 404
+
+
+def test_a_failure_after_cancellation_is_recorded_as_a_failure(client, tmp_path, monkeypatch):
+    """The row must classify by exception type, not by the cancel flag.
+
+    A genuine exception raised while the token happens to be set is a failure,
+    not a cancellation. Reading the flag records it as cancelled while the job
+    records it as failed — two accounts of one render, disagreeing, with the
+    user-facing one wrong."""
+    import sleepmix.server.api.renders as renders_api
+
+    def cancel_then_explode(input_path, config, output_path, reporter=None, cancel=None):
+        cancel.cancel()
+        raise RuntimeError("pipeline exploded")
+
+    monkeypatch.setattr(renders_api, "run_pipeline", cancel_then_explode)
+    song = _import_song(client, tmp_path)
+    body = client.post("/api/renders",
+                       json={"song_id": song["id"], "config": _SHORT}).json()
+    finished = _await_job(client, body["job"]["id"])
+
+    render = client.get(f"/api/renders/{body['render']['id']}").json()
+    assert finished["status"] == "failed"
+    assert render["status"] == "failed", "the row must agree with the job"
