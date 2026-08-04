@@ -17,22 +17,33 @@ songJson =
     """
 
 
-{-| Captured from a live `GET /api/renders` against a throwaway data dir
-(`SLEEPMIX_DATA_DIR=$(mktemp -d) pipenv run sleepmix ui --no-open --port 8765`),
-right after `POST /api/renders` answered — before the worker thread has picked
-the job up. `config` comes back as a real JSON object (not a string of JSON:
-`store._render_from_row` does `json.loads` before the row ever reaches the
-route), and `duration_min` is `null` before the render finishes.
+{- The five render fixtures below are captured verbatim from a live
+`GET`/`POST /api/renders` against a throwaway data dir
+(`SLEEPMIX_DATA_DIR=$(mktemp -d) pipenv run sleepmix ui --no-open --port 8765`).
+The only edit made to any of them is replacing the real, machine-specific
+`/var/folders/.../renders/...` path with `/tmp/data/renders/...` — a
+deliberate normalisation of an irrelevant field, not a rewrite of anything the
+decoder is tested against. Every other field, including `id`, `config` and
+`created_at`, is the byte-for-byte value the server actually returned.
+-}
+
+
+{-| Captured from the `POST /api/renders` response body itself — the row it
+creates up front, before the worker thread has picked the job up. `config`
+comes back as a real JSON object (not a string of JSON: `store._render_from_row`
+does `json.loads` before the row ever reaches the route), and `duration_min`
+is `null` before the render finishes.
 -}
 queuedRenderJson : String
 queuedRenderJson =
     """
-    { "id": "d45d41a033dc4fa29a3ffa4fe2930f1e"
+    { "id": "f591fb3734714c8f9916e7ed891b978f"
     , "song_id": "15ff79b16efd4fc58874df4eac097a38"
-    , "config": {}
-    , "path": "/tmp/data/renders/d45d41a033dc4fa29a3ffa4fe2930f1e.wav"
+    , "config": {"output": {"duration_min": 0.05, "sample_rate": 22050,
+                            "fade_in_s": 0.0, "fade_out_s": 0.0}}
+    , "path": "/tmp/data/renders/f591fb3734714c8f9916e7ed891b978f.wav"
     , "status": "queued", "duration_min": null
-    , "created_at": "2026-08-04T21:03:57.643702+00:00" }
+    , "created_at": "2026-08-04T21:03:35.473657+00:00" }
     """
 
 
@@ -240,6 +251,18 @@ suite =
 
                         Err err ->
                             Expect.fail (Decode.errorToString err)
+            , test "a job missing created_at fails the decode rather than defaulting" <|
+                \_ ->
+                    let
+                        json =
+                            """
+                            { "id": "j1", "kind": "render", "status": "running"
+                            , "fraction": 0.0, "message": "", "error": null
+                            , "result": null, "song_id": "abc" }
+                            """
+                    in
+                    Decode.decodeString Api.job json
+                        |> Expect.err
             , test "isFinished is true only for terminal statuses" <|
                 \_ ->
                     Expect.equal
