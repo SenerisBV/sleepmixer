@@ -70,6 +70,13 @@ audio isn't something ports can carry incrementally, only handed off to
 wholesale. `ui/src/Preview.elm` decides *when* to ask for a preview — that's
 the part worth testing, and `elm-test` reaches it — while `audio.js` fetches
 `/api/preview`, decodes the response, and plays it, deciding nothing itself.
+The one piece of playback logic that has to live in the port rather than in
+Elm is *when* to swap buffers: `nextBoundary` schedules a new buffer to start
+exactly where the currently-playing one would next loop, and stops the old
+one at that same instant, so a decay control changed mid-playback lands the
+swap on a musical seam instead of cutting to a different point in the arc
+mid-cycle. That depends on `AudioContext.currentTime` and a live playback
+schedule, neither of which Elm ever touches.
 
 ### The mixer, and why it has almost no code of its own
 
@@ -84,9 +91,16 @@ and `ui/src/Config.elm` holds the values and puts them back into the nesting
 `MixConfig.from_dict` expects. **Nothing in either module names a single config
 parameter**, with three structural exceptions documented in `Config.elm`: the
 `stem` and `stem_decay` sections describe the elements of a list rather than
-global settings, and a stem's `name` identifies its row rather than being
-something you pick. Add a field to a dataclass in `sleepmix/config.py` and it
-appears in the mixer, editable and round-tripping, with no change here.
+global settings; a stem's `name` identifies its row rather than being
+something you pick; and `stems` itself is a list, which the schema doesn't
+describe at all (`config_schema` has no way to say "a list of these"). Add a
+field to a dataclass in `sleepmix/config.py` and it appears in the mixer,
+editable and round-tripping, with no change here. The same closure applies to
+field *types*, not just names: `Schema.field`'s decoder dispatches on the
+server's `"type"` string into a closed union, and one it doesn't recognise
+fails the whole `/api/schema` decode rather than silently omitting a control
+— see `docs/architecture.md` for what that looks like in practice and why the
+project considers it the right trade.
 
 That also means bounds are the schema's job, not the frontend's. `MixConfig.
 validate` rejects a negative seed; `seed` therefore carries `min: 0` in its

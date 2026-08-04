@@ -3,8 +3,9 @@
 This document covers the core render pipeline, the interactive layer built on
 top of it (separation → loop → stretch → decay → reverb → sum → sound bed →
 master, plus preview, sessions, and progress), the server that exposes all of
-that over HTTP, and — as of Plan 3a — the frontend that talks to that server.
-See `docs/project-state.md` for what each plan actually shipped.
+that over HTTP, and — as of Plan 3a, with a mixer added by Plan 3b — the
+frontend that talks to that server. See `docs/project-state.md` for what each
+plan actually shipped.
 
 ## The load-bearing property: decay is a pure function of progress
 
@@ -500,6 +501,24 @@ for it directly (`tests/test_api_songs.py`): which failure is a 400 and which
 is a 404, the `MAX_PEAK_BUCKETS` bound, the "file has moved" case. Thin is not
 the same as trivial.
 
+`GET /api/songs/{song_id}/loop` is Plan 3b's addition to this router and
+follows the same pattern: it decodes the file with `audio.load_audio` and
+calls `analysis.find_loop` directly, the same function `RenderSession` and
+`run_pipeline` both call, so the region a mixer draws cannot disagree with
+the one a render would actually use. It runs on the *whole* file rather than
+on separated stems, which is deliberate — it answers before separation has
+happened and needs no warm `RenderSession` — and it accepts optional
+`start_s`/`end_s` query parameters that echo a region back with a tempo
+rather than re-detecting it, which is what the mixer sends once loop handles
+have been dragged (see `docs/project-state.md`; there are no handles on the
+waveform yet, only schema-generated number fields for those two config
+values). **It has no cache**, unlike everything else this section describes:
+every call re-decodes the file and re-runs beat tracking, and the mixer now
+calls it more often than anything before this plan did — on opening a song
+and again on each of the two config edits it watches. This was identified
+during this plan's second task and deliberately left unfixed; it is recorded
+as a known weakness in `docs/project-state.md` rather than repeated here.
+
 **`create_app` is a factory, not a module-level `app`.** A module-level
 `FastAPI()` instance would be process-global — every test importing the
 server module would share one `Store` and one on-disk database. `create_app`
@@ -520,6 +539,22 @@ A store handed in by the caller is borrowed, not owned — closing it on
 shutdown would hand back a dead connection, and a second `TestClient` context
 over the same app would rebind it and raise `sqlite3.ProgrammingError`. That
 is what `test_an_injected_store_outlives_the_app` pins down.
+
+**A `running` separation row at startup is definitionally orphaned, and
+`lifespan` now says so before anything else runs.** `separation_status` moves
+to `"running"` before a separation job starts and is cleared only by a
+terminal status or one of `separate_song`'s two exception handlers — none of
+which fire if the process itself dies. `JobManager` is in-memory, so a row
+still reading `"running"` when a fresh `lifespan` starts has no job behind it
+and never will: the previous process was killed or suspended
+mid-separation. `Store.reconcile_orphaned_separations()` resets every such row
+to `"pending"` (clearing `separation_reason` too) and is called immediately
+after `app.state.store` is set, before the job manager or session registry
+exist — a song that would otherwise claim to separate forever becomes
+retryable from the interface again on the very next load. This was found in
+practice, not by reasoning about it in the abstract: two rows were observed
+stranded at `running` after a `Ctrl-Z`, which suspends a process rather than
+killing it and looks identical to a clean exit from the row's point of view.
 
 **`fastapi`/`uvicorn` are the `ui` optional extra** (`pyproject.toml`), not a
 core dependency — the same policy that keeps Demucs, librosa, and Rubber Band
@@ -604,10 +639,60 @@ therefore owns the actual `EventSource` connection to
 and receives already-parsed job events back over a `jobEvent` port, decoded
 immediately into `Api.Job` by `Decode.decodeValue Api.job`. A decode failure
 there surfaces as a `Result Decode.Error` for `update` to handle, not a crash.
-Elm never touches audio bytes, and the same shape is planned to repeat for
-Plan 3b's `ports/audio.js`: fetching `/api/preview`, decoding it with the Web
-Audio API, and looping playback are all JavaScript, with Elm only ever
-sending the parameters that produced a preview and receiving outcomes back.
+Elm never touches audio bytes, and the same shape now also covers preview
+playback: `ui/ports/audio.js` fetches `POST /api/preview`, decodes the
+response with the Web Audio API, and loops it.
+
+**Why the decision to send a preview lives in Elm and not in the port.**
+`ui/src/Preview.elm` decides *when* to ask for a preview; `ui/ports/audio.js`
+only carries out what it decides. That split could have gone either way —
+nothing about `fetch` or `decodeAudioData` requires JavaScript to be dumb —
+but only one side of it can be reached by `elm-test`, and the decision is the
+part of this path most worth getting right, because getting it wrong is
+silent: a coalescing bug fires extra renders against a server that queues
+them, and nobody watching the screen would see anything wrong until the
+scrubber started lagging seconds behind the pointer. `audio.js`'s own header
+comment states the same division from the other side: it holds two pieces of
+state, the playing source and the in-flight fetch, and "decides nothing" —
+"a queue here would be a bug."
+
+The decision `Preview.elm` exists to make is *when to coalesce*.
+`POST /api/preview` serializes per song — the server holds one lock across
+the whole render, and building a session from nothing (separation already
+cached, but the loop still needs finding and every stem still needs slicing
+and stretching) was measured at **117 seconds cold and 73 milliseconds
+warm**. A scrubber drag fires a control-change event on roughly every
+animation frame, so one request per event would queue dozens of renders
+behind each other, each pinning one of FastAPI's threadpool threads for the
+render ahead of it rather than its own. `Preview.State` — `Cold | Warming |
+Idle | InFlight Params | Queued Params` — allows at most one request in
+flight and at most one waiting; a request arriving while one is already in
+flight *replaces* whatever was queued rather than joining a line, because the
+position the user has already scrubbed past is worthless by the time the
+server would get to it. `ui/tests/PreviewTest.elm` asserts the resulting
+property directly: twenty scrubber positions fired during one drag collapse
+into a single emitted request, and the latest position is the one that wins.
+`Cold` and `Warming` exist because coalescing isn't enough on their own to
+protect the *first* request: something still has to make that opening call,
+since it is also what calibrates `preview.master_gain` for every preview that
+follows, and `request` refuses to send anything while `Cold`. `Preview.warm`
+is the one function that does — see "Entering the mixer costs one long
+request and says so" in `ui/README.md` for the reasoning about that specific
+request.
+
+**Gapless swapping at loop boundaries.** A preview buffer is one loop
+iteration, played on a loop; changing a control mid-playback produces a new
+buffer that has to replace the old one without an audible seam. `audio.js`'s
+`nextBoundary` computes how many multiples of the *currently playing*
+buffer's duration have elapsed since it started, and returns the next one;
+`play` schedules the new `AudioBufferSourceNode` to start exactly there and
+stops the old one at the same instant via `Web Audio`'s own sample-accurate
+`start(when)`/`stop(when)`. The swap therefore always lands on the point the
+old buffer would have looped anyway, not on whenever the fetch happened to
+finish — a decay control dragged mid-loop hears the current iteration finish
+before the next one begins, rather than a cut to a different point in the
+arc partway through a cycle, which would read as a skip rather than a
+change.
 
 **Why decoders are strict.** `ui/src/Api.elm` is the seam between an untyped
 HTTP response and a typed Elm value, and its own docstring calls this out
@@ -629,14 +714,72 @@ control.
 gives the reasoning directly: a `<canvas>` would mean escaping Elm's virtual
 DOM entirely and managing pixels through a port — every draw call would need
 to cross the same JSON-only boundary described above, for data (a few hundred
-peak pairs) that doesn't need to. The interaction the waveform exists to
-support — loop-region drag handles, in Plan 3b — is just mouse events mapped
+peak pairs) that doesn't need to. The interaction the waveform was chosen to
+leave room for — loop-region drag handles — would be just mouse events mapped
 to `Msg` values, which is precisely the state machine Elm's `Html.Events`
 models well without any port at all. SVG elements are ordinary Elm values
 diffed by the virtual DOM like any other node, and a few thousand `rect`
 elements (`peakBuckets = 200` today, so 200 of them, per `Main.elm`) is well
 within what a browser draws comfortably without needing canvas's raw pixel
 throughput.
+
+*Correction:* an earlier version of this paragraph said Plan 3b delivered
+those drag handles. It did not, and the claim was never true — `Waveform.elm`
+draws the loop region (`loopRegion`, fed by `GET /api/songs/{id}/loop`) as a
+static shaded rectangle with a tempo caption; nothing in `ui/src` attaches a
+mouse handler to it. `config.loop.start_s`/`end_s` are editable in the mixer
+today only as ordinary schema-generated typed number boxes in the Loop
+section (`Config.elm`'s note on why those two fields default to absent
+rather than `0.0` describes the same fields from the config side), not by
+dragging on the waveform. The SVG-over-canvas reasoning above is unaffected —
+it was always about what the choice would cost *if* that interaction were
+built — but nothing in this branch builds it.
+
+**Schema-driven controls, and what an unknown field type does.**
+`GET /api/schema` is `config.config_schema()` (documented above, under
+`config.py`) serialized to JSON — label, bounds, step, unit, choices, and
+help text, per field. `ui/src/Schema.elm` decodes that response into a closed
+union, `Field = FloatField | IntField | BoolField | TextField |
+IntChoiceField | StringChoiceField`, and `ui/src/Page/Mixer.elm` turns each
+case into a control by one rule: `min`/`max`/`step` present → a slider,
+`choices` present → a select, a bool → a checkbox, anything else → a typed
+box carrying whatever bounds the schema does state. `ui/src/Config.elm` holds
+the values in dictionaries keyed by whatever the server called the field, and
+puts them back into the nesting `MixConfig.from_dict` expects. Neither module
+names a single config parameter — with three structural exceptions
+`Config.elm`'s own docstring lists (the `stem`/`stem_decay` sections describe
+elements of a list rather than global settings; a stem's `name` identifies
+its row rather than being a value you pick; `stems` itself is a list, which
+the schema does not describe at all) — so adding a field to a dataclass in
+`sleepmix/config.py` puts a working, bounded, round-tripping control in the
+mixer with no Elm change. This is the same drift-proofing `plan_stem_configs`
+gives the CLI and the server, applied one layer further out: a hand-written
+Elm control set could name a field the schema stopped emitting, or fail to
+notice a new one, the same way a hard-coded stem list could disagree with
+what separation actually returned.
+
+The union being *closed* is what makes an unknown field type loud rather than
+quiet. `Schema.field`'s decoder dispatches on the server's `"type"` string —
+`"float"`, `"int"`, `"bool"`, `"str"`, each further split on whether
+`"choices"` is present — and a type it doesn't recognise hits
+`Decode.fail ("unknown config field type: " ++ other)` rather than skipping
+the field or rendering some generic fallback. Because `Schema.decoder` reaches
+that one field through `Decode.dict field`, and an Elm decoder either fully
+succeeds or fully fails, one field of a type this build doesn't recognise
+fails the *entire* `/api/schema` decode — not just that field. `Main.elm`
+handles it exactly like any other failed request: `GotSchema (Err err)` sets
+`settings = SettingsUnavailable (httpErrorToString err)`, so the mixer entry
+point shows a plain error naming what went wrong instead of a schema with one
+quietly-missing row. `Schema.elm`'s own docstring states the reasoning
+directly: "a field type this application cannot render fails the decode
+loudly instead of rendering nothing. That is most of the reason the project
+chose Elm." A dynamically-typed frontend handed the same unrecognised field
+would most likely just drop it while decoding everything else — the mixer
+would open looking complete, with one fewer control than the server actually
+has fields for, and nothing in the browser console to explain the gap. The
+Elm failure mode is uglier to look at and strictly better to debug: an error
+message naming the exact unrecognised type, rather than a control that simply
+isn't there and no record of why.
 
 **The build and commit arrangement.** `sleepmix/static/app.js` is committed to
 the repository rather than built as part of `pip install sleepmix` — the

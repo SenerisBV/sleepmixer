@@ -127,7 +127,7 @@ sleepmix render --input song.flac --config sleepmix.yaml --output mix.wav
 sleepmix render --input song.flac --duration 45 --speed 0.6 --soundbed
 ```
 
-### UI (early)
+### UI
 
 ```bash
 sleepmix ui
@@ -136,33 +136,57 @@ sleepmix ui
 Starts a local server on `127.0.0.1:8765`, opens a browser tab, and serves a
 small [Elm](https://elm-lang.org/) application — compiled and committed into
 the package, so running this needs nothing beyond the `ui` extra. It's a
-library browser and a song screen, not a mixer yet.
+library browser, a song screen, and — since this branch — a mixer you can
+hear while you shape it.
 
 What it does today: import a song by filesystem path, and the server decodes
 it, registers it in a local SQLite library, and hands back a waveform, drawn
-as SVG from the peaks the server computed. Open a song to see that waveform
-and its separation status. Kick off stem separation (vocals/drums/bass/other,
-via Demucs, with a plain-mix fallback if you haven't installed it) and watch
-it progress live over server-sent events, with the reason shown in place if
-it fell back or failed rather than just going quiet.
+as SVG from the peaks the server computed. Open a song to see that waveform,
+its detected loop region and tempo, and its separation status. Kick off stem
+separation (vocals/drums/bass/other, via Demucs, with a plain-mix fallback if
+you haven't installed it) and watch it progress live over server-sent events,
+with the reason shown in place if it fell back or failed rather than just
+going quiet.
 
-What it doesn't do yet: there is no mixer — nothing here lets you touch a
-single decay, reverb, or tempo setting, or hear a preview of one. There is no
-render screen: starting, cancelling, or downloading a full render has no page
-at all yet, though the API underneath it (see below) already does all three.
-There are no presets. All of that already exists and is tested at the API
-level and reachable from a shell with `curl` — it's the frontend for it that
-doesn't exist yet, and building it is the entire content of the next piece of
-work. Nothing about the API is expected to change to make room for it.
+Once a song is separated, open the mixer. Every control on it — per-stem
+enable, gain, reverb send, and every decay parameter (the lowpass sweep,
+spectral holes, dropouts, amplitude fade, rising noise floor, and the curve
+shaping the arc between them) — is generated from the same config schema
+`sleepmix init-config` writes to YAML, so a parameter added to the config
+appears here with no frontend change and nothing here can drift from what the
+config actually accepts. Drag the progress scrubber and it plays: a small
+JavaScript module fetches a preview of that point in the decay arc, decodes
+it, and loops it, swapping to the new buffer at the next loop boundary rather
+than cutting mid-cycle. Solo one or more stems to hear them alone. The very
+first preview of a song is slow — building the session behind it means
+slicing the loop out of every stem and time-stretching each one — and the
+screen says so with an indeterminate progress bar rather than inventing a
+percentage it doesn't have. Every preview after that answers in well under a
+second, because the built session stays warm for as long as the song stays
+open.
+
+What it still doesn't do: there is no render screen — starting, cancelling,
+or downloading a full render has no page at all yet, though the API
+underneath it (see below) already does all three. There are no presets, no
+page shows the background job queue, and nothing warns before importing a
+file large enough to block every job behind it. All of that already exists
+and is tested at the API level and reachable from a shell with `curl` for
+whatever doesn't yet have a screen; building the rest of the frontend is the
+next piece of work. Nothing about the API is expected to change to make room
+for it.
 
 Ask the API directly for a preview — any single point in the decay arc, by a
-`progress` value from 0 to 1 — and get raw WAV bytes back in well under a
-second, no matter how far into a twenty-five-minute mix that point is; that's
-the same cheap-preview property described under "The disintegration model"
-above, now reachable over HTTP. Start a full render as a background job,
-watch it the same way as separation, cancel it if you want to, and download
-the finished file once it's done. Save a set of decay settings as a named
-preset and reuse it.
+`progress` value from 0 to 1 and an optional list of stems to solo — and get
+raw WAV bytes back in well under a second once a song's session is warm, no
+matter how far into a twenty-five-minute mix that point is; that's the same
+cheap-preview property described under "The disintegration model" above, now
+reachable over HTTP, and it's what the mixer itself calls on every scrubber
+drag. (The *first* preview of a song is the exception: building that session
+from nothing was measured at well over a minute, which is why the mixer
+gates its controls behind that one request instead of pretending everything
+is instant.) Start a full render as a background job, watch it the same way
+as separation, cancel it if you want to, and download the finished file once
+it's done. Save a set of decay settings as a named preset and reuse it.
 
 **Keep it on localhost.** There is no authentication, and importing a song
 takes a filesystem path — so anything that can reach the port can ask the

@@ -1,6 +1,6 @@
 # Project state
 
-Status as of the end of the `feat/mixer` branch (Plan 3b of the spec, all 6
+Status as of the end of the `feat/mixer` branch (Plan 3b of the spec, all 7
 tasks complete), on top of `feat/elm-shell` (Plan 3a of the spec, all
 6 tasks complete), on top of `feat/interactive-server` (Plan 2b, all 8 tasks
 complete), `feat/server-foundation` (Plan 2a, all 7 tasks complete), and
@@ -78,6 +78,48 @@ What it does not do yet, and what to know before changing it:
   value still travels with every preview; only the control is absent. It
   belongs beside the Separate button, which already has a job and a progress
   bar, and that is a later plan.
+- **Nothing automated asserts that a port command is emitted.** Elm `Cmd`s
+  have no equality, so an implementation where `sendPreview` returned
+  `Cmd.none`, or `leaveMixer` omitted `stopPreview ()`, would pass all 160 Elm
+  tests — every assertion in `MixerTest.elm` and `PreviewTest.elm` is on the
+  model half of `update` (what state `Preview.request`/`Preview.arrived`
+  produce), never on whether a real `Cmd` actually left the program and
+  reached `audio.js`. Compensated by manual `curl` against a running server
+  during this task's own review, not fixed — the gap is structural (Elm
+  offers no way to inspect a `Cmd` from a test) rather than a missing
+  assertion someone forgot to write, so closing it would need a different
+  testing approach, not more tests of this shape.
+- **Soloing a stem the config has disabled returns a 200 and a 1-frame WAV,
+  not an error — and this is reachable from the shipped mixer, not only from
+  `curl`.** Found during this task's manual verification: with `MixConfig`'s
+  own defaults (`drums` disabled), `POST /api/preview` with
+  `stems: ["drums"]` came back `200 OK` with a 48-byte file — a valid WAV
+  header wrapped around a single silent frame. The path there is
+  `plan_stem_configs` (`config.py`), which drops any configured-but-disabled
+  stem before `render_window`'s own `stems` filter ever sees it, so asking for
+  only a disabled stem leaves `render_window`'s `planned` list empty; nothing
+  in that function distinguishes "you asked for a stem that doesn't exist"
+  from "you asked for a stem that exists but is switched off," and both fall
+  through to the same `silence(1, channels, sr)` — a buffer of exactly one
+  frame, not one loop's worth of quiet. A browser handed this plays nothing
+  and gets no error to show, which is the same failure shape the mixer's own
+  strict decoders exist to avoid everywhere else: wrong-and-quiet rather than
+  loud.
+
+  `Page/Mixer.elm`'s Solo button is disabled while a stem's own `enabled`
+  checkbox is off (`stemRow`'s comment names this exact hazard: "soloing a
+  stem the config has switched off would ask the server for a mix of
+  nothing"), which stops the button from *starting* a solo on a disabled
+  stem. It does not stop the other order: solo a stem first, while it is
+  enabled, then uncheck that same stem's `Enabled` box while it is still the
+  soloed one. `toggleField` never inspects or clears `state.solo`, and
+  `withMixer` fires a fresh preview after *every* mixer state change,
+  building its `stems` list from `soloedStems` alone — so unchecking
+  "Enabled" on the currently-soloed stem sends exactly the request above and
+  gets back the same 48-byte file, with the Solo button now shown disabled
+  and nothing on screen explaining why the audio went silent. Real, reachable
+  through ordinary use of the mixer as shipped, and worth the final review's
+  attention rather than being fixed here.
 - **The loop region is re-fetched only when `loop.start_s` or `loop.end_s`
   changes**, because those are the only two things `GET /api/songs/{id}/loop`
   takes. `bars`, `beats_per_bar` and the search window are config fields a
@@ -99,7 +141,12 @@ What it does not do yet, and what to know before changing it:
   an object at runtime with a port error Elm cannot catch — the screen would sit
   at "Preparing…" forever with audio playing underneath. The payload is decoded
   leniently and shown as the length of the loop now playing.
-- Presets and the render screen are still not built; that is Plan 3c.
+- Presets and the render screen are still not built; that is Plan 3c, and it
+  is specifically **the render screen (start, watch, cancel, download), the
+  presets UI, queue visibility, and a warning before importing a file large
+  enough to block everything behind it** — the four things this plan's own
+  closing section names as out of scope, carried over unchanged because
+  nothing in this task changed any of them.
 - The parked defect from Plan 3a is untouched: reloading mid-separation shows an
   enabled button reading "Separating…", because the disable comes from client
   state and the label from the server's status. The mixer's own gate reads the
