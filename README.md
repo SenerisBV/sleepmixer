@@ -151,13 +151,17 @@ going quiet.
 Once a song is separated, open the mixer. Every control on it — per-stem
 enable, gain, reverb send, and every decay parameter (the lowpass sweep,
 spectral holes, dropouts, amplitude fade, rising noise floor, and the curve
-shaping the arc between them) — is generated from the same config schema
-`sleepmix init-config` writes to YAML, so a parameter added to the config
-appears here with no frontend change and nothing here can drift from what the
-config actually accepts. Drag the progress scrubber and it plays: a small
+shaping the arc between them) — is generated from a schema the config
+dataclasses publish about themselves (`GET /api/schema`), so a parameter added
+to the config appears here with no frontend change and nothing here can drift
+from what the config actually accepts. (The example YAML `sleepmix
+init-config` writes is a separate, hand-written artefact and can drift; the
+mixer cannot.) Drag the progress scrubber and it plays: a small
 JavaScript module fetches a preview of that point in the decay arc, decodes
 it, and loops it, swapping to the new buffer at the next loop boundary rather
-than cutting mid-cycle. Solo one or more stems to hear them alone. The very
+than cutting mid-cycle. Solo a stem to hear it alone — one at a time, since
+"some of them" and "all of them" are one empty list apart in what gets sent.
+Switch every stem off and it says so rather than playing something. The very
 first preview of a song is slow — building the session behind it means
 slicing the loop out of every stem and time-stretching each one — and the
 screen says so with an indeterminate progress bar rather than inventing a

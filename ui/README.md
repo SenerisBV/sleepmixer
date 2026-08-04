@@ -88,12 +88,18 @@ text, per field — and `ui/src/Schema.elm` decodes that into a closed union.
 (`min`/`max`/`step` → a slider, `choices` → a select, a bool → a checkbox,
 anything else → a typed box carrying whatever bounds the schema does state),
 and `ui/src/Config.elm` holds the values and puts them back into the nesting
-`MixConfig.from_dict` expects. **Nothing in either module names a single config
-parameter**, with three structural exceptions documented in `Config.elm`: the
+`MixConfig.from_dict` expects. **Nothing generates a control from a name
+written in Elm.** `Config.elm` names no config parameter at all, with three
+structural exceptions documented there: the
 `stem` and `stem_decay` sections describe the elements of a list rather than
 global settings; a stem's `name` identifies its row rather than being
 something you pick; and `stems` itself is a list, which the schema doesn't
-describe at all (`config_schema` has no way to say "a list of these"). Add a
+describe at all (`config_schema` has no way to say "a list of these").
+`Page.Mixer` names a few more — `separation_model`, which it withholds a
+control from on purpose; `output`/`duration_min` for the scrubber's readout;
+`loop`/`start_s`/`end_s`, the two the loop endpoint takes an override for; and
+the sections that get an explanatory note — each argued for in a docstring at
+the point it appears, and none of them a control. Add a
 field to a dataclass in `sleepmix/config.py` and it appears in the mixer,
 editable and round-tripping, with no change here. The same closure applies to
 field *types*, not just names: `Schema.field`'s decoder dispatches on the
@@ -262,6 +268,15 @@ nothing, through six clean per-task reviews. The test scans `ui/src` for class
 literals and fails on any without a rule on the page, and a companion test
 refuses `classList` and `class (a ++ b)` so the scan cannot be bypassed. Nobody
 who writes this code can open a browser; that pair is the substitute for eyes.
+
+**Its blind spot is scope, and it is worth knowing about.** The test proves a
+rule exists *somewhere* for a class, not that the rule applies where the class
+is emitted. `.back` is the case that showed it: styled as `.song-view .back`
+and emitted by the mixer inside `div [ class "mixer" ]`, so the mixer's back
+button lost its margin while both class tests stayed green. Making the scan
+scope-aware means parsing selectors against a DOM the tests do not have, so it
+is not attempted; the rule now names both screens, and a third screen with a
+back button will need a third selector.
 
 `Main.routeFor` is still only exercised indirectly.
 

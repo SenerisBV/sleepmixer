@@ -31,8 +31,13 @@ loop boundary.
 
 Almost none of the controls are written. `GET /api/schema` describes every
 config field and `ui/src/Config.elm` holds the values and re-nests them for
-`MixConfig.from_dict`; neither module names a single config parameter, with
-three structural exceptions it documents. Adding a field in
+`MixConfig.from_dict`; `Config.elm` names no config parameter at all, with
+three structural exceptions it documents, and `Page/Mixer.elm` names a handful
+that are not controls (`separation_model`, which it deliberately withholds a
+control from; `output`/`duration_min` for the scrubber readout;
+`loop`/`start_s`/`end_s`, the two the loop endpoint takes an override for; and
+the sections that get an explanatory note), each argued for in a docstring
+where it appears. Adding a field in
 `sleepmix/config.py` puts a control in the mixer with no frontend change. The
 same reasoning went the other way once during this task: `MixConfig.seed` now
 carries `min: 0` in its metadata, because `validate` rejects a negative seed and
@@ -85,46 +90,59 @@ What it does not do yet, and what to know before changing it:
   bar, and that is a later plan.
 - **Nothing automated asserts that a port command is emitted.** Elm `Cmd`s
   have no equality, so an implementation where `sendPreview` returned
-  `Cmd.none`, or `leaveMixer` omitted `stopPreview ()`, would pass all 160 Elm
-  tests — every assertion in `MixerTest.elm` and `PreviewTest.elm` is on the
-  model half of `update` (what state `Preview.request`/`Preview.arrived`
+  `Cmd.none`, or `leaveMixer` omitted `stopPreview ()`, would pass every Elm
+  test in the suite — every assertion in `MixerTest.elm` and
+  `PreviewTest.elm` is on the model half of `update` (what state `Preview.request`/`Preview.arrived`
   produce), never on whether a real `Cmd` actually left the program and
   reached `audio.js`. Compensated by manual `curl` against a running server
   during this task's own review, not fixed — the gap is structural (Elm
   offers no way to inspect a `Cmd` from a test) rather than a missing
   assertion someone forgot to write, so closing it would need a different
   testing approach, not more tests of this shape.
-- **Soloing a stem the config has disabled returns a 200 and a 1-frame WAV,
-  not an error — and this is reachable from the shipped mixer, not only from
-  `curl`.** Found during this task's manual verification: with `MixConfig`'s
-  own defaults (`drums` disabled), `POST /api/preview` with
-  `stems: ["drums"]` came back `200 OK` with a 48-byte file — a valid WAV
-  header wrapped around a single silent frame. The path there is
-  `plan_stem_configs` (`config.py`), which drops any configured-but-disabled
-  stem before `render_window`'s own `stems` filter ever sees it, so asking for
-  only a disabled stem leaves `render_window`'s `planned` list empty; nothing
-  in that function distinguishes "you asked for a stem that doesn't exist"
-  from "you asked for a stem that exists but is switched off," and both fall
-  through to the same `silence(1, channels, sr)` — a buffer of exactly one
-  frame, not one loop's worth of quiet. A browser handed this plays nothing
-  and gets no error to show, which is the same failure shape the mixer's own
-  strict decoders exist to avoid everywhere else: wrong-and-quiet rather than
-  loud.
+- **A config that asks for no stems is refused, on both paths — fixed in the
+  final review wave, and worth keeping the history of.** `plan_stem_configs`
+  used to answer an empty plan with "every available stem at defaults". That
+  fallback was written for one case: separation fell back to a single `mix`
+  stem, so no configured stem *name* matches what exists, and rendering nothing
+  would be wrong. It could not tell that apart from *every matching stem
+  switched off* — which was unreachable until this plan shipped a per-stem
+  Enabled checkbox. Four clicks reached it, and the preview came back as the
+  **full default mix at full level**: `master_gain` recalibrates from the same
+  fallback set, so it played at the ceiling, with every gain, reverb send and
+  decay curve the user had tuned discarded in the same step. Measured against
+  the suite's `stub_separation`: default rms 0.298, all-off rms 0.194 — audible
+  music, not silence.
 
-  `Page/Mixer.elm`'s Solo button is disabled while a stem's own `enabled`
-  checkbox is off (`stemRow`'s comment names this exact hazard: "soloing a
-  stem the config has switched off would ask the server for a mix of
-  nothing"), which stops the button from *starting* a solo on a disabled
-  stem. It does not stop the other order: solo a stem first, while it is
-  enabled, then uncheck that same stem's `Enabled` box while it is still the
-  soloed one. `toggleField` never inspects or clears `state.solo`, and
-  `withMixer` fires a fresh preview after *every* mixer state change,
-  building its `stems` list from `soloedStems` alone — so unchecking
-  "Enabled" on the currently-soloed stem sends exactly the request above and
-  gets back the same 48-byte file, with the Solo button now shown disabled
-  and nothing on screen explaining why the audio went silent. Real, reachable
-  through ordinary use of the mixer as shipped, and worth the final review's
-  attention rather than being fixed here.
+  The two conditions are now separate. "The config describes none of these
+  stems" still falls back; "every one of them is off" plans nothing, and
+  `plan_stem_configs` may legitimately return `[]`. Both callers refuse it:
+  `preview.render_window` raises `NothingToRender` (a `ValueError` subclass, so
+  the CLI handles it with every other bad config, and its own type so
+  `POST /api/preview` can answer 400 with the reason for *this* without turning
+  an arithmetic error from deep in the DSP into a message about stems), and
+  `pipeline._plan_jobs` raises the same rather than writing half an hour of
+  peak-normalized silence to disk. The one-frame `silence(1, …)` that used to
+  end `render_window` is gone; the branch is unreachable and raises.
+
+  The same refusal covers soloing a stem the render would drop, which was the
+  48-byte-WAV finding from Plan 3b's verification pass. Both orders are now
+  closed in the UI as well: the Solo button is disabled on a switched-off stem
+  (as before), and `toggleField` clears the solo when the stem being switched
+  off is the soloed one — unrepresentable rather than merely reported. And
+  `Main.withMixer` consults `Mixer.everyStemDisabled` before sending, so
+  unticking the last stem produces a line on screen saying there is nothing to
+  render (the previous preview keeps looping) instead of a request that comes
+  back 400 and reads as the server breaking.
+
+  **Why it survived seven task reviews is the part worth remembering.** Neither
+  diff was wrong: the Elm generated the checkbox correctly, and `config.py`'s
+  fallback was correct when written. The defect lived in the seam — the config
+  the mixer builds and the config the renderer consumes were tested
+  independently and never against each other. The Elm suite stopped at
+  `Config.encode`, the Python suite started at a hand-written dict, and no test
+  had ever POSTed a body with a `stems` list in it. `tests/test_api_preview.py`
+  now has `_ui_body`, which builds a request shaped exactly as `Config.encode`
+  emits one, and asserts a per-stem edit reaches the audio.
 - **The loop region is re-fetched only when `loop.start_s` or `loop.end_s`
   changes**, because those are the only two things `GET /api/songs/{id}/loop`
   takes. `bars`, `beats_per_bar` and the search window are config fields a
@@ -156,6 +174,27 @@ What it does not do yet, and what to know before changing it:
   enabled button reading "Separating…", because the disable comes from client
   state and the label from the server's status. The mixer's own gate reads the
   server status as well as the flag, so it does not inherit the bug.
+
+**What the final whole-branch review changed**, beyond the empty-plan refusal
+above. (1) `toggleField` clears a solo on the stem being switched off, closing
+the second of the two orders that reached a mix of nothing. (2) `output.
+sample_rate` gained the `sectionNote` the other preview-ignored fields already
+had: `render_window` uses the loop's own rate and only `pipeline` resamples, so
+that select changes nothing you can hear until you render. (3) The stale
+"117 seconds / 73 milliseconds" pair is gone from the four source comments that
+still carried it, pointing at `docs/architecture.md`'s reconciliation rather
+than repeating a figure measured on a different track. (4) `.back` was styled
+under `.song-view` only and is emitted under `.mixer` too — see the scope blind
+spot noted in `ui/README.md`. (5) Three test gaps, each of which had let a real
+defect through: no test drove `SoloToggled`, `FieldChanged` or `FieldToggled`
+through `Main.update` (all three could be stubbed to `( model, Cmd.none )` with
+the suite green); no test ever POSTed a body containing a `stems` list; and no
+test set a *valid* value on a `StringChoiceField`, an `IntChoiceField` or a
+`TextField`, so `parse` returning `Nothing` for a choice field would have left
+every `<select>` in the mixer silently deleting its key. All three are closed
+and each was verified by mutation. (6) Two route tests asserted only that two
+responses differed, which a 422 satisfies as well as two mixes do; they now
+assert the status too.
 
 ## Plan 3a: what's built, and what it deliberately doesn't do yet
 
@@ -694,12 +733,16 @@ by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
   circuits auto-detection entirely, so `beat_track` is never invoked twice in
   one call — but the duplicate call sites could still share a helper.
 
-- **`MixConfig.seed` and `separation_model` carry no field metadata.** Every
+- **`MixConfig.separation_model` carries no field metadata.** Every
   other config field has a `label`/`help`/bounds dict for `config_schema()`
-  to read; these two fall through to auto-generated labels
-  (`"Seed"`, `"Separation model"`) and no help text, because they sit
+  to read; this one falls through to an auto-generated label
+  (`"Separation model"`) and no help text, because it sits
   directly on `MixConfig` rather than in one of the nested per-section
-  dataclasses `config_schema()` was designed around.
+  dataclasses `config_schema()` was designed around. (`seed` sat there too
+  until Plan 3b gave it `label`, `min: 0`, `step` and `help` — see the entry
+  above on bounds being the schema's job. Giving `separation_model` a
+  `choices` list is the obvious next move and is parked with the rest of the
+  separation-model question.)
 
 - **`MixConfig`'s validation layer covers one field.** `MixConfig.validate()`
   (called from `MixConfig.from_dict`, which every config-accepting endpoint —

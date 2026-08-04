@@ -133,11 +133,26 @@ for why that trade was made deliberately.
   hard-coded frontend control set can't drift from what the config actually
   accepts. `plan_stem_configs(available, config)` is the one place that
   decides which `StemConfig`s apply given the stems that actually came back
-  from separation: configured, enabled stems that exist, or — only if none of
-  them match — one default `StemConfig` per available stem. That second case
+  from separation: configured, enabled stems that exist, or — only if the
+  config *names* none of them — one default `StemConfig` per available stem.
+  That second case
   is what happens when Demucs isn't available and separation falls back to a
   single `mix` stem; both `pipeline._plan_jobs` and `preview.render_window`
   call this same function so they cannot disagree about stem selection.
+
+  **The two conditions are separate on purpose**, and the distinction is
+  load-bearing rather than pedantic. "The config names none of these stems"
+  means it has nothing to say about this song, and defaults are the only
+  sensible reading. "Every stem it names is switched off" is a deliberate
+  instruction, and answering it with a full default mix plays audio nobody
+  asked for at a level nobody chose. Written as one condition, it did exactly
+  that: unreachable until the mixer shipped per-stem Enabled checkboxes, four
+  clicks away afterwards. So the function may return an empty list, and both
+  callers refuse it — `render_window` raises `config.NothingToRender` (a
+  `ValueError` subclass, which `POST /api/preview` turns into a 400 carrying
+  the reason) rather than returning the one-frame WAV it used to, and
+  `_plan_jobs` raises rather than writing half an hour of peak-normalized
+  silence. Soloing a stem the render would drop takes the same door.
 
 - **`pipeline.py`** — `run_pipeline`, the full batch render: separate, find a
   shared loop on the summed reference signal, then per stem seamless-loop →
@@ -772,14 +787,21 @@ case into a control by one rule: `min`/`max`/`step` present → a slider,
 `choices` present → a select, a bool → a checkbox, anything else → a typed
 box carrying whatever bounds the schema does state. `ui/src/Config.elm` holds
 the values in dictionaries keyed by whatever the server called the field, and
-puts them back into the nesting `MixConfig.from_dict` expects. Neither module
-names a single config parameter — with three structural exceptions
+puts them back into the nesting `MixConfig.from_dict` expects. `Config.elm`
+names no config parameter at all, with three structural exceptions
 `Config.elm`'s own docstring lists (the `stem`/`stem_decay` sections describe
 elements of a list rather than global settings; a stem's `name` identifies
 its row rather than being a value you pick; `stems` itself is a list, which
-the schema does not describe at all) — so adding a field to a dataclass in
-`sleepmix/config.py` puts a working, bounded, round-tripping control in the
-mixer with no Elm change. This is the same drift-proofing `plan_stem_configs`
+the schema does not describe at all). `Page/Mixer.elm` names a handful, each
+defended in its own docstring where it appears: `separation_model`, which it
+removes from the generated controls because changing it costs a Demucs run
+rather than a re-render; `output`/`duration_min`, to say how far into the
+finished mix the scrubber is; `loop`/`start_s`/`end_s`, the two fields the
+loop endpoint can actually take an override for; and the section names that
+get a `sectionNote`. None of them is a *control* — every control on the screen
+is still generated — so adding a field to a dataclass in
+`sleepmix/config.py` still puts a working, bounded, round-tripping control in
+the mixer with no Elm change. This is the same drift-proofing `plan_stem_configs`
 gives the CLI and the server, applied one layer further out: a hand-written
 Elm control set could name a field the schema stopped emitting, or fail to
 notice a new one, the same way a hard-coded stem list could disagree with
@@ -820,19 +842,21 @@ writes an `elm make --debug` build to the same path, deliberately, and
 `ui/README.md` warns against committing one.
 
 `ui/hash_sources.py` hashes every `.elm` file under `ui/src`, `ui/elm.json`,
-and `ui/ports/events.js` — and then the two build outputs, `app.js` and
-`sleepmix/static/events.js`. The Makefile writes that hash to
+and both port modules (`ui/ports/events.js` and `ui/ports/audio.js`) — and
+then the three build outputs, `app.js`, `sleepmix/static/events.js` and
+`sleepmix/static/audio.js`. The Makefile writes that hash to
 `sleepmix/static/app.js.sha256` next to the bundle;
 `tests/test_static_bundle.py` recomputes the same hash with the same script
 and fails the suite if it doesn't match what's committed. Hashing the outputs
 as well as the inputs is what makes a committed `--debug` build a test failure:
 `make ui-dev` changes nothing on the input side and correctly leaves the hash
 alone, so an inputs-only digest matched a 333 KB debug bundle exactly as
-happily as the 180 KB optimized one. `sleepmix/static/events.js` is included
-for the mirror-image reason — it is a *copy* of `ui/ports/events.js` and is the
-file the page actually loads, so editing the copy used to change nothing any
-check looked at. A separate test asserts the two are byte-identical, so the
-failure names which file drifted rather than only that something did.
+happily as the 180 KB optimized one. The two served port files are included
+for the mirror-image reason — each is a *copy* of its source under
+`ui/ports/`, and the copy is what the page actually loads, so editing the copy
+used to change nothing any check looked at. A separate test, parametrized over
+both pairs, asserts each copy is byte-identical to its source, so the failure
+names which file drifted rather than only that something did.
 
 That test is the backstop for a forgotten rebuild, not a substitute for
 remembering to do one — it only runs, and only catches the drift, after the
