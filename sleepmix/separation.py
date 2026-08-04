@@ -148,3 +148,24 @@ def _load_fallback_reason(cache_dir: str, key: str) -> str | None:
         return None
     with open(path) as fh:
         return fh.read() or None
+
+
+def invalidate_cache(
+    input_path: str,
+    model: str = "htdemucs_ft",
+    cache_dir: str = ".sleepmix_cache",
+) -> bool:
+    """Delete the cached separation for ``input_path``. True if there was one.
+
+    The cache key is ``(path, size, mtime, model)`` and deliberately says
+    nothing about whether Demucs was importable at the time. That is fine for
+    a successful separation and wrong for a fallback: without this, a track
+    separated before the ``separation`` extra was installed would report itself
+    as a fallback forever."""
+    import shutil
+
+    directory = _cache_path(cache_dir, _cache_key(input_path, model))
+    if not os.path.isdir(directory):
+        return False
+    shutil.rmtree(directory)
+    return True

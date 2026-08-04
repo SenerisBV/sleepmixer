@@ -13,7 +13,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from ...audio import load_audio
+from ...paths import cache_dir
 from ...peaks import compute_peaks
+from ...separation import invalidate_cache, separate_detailed
 
 router = APIRouter(prefix="/api/songs", tags=["songs"])
 
@@ -67,3 +69,45 @@ def get_peaks(
             detail=f"Source file unavailable — it has moved or been deleted: {song['path']}")
     buf = load_audio(song["path"])
     return {"peaks": compute_peaks(buf, buckets), "duration_s": buf.duration}
+
+
+@router.post("/{song_id}/separate", status_code=202)
+def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
+    """Kick off stem separation as a background job.
+
+    ``force`` deletes the cached result first. That matters because the cache
+    key says nothing about whether Demucs was importable: without it, a song
+    separated before the ``separation`` extra was installed would keep
+    reporting itself as a fallback."""
+    store = request.app.state.store
+    song = store.get_song(song_id)
+    if song is None:
+        raise HTTPException(status_code=404, detail="No such song")
+    if not os.path.isfile(song["path"]):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Source file unavailable — it has moved or been deleted: {song['path']}")
+
+    path = song["path"]
+    model = request.app.state.separation_model
+    sessions = request.app.state.sessions
+
+    def work(reporter, cancel) -> dict:
+        reporter.emit("separate", "Separating stems…", 0.0)
+        if force:
+            invalidate_cache(path, model, cache_dir=str(cache_dir()))
+        cancel.check()
+        result = separate_detailed(path, model, cache_dir=str(cache_dir()))
+        status = "fallback" if result.fallback_reason else "done"
+        store.update_song(song_id,
+                          separation_status=status,
+                          separation_reason=result.fallback_reason,
+                          stems=sorted(result.stems))
+        # The song's audio changed shape underneath any warm session.
+        sessions.discard(song_id)
+        reporter.emit("separate", "Done", 1.0)
+        return {"status": status, "stems": sorted(result.stems)}
+
+    store.update_song(song_id, separation_status="running", separation_reason=None)
+    job = request.app.state.jobs.submit("separate", work, song_id=song_id)
+    return job.as_event()

@@ -19,7 +19,11 @@ from fastapi.staticfiles import StaticFiles
 
 import sleepmix
 
+from ..config import MixConfig
+from .api import jobs as jobs_api
 from .api import schema, songs
+from .jobs import JobManager
+from .sessions import SessionRegistry
 from .store import Store
 from .warmup import is_warm, warm_analysis
 
@@ -35,6 +39,11 @@ def create_app(store: Store | None = None) -> FastAPI:
         # app would rebind that closed connection and raise ProgrammingError.
         owned = store is None
         app.state.store = Store() if owned else store
+        # The manager needs the running loop so it can marshal progress events
+        # from the worker thread into subscriber queues.
+        app.state.jobs = JobManager(loop=asyncio.get_running_loop())
+        app.state.sessions = SessionRegistry()
+        app.state.separation_model = MixConfig().separation_model
         # Off the event loop: warming blocks for minutes on a cold numba cache,
         # and the UI should be able to render its shell meanwhile.
         app.state.warm_task = asyncio.create_task(asyncio.to_thread(warm_analysis))
@@ -46,6 +55,8 @@ def create_app(store: Store | None = None) -> FastAPI:
             # on its own. Acceptable here — it is bounded by one beat_track call
             # and the worker is not a daemon holding the process open.
             app.state.warm_task.cancel()
+            app.state.jobs.shutdown()
+            app.state.sessions.clear()
             if owned:
                 app.state.store.close()
 
@@ -57,6 +68,7 @@ def create_app(store: Store | None = None) -> FastAPI:
 
     app.include_router(schema.router)
     app.include_router(songs.router)
+    app.include_router(jobs_api.router)
 
     @app.get("/")
     def index() -> FileResponse:

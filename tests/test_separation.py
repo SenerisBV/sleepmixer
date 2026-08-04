@@ -116,3 +116,63 @@ def test_separate_keeps_its_dict_contract(tmp_path, monkeypatch):
     stems = separate(str(song), cache_dir=str(tmp_path / "cache"))
     assert isinstance(stems, dict)
     assert set(stems) == {"mix"}
+
+
+def test_invalidate_cache_forces_a_recompute(tmp_path, monkeypatch):
+    """Without this, a cached fallback is permanent — the cache key does not
+    include whether Demucs was available, so installing it later changes
+    nothing."""
+    import sleepmix.separation as sep
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cache = str(tmp_path / "cache")
+    calls = []
+
+    def failing(input_path, model):
+        calls.append(1)
+        raise RuntimeError("no torch")
+
+    monkeypatch.setattr(sep, "_demucs_separate", failing)
+    separate_detailed(str(song), cache_dir=cache)
+    separate_detailed(str(song), cache_dir=cache)
+    assert len(calls) == 1
+
+    assert sep.invalidate_cache(str(song), cache_dir=cache) is True
+    separate_detailed(str(song), cache_dir=cache)
+    assert len(calls) == 2
+
+
+def test_invalidate_cache_is_false_when_nothing_was_cached(tmp_path):
+    import sleepmix.separation as sep
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    assert sep.invalidate_cache(str(song), cache_dir=str(tmp_path / "cache")) is False
+
+
+def test_a_successful_rerun_clears_the_stale_marker(tmp_path, monkeypatch):
+    """The whole point of invalidation: a fallback must stop being reported
+    once the real thing works."""
+    import sleepmix.separation as sep
+
+    from sleepmix.audio import load_audio
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cache = str(tmp_path / "cache")
+
+    monkeypatch.setattr(sep, "_demucs_separate",
+                        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no torch")))
+    assert separate_detailed(str(song), cache_dir=cache).fallback_reason is not None
+
+    def working(input_path, model):
+        src = load_audio(input_path)
+        return {name: AudioBuffer(src.data.copy(), src.sr)
+                for name in ("vocals", "drums", "bass", "other")}
+
+    monkeypatch.setattr(sep, "_demucs_separate", working)
+    sep.invalidate_cache(str(song), cache_dir=cache)
+    result = separate_detailed(str(song), cache_dir=cache)
+    assert result.fallback_reason is None
+    assert set(result.stems) == {"vocals", "drums", "bass", "other"}
