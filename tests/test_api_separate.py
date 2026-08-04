@@ -113,3 +113,43 @@ def test_force_reseparates_after_a_fallback(client, tmp_path, monkeypatch):
     updated = client.get(f"/api/songs/{song['id']}").json()
     assert updated["separation_status"] == "done"
     assert updated["separation_reason"] is None
+
+
+def test_a_failed_separation_does_not_strand_the_song(client, tmp_path, monkeypatch):
+    """A row stuck at "running" cannot be rescued — force re-enters the same job."""
+    import sleepmix.server.api.songs as songs_api
+
+    def boom(*_a, **_k):
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(songs_api, "separate_detailed", boom)
+    song = _import_song(client, tmp_path)
+
+    job = client.post(f"/api/songs/{song['id']}/separate").json()
+    finished = _await_job(client, job["id"])
+    assert finished["status"] == "failed"
+
+    updated = client.get(f"/api/songs/{song['id']}").json()
+    assert updated["separation_status"] == "failed"
+    assert "disk gone" in updated["separation_reason"]
+
+
+def test_a_cancelled_separation_returns_the_song_to_pending(client, tmp_path, monkeypatch):
+    """Cancelling produced nothing, so the row must not claim the song failed."""
+    import sleepmix.server.api.songs as songs_api
+
+    from sleepmix.progress import Cancelled
+
+    def cancelled(*_a, **_k):
+        raise Cancelled("cancelled")
+
+    monkeypatch.setattr(songs_api, "separate_detailed", cancelled)
+    song = _import_song(client, tmp_path)
+
+    job = client.post(f"/api/songs/{song['id']}/separate").json()
+    finished = _await_job(client, job["id"])
+    assert finished["status"] == "cancelled"
+
+    updated = client.get(f"/api/songs/{song['id']}").json()
+    assert updated["separation_status"] == "pending"
+    assert updated["separation_reason"] is None
