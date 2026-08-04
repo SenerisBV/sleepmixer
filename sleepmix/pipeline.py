@@ -13,7 +13,7 @@ import numpy as np
 from .analysis import find_loop, slice_loop
 from .audio import (
     AudioBuffer, normalize_peak, resample, save_audio, silence, sum_buffers)
-from .config import MixConfig, StemConfig, plan_stem_configs
+from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
 from .disintegration import build_disintegrating_stream
 from .effects import apply_reverb
 from .looping import make_seamless
@@ -112,9 +112,19 @@ def _plan_jobs(stems: dict[str, AudioBuffer], config: MixConfig) -> list[tuple[A
     """Match configured stems to the stems we actually have.
 
     Selection lives in ``config.plan_stem_configs`` so the preview path cannot
-    drift from what the renderer actually processes."""
-    return [(stems[sc.name], sc)
-            for sc in plan_stem_configs(list(stems.keys()), config)]
+    drift from what the renderer actually processes.
+
+    Refuses an empty plan rather than rendering it. Every matching stem switched
+    off is a config that asks for silence, and half an hour of it — written to
+    disk, peak-normalized, indistinguishable from a finished mix until you play
+    it — is worse than the error. ``preview.render_window`` refuses the same
+    thing for the same reason."""
+    planned = plan_stem_configs(list(stems.keys()), config)
+    if not planned:
+        raise NothingToRender(
+            "Every stem is switched off, so this render would be silence. "
+            "Enable at least one stem.")
+    return [(stems[sc.name], sc) for sc in planned]
 
 
 # -- buffer math --------------------------------------------------------

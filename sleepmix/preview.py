@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from .audio import AudioBuffer, silence
-from .config import MixConfig, StemConfig, plan_stem_configs
+from .audio import AudioBuffer
+from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
 from .disintegration import decayed_iteration, plan_iterations
 from .effects import apply_reverb, reverb_dry_offset
 from .session import RenderSession
@@ -86,6 +86,13 @@ def render_window(
     subset to solo; names outside that set are ignored, because previewing a
     stem the render would drop is exactly the lie this module exists to avoid.
 
+    Raises ``NothingToRender`` when that leaves nothing to render — every stem
+    switched off, or a solo naming only stems the render would drop. Both are
+    user errors with a nameable cause, and both used to produce a one-frame WAV:
+    a well-formed file that plays silence and says nothing about why. Silence
+    that looks like success is the worst answer this module can give, because
+    nobody in the loop can hear that it is wrong.
+
     Each stem is decayed, reverbed with its own send, gained and channel-mapped
     in the same order as ``pipeline._process_stem`` — reverb is not linear
     across differing wet scales, so summing dry and reverbing once would not
@@ -103,9 +110,19 @@ def render_window(
     scale — not a simulation of any render that could actually be produced."""
     cfg = session.config
     planned = plan_stem_configs(session.stem_names(), cfg)
+    if not planned:
+        raise NothingToRender(
+            "Every stem is switched off, so there is nothing to preview. "
+            "Enable at least one stem.")
     if stems is not None:
         wanted = set(stems)
         planned = [sc for sc in planned if sc.name in wanted]
+        if not planned:
+            raise NothingToRender(
+                "Nothing to preview — none of the soloed stems ("
+                + ", ".join(sorted(wanted))
+                + ") is one this render would process. A stem that is switched "
+                  "off, or one separation did not produce, cannot be soloed.")
     iteration, n_iter = preview_iteration_index(session, progress)
 
     acc: np.ndarray | None = None
@@ -126,9 +143,12 @@ def render_window(
             acc[:m] += x[:m]
 
     if acc is None:
-        available = session.stems()
-        sr = next(iter(available.values())).sr if available else cfg.output.sample_rate
-        return silence(1, cfg.output.channels, sr)
+        # Unreachable: ``planned`` is non-empty by the time the loop starts and
+        # every iteration assigns ``acc``. A raise rather than the one-frame
+        # ``silence`` this used to return — a 48-byte WAV behind a 200 is the
+        # same silent failure the two checks above exist to stop, wearing a
+        # different hat.
+        raise NothingToRender("Nothing to preview — no stem produced any audio.")
 
     out = AudioBuffer(acc, sr)
     if master:

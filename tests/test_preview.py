@@ -407,3 +407,54 @@ def test_mastering_preserves_the_arc(tmp_path, stub_separation):
     early = render_window(s, 0.0, reverb=False)
     late = render_window(s, 1.0, reverb=False)
     assert float(np.abs(late.data).max()) < float(np.abs(early.data).max())
+
+
+def test_all_stems_off_refuses_rather_than_rendering_the_default_mix(
+        tmp_path, stub_separation):
+    """The failure this whole check exists for, asserted on the audio.
+
+    Before the split in ``plan_stem_configs``, a config with every stem
+    switched off fell through to "every available stem at defaults" — so the
+    preview came back as the *full default mix* at full level (measured rms
+    0.194 against the default's 0.298, i.e. audible music, not silence), with
+    every gain, reverb send and decay curve the user had tuned discarded in the
+    same step. Reachable in four clicks from the mixer's Enabled checkboxes.
+
+    So: the default mix is genuinely loud, and asking for nothing does not
+    return it — or anything else."""
+    import pytest
+
+    from sleepmix.config import NothingToRender
+
+    s = _session(tmp_path, stub_separation)
+    default = render_window(s, 0.5, reverb=False)
+    assert float(np.sqrt(np.mean(default.data ** 2))) > 1e-3
+
+    off = MixConfig()
+    off.output.duration_min = 2.0
+    off.stems = [StemConfig(name=name, enabled=False) for name in s.stem_names()]
+    s.update_config(off)
+
+    with pytest.raises(NothingToRender, match="switched off"):
+        render_window(s, 0.5, reverb=False)
+
+
+def test_soloing_a_stem_the_render_would_drop_refuses(tmp_path, stub_separation):
+    """Solo a stem, then switch it off — the mixer's own reachable order.
+
+    This used to return a one-frame WAV behind a 200: a well-formed file that
+    plays silence and says nothing about why."""
+    import pytest
+
+    from sleepmix.config import NothingToRender
+
+    s = _session(tmp_path, stub_separation)
+    name = s.stem_names()[0]
+
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    cfg.stems = [StemConfig(name=n, enabled=(n != name)) for n in s.stem_names()]
+    s.update_config(cfg)
+
+    with pytest.raises(NothingToRender, match=name):
+        render_window(s, 0.5, stems=[name], reverb=False)

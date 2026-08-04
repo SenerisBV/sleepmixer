@@ -18,7 +18,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ...audio import encode_wav
-from ...config import MixConfig
+from ...config import MixConfig, NothingToRender
 from ...preview import render_window
 
 router = APIRouter(prefix="/api", tags=["preview"])
@@ -51,8 +51,16 @@ def preview(body: PreviewRequest, request: Request) -> Response:
     # ``def``, so FastAPI runs it in the threadpool and a scrubber drag puts
     # several of these on one ``RenderSession`` at once — where a concurrent
     # ``update_config`` would clear caches mid-render. See ``session_for``.
-    with request.app.state.sessions.session_for(
-            body.song_id, song["path"], config) as session:
-        window = render_window(session, body.progress,
-                               stems=body.stems, reverb=body.reverb)
+    try:
+        with request.app.state.sessions.session_for(
+                body.song_id, song["path"], config) as session:
+            window = render_window(session, body.progress,
+                                   stems=body.stems, reverb=body.reverb)
+    except NothingToRender as exc:
+        # A config that asks for nothing — every stem switched off, or a solo
+        # naming only stems this render would drop. 400 with the reason rather
+        # than 200 with a one-frame WAV: the browser cannot tell silence from
+        # silence, so the only way the mixer can say *why* it went quiet is for
+        # this to fail out loud. See ``preview.render_window``.
+        raise HTTPException(status_code=400, detail=str(exc))
     return Response(content=encode_wav(window), media_type="audio/wav")

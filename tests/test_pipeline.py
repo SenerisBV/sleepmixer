@@ -143,3 +143,29 @@ def test_string_progress_callback_still_works(tmp_path, stub_separation):
 
     assert any("Separating" in line for line in lines)
     assert any("Wrote" in line for line in lines)
+
+
+def test_a_render_with_every_stem_off_refuses_rather_than_writing_silence(
+        tmp_path, stub_separation):
+    """Half an hour of nothing is worse than an error.
+
+    A silent render is peak-normalized, written to disk and indistinguishable
+    from a finished mix until you play it — at night, on headphones. The
+    preview path refuses the same config for the same reason
+    (``preview.render_window``)."""
+    from sleepmix.config import NothingToRender, StemConfig
+
+    song = tmp_path / "song.wav"
+    out = tmp_path / "mix.wav"
+    _synth_song(song)
+
+    cfg = MixConfig()
+    cfg.output.duration_min = 0.1
+    cfg.output.sample_rate = 22050
+    cfg.stems = [StemConfig(name=name, enabled=False)
+                 for name in ("vocals", "drums", "bass", "other")]
+
+    with pytest.raises(NothingToRender, match="switched off"):
+        run_pipeline(str(song), cfg, str(out), progress=lambda _: None)
+
+    assert not out.exists(), "a refused render must not leave output behind"

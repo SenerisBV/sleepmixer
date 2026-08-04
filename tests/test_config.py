@@ -100,6 +100,36 @@ def test_plan_stem_configs_falls_back_only_when_nothing_matches():
     assert planned[0].enabled
 
 
+def test_plan_stem_configs_plans_nothing_when_every_matching_stem_is_off():
+    """Switching every stem off means silence, not the default mix.
+
+    The fallback below exists for a config that says *nothing* about the stems
+    a song has. Applied to a config that says "none of them", it plays the full
+    default mix at full level — every gain, reverb send and decay setting
+    discarded — which is four clicks away in the mixer's Enabled checkboxes."""
+    cfg = MixConfig()
+    for sc in cfg.stems:
+        sc.enabled = False
+
+    assert plan_stem_configs(["vocals", "drums", "bass", "other"], cfg) == []
+
+
+def test_plan_stem_configs_falls_back_even_when_the_config_is_all_off():
+    """The discriminator between the two cases, stated as a test.
+
+    Same config as above — every stem disabled — against stems it does not
+    name. Nothing it says applies to this song at all, so defaults are the only
+    reading, and this must keep behaving exactly as the ``["mix"]`` fallback
+    always has."""
+    cfg = MixConfig()
+    for sc in cfg.stems:
+        sc.enabled = False
+
+    planned = plan_stem_configs(["mix"], cfg)
+    assert [sc.name for sc in planned] == ["mix"]
+    assert planned[0].enabled
+
+
 def test_from_dict_rejects_a_negative_seed():
     """numpy's SeedSequence requires non-negative entropy; a negative seed
     would raise deep inside the DSP with an unhelpful message."""

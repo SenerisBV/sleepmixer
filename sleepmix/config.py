@@ -319,14 +319,38 @@ def _default_of(f) -> Any:
     return None
 
 
+class NothingToRender(ValueError):
+    """The config asks for a mix of no stems at all.
+
+    A ``ValueError`` so that a caller which only knows "this config is bad"
+    (the CLI, a render job) handles it with everything else; its own type so
+    that ``POST /api/preview`` can answer 400 with the reason for *this*
+    specifically, without turning an arithmetic ``ValueError`` from somewhere
+    deep in the DSP into a message about stems."""
+
+
 def plan_stem_configs(available: list[str], config: "MixConfig") -> list[StemConfig]:
     """Which stem configs apply, given the stems that actually exist.
 
-    Configured stems that are enabled and present; or — only when none of them
-    match — every available stem at defaults, which is what happens when
-    separation falls back to a single 'mix' stem. Preview and batch render must
-    agree on this or the preview shows audio the render never produces."""
-    planned = [sc for sc in config.stems if sc.enabled and sc.name in available]
-    if not planned:
-        planned = [StemConfig(name=name) for name in available]
-    return planned
+    Configured stems that are enabled and present; or — only when the config
+    *describes* none of them — every available stem at defaults, which is what
+    happens when separation falls back to a single 'mix' stem. Preview and batch
+    render must agree on this or the preview shows audio the render never
+    produces.
+
+    The two conditions are separate on purpose, and the distinction is load-
+    bearing. "No configured name matches what separation produced" means the
+    config has nothing to say about this song and defaults are the only sensible
+    reading. "Every matching stem is switched off" is a *deliberate instruction*
+    from whoever switched them off, and answering it with a full default mix
+    plays audio nobody asked for, at a level nobody chose, discarding every gain
+    and decay setting in the same step. That was unreachable until the mixer
+    shipped per-stem Enabled checkboxes; four clicks reach it now.
+
+    So this may return an empty list, and every caller must decide what that
+    means rather than letting it fall through to silence — see
+    ``preview.render_window`` and ``pipeline._plan_jobs``, which both refuse."""
+    matching = [sc for sc in config.stems if sc.name in available]
+    if not matching:
+        return [StemConfig(name=name) for name in available]
+    return [sc for sc in matching if sc.enabled]
