@@ -53,7 +53,6 @@ CREATE TABLE IF NOT EXISTS songs (
     stems              TEXT,
     added_at           TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS songs_path_unique ON songs (path);
 CREATE TABLE IF NOT EXISTS presets (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
@@ -69,6 +68,24 @@ CREATE TABLE IF NOT EXISTS renders (
     duration_min REAL,
     created_at   TEXT NOT NULL
 );
+
+-- Collapse duplicate song rows left by versions predating the unique index,
+-- keeping the oldest of each path and re-pointing its renders, so that adding
+-- the index below cannot fail on an existing database. A no-op on a fresh one.
+UPDATE renders SET song_id = (
+    SELECT keep.id FROM songs keep
+    WHERE keep.path = (SELECT dup.path FROM songs dup WHERE dup.id = renders.song_id)
+    ORDER BY keep.rowid LIMIT 1
+)
+WHERE song_id IN (
+    SELECT id FROM songs
+    WHERE rowid NOT IN (SELECT MIN(rowid) FROM songs GROUP BY path)
+);
+
+DELETE FROM songs
+WHERE rowid NOT IN (SELECT MIN(rowid) FROM songs GROUP BY path);
+
+CREATE UNIQUE INDEX IF NOT EXISTS songs_path_unique ON songs (path);
 """
 
 

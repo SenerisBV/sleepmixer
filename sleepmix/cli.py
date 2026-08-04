@@ -16,10 +16,16 @@ def _is_loopback(host: str) -> bool:
     A string set gets this wrong: `::1`, `0:0:0:0:0:0:0:1` and `127.0.0.2` are
     all loopback and all miss a naive allow-list. Binding anywhere else exposes
     an unauthenticated server that will read any audio file the process can
-    read (see the `ui` command's guard)."""
+    read (see the `ui` command's guard).
+
+    `""` is deliberately *not* treated as loopback, even though it's the odd
+    one out here: passed to uvicorn it means "bind every interface," exactly
+    like `0.0.0.0`/`::` — this file's own browser-URL logic below already
+    treats it that way. Accepting it here would let `--host ""` skip the
+    refusal entirely while still binding a wildcard interface."""
     import ipaddress
 
-    if host in ("localhost", ""):
+    if host == "localhost":
         return True
     try:
         return ipaddress.ip_address(host.strip("[]")).is_loopback

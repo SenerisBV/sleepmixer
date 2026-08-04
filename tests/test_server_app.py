@@ -109,14 +109,32 @@ def test_is_loopback_accepts_every_spelling_and_rejects_look_alikes():
     """A string-set membership test gets these wrong; a real check must not.
 
     `0:0:0:0:0:0:0:1` is the fully-expanded form of `::1`, and `127.0.0.2` is
-    just as much loopback as `127.0.0.1` — the whole `127.0.0.0/8` block is."""
+    just as much loopback as `127.0.0.1` — the whole `127.0.0.0/8` block is.
+    `""` belongs in the *rejected* group even though it looks like a natural
+    default: passed to uvicorn it binds every interface, exactly like
+    `0.0.0.0`/`::` — this same module's browser-URL logic already treats it
+    that way, so the loopback check must agree rather than let `--host ""`
+    slip past the refusal."""
     from sleepmix.cli import _is_loopback
 
-    for host in ("127.0.0.1", "127.0.0.2", "localhost", "", "::1",
+    for host in ("127.0.0.1", "127.0.0.2", "localhost", "::1",
                  "0:0:0:0:0:0:0:1", "[::1]"):
         assert _is_loopback(host), host
-    for host in ("0.0.0.0", "::", "192.168.1.5", "example.com", "not-an-ip"):
+    for host in ("", "0.0.0.0", "::", "192.168.1.5", "example.com", "not-an-ip"):
         assert not _is_loopback(host), host
+
+
+def test_ui_refuses_an_empty_host_without_the_flag():
+    """`--host ""` binds every interface (uvicorn's own default-empty
+    behaviour, and what this file's browser-URL logic already assumes) — it
+    must be refused exactly like `0.0.0.0`, not treated as a loopback no-op."""
+    from click.testing import CliRunner
+
+    from sleepmix.cli import main
+
+    result = CliRunner().invoke(main, ["ui", "--host", "", "--no-open"])
+    assert result.exit_code != 0
+    assert "--allow-remote" in result.output
 
 
 def test_ui_accepts_an_ipv6_loopback_host_without_the_flag(monkeypatch):

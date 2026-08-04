@@ -53,6 +53,28 @@ before Task 8 started. Each of those is removed from the list below rather
 than left listed, since leaving a resolved item as a known weakness is
 exactly the kind of inaccuracy this document exists to avoid.
 
+**If you're upgrading an existing `library.db`:** the `songs_path_unique`
+index above cannot simply be added to a database that predates it, because
+`add_song` had no dedup before this task and could already hold two rows for
+one path — creating a `UNIQUE` index over duplicate values raises
+`sqlite3.IntegrityError` and the server refuses to start. `Store.__init__`'s
+`_SCHEMA` therefore runs a migration immediately before creating the index:
+for every `path` with more than one row, it keeps the row with the lowest
+`rowid` (the oldest import), re-points any `renders` that pointed at a
+row about to be deleted onto the surviving one, and only then deletes the
+duplicates. This runs on every open and is a no-op once a database has no
+duplicates left — including a fresh one. The consequence for an operator who
+already ran this server during development: the next time it starts, any
+duplicate library entries silently collapse into one (keeping the earliest),
+and that song's render history reappears whole under the surviving id rather
+than split across two entries. Nothing is deleted from disk — only the
+now-redundant `songs` row — so no render file is lost; only the extra
+library-list entry pointing at the same path goes away.
+`tests/test_store.py::test_opening_a_database_with_duplicate_paths_migrates_it`
+exercises this by inserting a raw duplicate row (bypassing `add_song`, the
+only way to still create one) and asserting a fresh `Store()` opens cleanly
+and re-points the orphaned render.
+
 ## Plan 2a: what's built, and what it deliberately doesn't do yet
 
 `sleepmix/server/app.py`'s `create_app` factory, `server/store.py`'s SQLite

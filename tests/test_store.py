@@ -82,6 +82,48 @@ def test_update_song_returns_none_when_absent(store):
     assert store.update_song("nope", title="x") is None
 
 
+def test_opening_a_database_with_duplicate_paths_migrates_it(tmp_path, monkeypatch):
+    """A library created before the unique index must still open.
+
+    add_song had no dedup, so any database from an earlier version can hold two
+    rows for one path. Creating the index without collapsing them first raises
+    IntegrityError and the server never starts."""
+    import sqlite3
+
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    store = Store()
+    db_path = store.db_path
+    song = store.add_song(path="/tmp/dup.wav", title="A", duration_s=1.0, sample_rate=44100)
+    render = store.add_render(song_id=song["id"], config={}, path="/tmp/o.wav", status="done")
+    store.close()
+
+    # A pre-migration database wouldn't have the unique index yet — the first
+    # Store() above already created it (it's part of the same _SCHEMA run), so
+    # it has to come off before a raw duplicate insert can simulate one.
+    conn = sqlite3.connect(db_path)
+    conn.execute("DROP INDEX IF EXISTS songs_path_unique")
+    # A second row for the same path, as an older version would have written.
+    conn.execute(
+        "INSERT INTO songs (id, path, title, duration_s, sample_rate, added_at)"
+        " VALUES ('dupe', '/tmp/dup.wav', 'A again', 1.0, 44100, '2020-01-01T00:00:00+00:00')")
+    conn.execute(
+        "INSERT INTO renders (id, song_id, config, path, status, created_at)"
+        " VALUES ('r2', 'dupe', '{}', '/tmp/o2.wav', 'done', '2020-01-01T00:00:00+00:00')")
+    conn.commit()
+    conn.close()
+
+    reopened = Store()          # must not raise
+    try:
+        songs = reopened.list_songs()
+        assert len(songs) == 1, "duplicates should have been collapsed"
+        assert songs[0]["id"] == song["id"], "the oldest row is the one kept"
+        # The orphaned render must have been re-pointed, not stranded.
+        assert reopened.get_render("r2")["song_id"] == song["id"]
+        assert reopened.get_render(render["id"])["song_id"] == song["id"]
+    finally:
+        reopened.close()
+
+
 def test_add_song_twice_with_the_same_path_returns_the_existing_row(store):
     """Importing the same file twice must not create a second library entry
     with its own, separate render history."""
