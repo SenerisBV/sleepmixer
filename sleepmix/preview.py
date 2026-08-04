@@ -41,8 +41,8 @@ def preview_iteration_index(session: RenderSession, progress: float) -> tuple[in
     return int(round(p * (n_iter - 1))), n_iter
 
 
-def master_gain(session: RenderSession) -> float:
-    """The gain ``run_pipeline``'s mastering stage will apply to this mix.
+def master_gain(session: RenderSession, reverb: bool = True) -> float:
+    """The gain that puts a ``reverb``-path window at the render's level.
 
     A preview is one window of a stream that gets peak-normalized as a whole.
     Without this correction a preview plays about 4 dB above the render it
@@ -50,14 +50,26 @@ def master_gain(session: RenderSession) -> float:
     judgement a preview exists to support. Found by listening; no test caught it,
     because the bit-identity check compares pre-reverb and pre-master.
 
-    One window is enough: decay only removes energy, so the peak falls
-    monotonically across the arc and the first iteration is the loudest."""
-    if session.master_gain is None:
-        loudest = render_window(session, 0.0, reverb=True, master=False)
+    Calibrated per signal path, hence the flag. Reverb changes the peak, so a
+    factor measured wet and applied to a dry window mis-levels it — measured at
+    the default reverb config, a dry window mastered with the wet factor sits
+    3.20 dB *low*, which is the same defect pointing the other way: quieter
+    reads as *more* decayed. So the calibration window is rendered down the same
+    path the caller asked for, and the two factors are cached separately.
+
+    One window per path is enough: decay only removes energy, so the peak falls
+    monotonically across the arc and iteration 0 is the loudest window this
+    module can produce. (A whole render's loudest moment is not necessarily
+    iteration 0 — fades and inter-iteration crossfades move it; see the
+    level-matching entry in ``docs/project-state.md``.)"""
+    cached = session.master_gain.get(reverb)
+    if cached is None:
+        loudest = render_window(session, 0.0, reverb=reverb, master=False)
         peak = float(np.abs(loudest.data).max())
         target = db_to_amp(session.config.output.peak_db)
-        session.master_gain = float(target / peak) if peak > 1e-9 else 1.0
-    return session.master_gain
+        cached = float(target / peak) if peak > 1e-9 else 1.0
+        session.master_gain[reverb] = cached
+    return cached
 
 
 def render_window(
@@ -79,10 +91,16 @@ def render_window(
     across differing wet scales, so summing dry and reverbing once would not
     match the render.
 
-    ``master=True`` (the default) applies the same single gain factor
-    ``run_pipeline`` would apply to the whole render, computed once via
-    ``master_gain`` and memoized on the session — see that function's
-    docstring for why a preview needs this at all."""
+    ``master=True`` (the default) applies one gain factor to every window,
+    computed once per ``reverb`` setting via ``master_gain`` and memoized on
+    the session — see that function's docstring for why a preview needs this
+    at all.
+
+    With ``reverb=True`` that factor is the one ``run_pipeline`` would apply,
+    since every real render reverbs. With ``reverb=False`` there is no render
+    to match: the result is a *level-matched view of the dry path* — the same
+    signal a wet mastered window carries underneath its reverb, at the same
+    scale — not a simulation of any render that could actually be produced."""
     cfg = session.config
     planned = plan_stem_configs(session.stem_names(), cfg)
     if stems is not None:
@@ -116,7 +134,7 @@ def render_window(
     if master:
         # One factor for every window, never per-window normalization: the arc
         # survives only because later windows stay genuinely quieter.
-        out = AudioBuffer(out.data * master_gain(session), sr)
+        out = AudioBuffer(out.data * master_gain(session, reverb), sr)
     return out
 
 

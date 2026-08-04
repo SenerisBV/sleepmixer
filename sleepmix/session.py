@@ -66,11 +66,13 @@ class RenderSession:
         self._loop_key = self._key(config.loop)
         self._tempo_key = self._key(config.tempo)
         self._master_key_value = self._master_key(config)
-        # Filled in by preview.master_gain. It lives here rather than in
+        # Filled in by preview.master_gain, keyed by its ``reverb`` flag: a
+        # gain calibrated wet mis-levels a dry window by several dB, so the two
+        # signal paths need separate factors. It lives here rather than in
         # preview.py because it is invalidated by exactly the config changes
         # this class already tracks — and preview imports session, so session
         # cannot import preview to own the computation itself.
-        self.master_gain: float | None = None
+        self.master_gain: dict[bool, float] = {}
 
     # -- staged results -------------------------------------------------
     def stems(self) -> dict[str, AudioBuffer]:
@@ -122,7 +124,7 @@ class RenderSession:
                 or loop_key != self._loop_key
                 or tempo_key != self._tempo_key
                 or config.separation_model != self.config.separation_model):
-            self.master_gain = None
+            self.master_gain.clear()
         self.config = config
         self._loop_key = loop_key
         self._tempo_key = tempo_key

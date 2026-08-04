@@ -255,27 +255,18 @@ def test_reverb_send_is_applied_per_stem(tmp_path, stub_separation):
     assert not np.array_equal(base.data, changed.data)
 
 
-def test_a_mastered_preview_sits_at_the_render_s_level(tmp_path, stub_separation):
-    """Preview loudness must track the render's, not float above it.
+def _preview_to_render_ratio(tmp_path, stub_separation, cfg, preview_reverb):
+    """RMS of a mid-arc mastered preview over the same region of a real render.
 
-    This is the check that was missing. The bit-identity test compares
-    pre-master, so it passed while previews played ~4 dB hot — and because
-    louder reads as less decayed, tuning done in the UI was being done against
-    something that would never ship."""
+    Shared by the two level-matching cases below so they cannot drift apart.
+    ``cfg.output.sample_rate`` must equal the working rate: this maps the
+    region by frame index, and a resample would shift it."""
     from sleepmix.audio import load_audio
     from sleepmix.disintegration import plan_iterations
     from sleepmix.pipeline import run_pipeline
 
     song = tmp_path / "s.wav"
     _song(song)
-
-    cfg = MixConfig()
-    cfg.output.duration_min = 0.5
-    cfg.output.sample_rate = 22050      # match the source: no resample step
-    cfg.output.fade_in_s = 0.0
-    cfg.output.fade_out_s = 0.0
-    cfg.reverb.wet = 0.0                # compare the dry path only
-
     out = tmp_path / "mix.wav"
     run_pipeline(str(song), cfg, str(out))
     rendered = load_audio(str(out))
@@ -283,6 +274,7 @@ def test_a_mastered_preview_sits_at_the_render_s_level(tmp_path, stub_separation
     session = RenderSession(str(song), cfg, separate_fn=stub_separation)
     name = session.stem_names()[0]
     loop = session.prepared_loop(name)
+    assert rendered.sr == loop.sr, "this comparison assumes no resample"
     target_frames = int(cfg.output.duration_min * 60 * loop.sr)
     n_iter, xfade = plan_iterations(
         loop.n_frames, target_frames, cfg.output.cycle_crossfade_ms, loop.sr)
@@ -293,13 +285,78 @@ def test_a_mastered_preview_sits_at_the_render_s_level(tmp_path, stub_separation
     lo, hi = i * stride + xfade, min((i + 1) * stride, target_frames)
     assert hi > lo, "test setup produced no clean region"
 
-    window = render_window(session, progress, reverb=False)   # mastered
+    window = render_window(session, progress, reverb=preview_reverb)   # mastered
     rendered_rms = float(np.sqrt(np.mean(rendered.data[lo:hi] ** 2)))
     window_rms = float(np.sqrt(np.mean(window.data[xfade:xfade + (hi - lo)] ** 2)))
-
     assert rendered_rms > 0
-    ratio = window_rms / rendered_rms
-    assert 0.85 < ratio < 1.15, f"preview is {20 * np.log10(ratio):+.1f} dB off the render"
+    return window_rms / rendered_rms
+
+
+def _level_cfg():
+    """The narrowest configuration in which "the preview is at the render's
+    level" is a well-posed question.
+
+    Output rate matched to the working rate so nothing resamples, and both
+    fades zeroed. The fades are not incidental: ``_apply_fades`` runs *before*
+    ``normalize_peak``, so at the default 8 s fade-in the same measurement
+    reads −1.82 dB — a real, recorded gap (``docs/project-state.md``), and one
+    that has nothing to do with whether the mastering gain is right. Leaving
+    them in would make this test fail for a reason it is not about."""
+    cfg = MixConfig()
+    cfg.output.duration_min = 0.5
+    cfg.output.sample_rate = 22050
+    cfg.output.fade_in_s = 0.0
+    cfg.output.fade_out_s = 0.0
+    return cfg
+
+
+def test_a_mastered_preview_sits_at_the_render_s_level(tmp_path, stub_separation):
+    """Preview loudness must track the render's, not float above it.
+
+    This is the check that was missing. The bit-identity test compares
+    pre-master, so it passed while previews played ~4 dB hot — and because
+    louder reads as less decayed, tuning done in the UI was being done against
+    something that would never ship.
+
+    Measured on exactly what ``/api/preview`` sends by default: a stock
+    ``MixConfig`` — default reverb, unmodified — previewed with ``reverb=True``.
+    The earlier version of this test instead used ``reverb.wet = 0.0`` and a dry
+    preview, which measured 0.8692 against a ±1.2 dB bound: 0.15 dB of headroom
+    on the one test protecting this branch's central claim, while being far too
+    slack to catch a full-dB regression in the path anyone actually uses.
+
+    The bound here is ±2%. The measured value is 1.0003 (+0.00 dB), so that is
+    not tight against anything — a preview drifting a quarter of a dB off the
+    render fails this, which is roughly where it would start being audible."""
+    ratio = _preview_to_render_ratio(
+        tmp_path, stub_separation, _level_cfg(), preview_reverb=True)
+    assert 0.98 < ratio < 1.02, \
+        f"preview is {20 * np.log10(ratio):+.2f} dB off the render (ratio {ratio:.4f})"
+
+
+def test_a_dry_preview_is_calibrated_against_the_dry_path(tmp_path, stub_separation):
+    """``master_gain`` calibrates down whichever path the caller asked for.
+
+    A dry preview has no render to be identical to — every real render reverbs.
+    Set ``reverb.wet = 0.0`` and reverb collapses to a flat dry gain, which
+    makes the render itself the dry path and the comparison well-posed again.
+
+    Measured: 1.0431, +0.37 dB. That residual is *not* the mastering gain — it
+    is the inter-iteration ``equal_power_crossfade``, which sums two decayed
+    iterations and can exceed either one's peak, so ``normalize_peak`` scales
+    the whole render slightly further down than a single-window calibration
+    predicts. Setting ``cycle_crossfade_ms = 0.0`` and changing nothing else
+    moves this measurement to 0.9995. Hence the ±5% bound: it is the size of a
+    known, separately-recorded effect, not slack chosen to fit.
+
+    Before per-flag calibration this same case read 0.6922 (−3.20 dB), because
+    the factor was always measured with reverb on and applied regardless."""
+    cfg = _level_cfg()
+    cfg.reverb.wet = 0.0
+    ratio = _preview_to_render_ratio(
+        tmp_path, stub_separation, cfg, preview_reverb=False)
+    assert 0.95 < ratio < 1.05, \
+        f"dry preview is {20 * np.log10(ratio):+.2f} dB off (ratio {ratio:.4f})"
 
 
 def test_master_gain_is_computed_once_per_config(tmp_path, stub_separation):
@@ -308,14 +365,36 @@ def test_master_gain_is_computed_once_per_config(tmp_path, stub_separation):
 
     s = _session(tmp_path, stub_separation)
     first = master_gain(s)
-    assert s.master_gain == first
-    assert master_gain(s) is s.master_gain
+    assert s.master_gain[True] == first
+    assert master_gain(s) == s.master_gain[True]
 
     changed = MixConfig()
     changed.output.duration_min = 2.0
     changed.tempo.speed = 0.5
     s.update_config(changed)
-    assert s.master_gain is None, "a config change must invalidate the gain"
+    assert s.master_gain == {}, "a config change must invalidate the gain"
+
+
+def test_master_gain_is_calibrated_per_signal_path(tmp_path, stub_separation):
+    """A dry preview must not be mastered with a wet-calibrated factor.
+
+    Reverb changes the peak the calibration window measures, so one factor
+    cannot serve both paths — applying the wet one to a dry window put it
+    3.2 dB low, which reads as more decayed than it is."""
+    from sleepmix.preview import master_gain
+    from sleepmix.util import db_to_amp
+
+    s = _session(tmp_path, stub_separation)
+    wet = master_gain(s, reverb=True)
+    dry = master_gain(s, reverb=False)
+    assert set(s.master_gain) == {True, False}
+    assert wet != dry, "the two paths cannot share one calibration"
+
+    # Each factor puts its own path's loudest window at the configured peak.
+    target = db_to_amp(s.config.output.peak_db)
+    for flag in (True, False):
+        peak = float(np.abs(render_window(s, 0.0, reverb=flag).data).max())
+        assert abs(peak - target) < 1e-4, f"reverb={flag} peaks at {peak}"
 
 
 def test_mastering_preserves_the_arc(tmp_path, stub_separation):
