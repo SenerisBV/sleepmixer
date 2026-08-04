@@ -642,16 +642,37 @@ throughput.
 the repository rather than built as part of `pip install sleepmix` — the
 package must install with nothing beyond its declared Python dependencies, so
 Node and Elm cannot be part of that path. `make ui` (`elm make --optimize`,
-from `ui/`) is the only thing that produces it, and it must be re-run and its
-output committed by hand whenever anything under `ui/` changes; nothing
-automates that step. `ui/hash_sources.py` hashes every `.elm` file under
-`ui/src`, `ui/elm.json`, and `ui/ports/events.js`, and the Makefile writes
-that hash to `sleepmix/static/app.js.sha256` next to the bundle;
+from `ui/`) is the target that produces a *shippable* bundle, and it must be
+re-run and its output committed by hand whenever anything under `ui/` changes;
+nothing automates that step. It is not the only thing that writes `app.js`,
+which is the whole reason the guard below has the shape it does: `make ui-dev`
+writes an `elm make --debug` build to the same path, deliberately, and
+`ui/README.md` warns against committing one.
+
+`ui/hash_sources.py` hashes every `.elm` file under `ui/src`, `ui/elm.json`,
+and `ui/ports/events.js` — and then the two build outputs, `app.js` and
+`sleepmix/static/events.js`. The Makefile writes that hash to
+`sleepmix/static/app.js.sha256` next to the bundle;
 `tests/test_static_bundle.py` recomputes the same hash with the same script
-and fails the suite if it doesn't match what's committed. That test is the
-backstop for a forgotten rebuild, not a substitute for remembering to do
-one — it only runs, and only catches the drift, after the fact. The hash also
-orders its inputs by sorted path rather than, say, a fixed manifest order, so
-it is a drift detector rather than a reproducibility proof: a module rename
-that happened to change the sort order while every file's bytes stayed
-identical would not change the recorded hash.
+and fails the suite if it doesn't match what's committed. Hashing the outputs
+as well as the inputs is what makes a committed `--debug` build a test failure:
+`make ui-dev` changes nothing on the input side and correctly leaves the hash
+alone, so an inputs-only digest matched a 333 KB debug bundle exactly as
+happily as the 180 KB optimized one. `sleepmix/static/events.js` is included
+for the mirror-image reason — it is a *copy* of `ui/ports/events.js` and is the
+file the page actually loads, so editing the copy used to change nothing any
+check looked at. A separate test asserts the two are byte-identical, so the
+failure names which file drifted rather than only that something did.
+
+That test is the backstop for a forgotten rebuild, not a substitute for
+remembering to do one — it only runs, and only catches the drift, after the
+fact. The hash also orders its inputs by sorted path rather than, say, a fixed
+manifest order, so it is a drift detector rather than a reproducibility proof:
+a module rename that happened to change the sort order while every file's bytes
+stayed identical would not change the recorded hash.
+
+`make ui` rebuilds unconditionally rather than being a file target with
+prerequisites, because mtime-driven rebuilding was actively wrong here: a
+`--debug` bundle written by `make ui-dev` is *newer* than every source, so the
+following `make ui` would have skipped the compile and re-recorded the hash of
+the debug build as current — turning the guard into a rubber stamp.

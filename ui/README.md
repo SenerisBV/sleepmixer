@@ -22,7 +22,36 @@ currently open, its peaks, and any in-flight separation job. `update` is a
 plain `Msg -> Model -> ( Model, Cmd Msg )`; every HTTP call sleepmix makes
 lives in one file, `ui/src/Request.elm`, so a change to the API surface is a
 change to one file and the compiler points at every caller when a signature
-moves.
+moves. `Request.elm` builds its URLs with `Url.Builder` rather than string
+concatenation, so ids and query values are percent-encoded; `ports/events.js`
+does the same with `encodeURIComponent`.
+
+**A separation is one union, `Separation`, not a pair of fields.** It was
+`separating : Bool` beside `trackedJob : Maybe Api.Job`, which could express
+"a job is running for this song, but we aren't watching it" — and did, every
+time someone left a song mid-separation and came back. The view rendered that
+state as a live button reading "Separating…", which queued a second job behind
+the first on the server's single worker when clicked. `Idle | Starting
+{ request, songId } | Watching Api.Job` makes it unrepresentable: there is no
+way to be separating without either a request in flight or a job being
+watched. `Starting` carries the request id that will answer it (so a superseded
+POST's response is recognised and dropped rather than adopted onto whatever
+song is now on screen) and the song it was issued for (so re-entering that same
+song keeps the watch instead of orphaning the job). Responses generally are
+tagged with a monotonic request id rather than a song id — a song id says "is
+this still the song on screen", which a fast A → B → A satisfies for the wrong
+reason, letting a stale response overwrite a fresher one.
+
+**Losing the event stream is a state, not a hang.** `ports/events.js` cannot
+tell a terminal close from a network blip, a server restart or a 404 for an
+unknown job — the browser fires `onerror` for all four — so it reports every
+one over a `jobStreamFailed` port and Elm, which knows whether it already saw a
+terminal event, decides whether that mattered (`streamFailureFor`). A dedicated
+port rather than an error envelope over `jobEvent`, so that channel keeps
+carrying exactly one thing decoded by exactly one strict decoder. A malformed
+event is handled separately again and says so: separation started fine, the
+*event* was unreadable, and both paths end the separation cleanly rather than
+leaving the panel at "Separating…" forever.
 
 ### Where Elm stops, and why
 
@@ -62,10 +91,20 @@ make ui
 
 This runs `elm make src/Main.elm --optimize` from `ui/`, writes the result to
 `sleepmix/static/app.js`, copies `ui/ports/events.js` to
-`sleepmix/static/events.js`, and records a content hash of everything that fed
-the build (every `.elm` file under `ui/src`, `ui/elm.json`, and
-`ui/ports/events.js`) to `sleepmix/static/app.js.sha256` via
-`ui/hash_sources.py`.
+`sleepmix/static/events.js`, and records a content hash to
+`sleepmix/static/app.js.sha256` via `ui/hash_sources.py`. The hash covers
+everything that fed the build — every `.elm` file under `ui/src`,
+`ui/elm.json`, and `ui/ports/events.js` — *and* both files that came out of it,
+`app.js` and `sleepmix/static/events.js`. The outputs are in there because
+hashing inputs alone let two real mistakes through unnoticed: a `make ui-dev`
+`--debug` bundle (which changes no input at all, so the recorded hash still
+matched) and an edit made to the served copy of `events.js` instead of to
+`ui/ports/events.js`.
+
+The target rebuilds every time rather than checking mtimes. `make ui-dev`
+writes to the same `app.js`, which then looks newer than every source, so an
+mtime-driven `make ui` would have skipped the compile and simply re-recorded
+the debug build's hash as current.
 
 ### The one thing to not forget
 
@@ -116,18 +155,38 @@ cd /Users/moopius/projects/sleepmixer/ui
 elm-test
 ```
 
-`ui/tests/` has four suites: `ApiTest.elm` (the `Api.elm` decoders, including
-that an unknown status fails rather than falling through), `JobTest.elm`
-(`Main.jobOutcome`, the pure function deciding whether an incoming SSE event
-belongs to the job currently being tracked), `LibraryTest.elm` (`Page.Library`,
-including `summary`'s three states), and `WaveformTest.elm` (`Waveform.barFor`,
-the peak-to-pixel geometry). There is currently no test covering `Page.Song`
-directly or `Main`'s routing (`routeFor`, the top-level `update`) — both are
-exercised only indirectly, through the pieces they're built from.
+`ui/tests/` has six suites:
 
-`elm-test` needs `elm-test-rs` or the Node-based `elm-test` runner on `PATH`;
-on this machine it's installed via Homebrew (`elm`, `elm-test`), which is why
-the Elm side of this project needs no `package.json` or `node_modules` at all
-— see the build note above for why that separation matters for the installed
-package, though it's incidental here since `elm-test` is a dev-only tool that
-never touches what ships.
+- `ApiTest.elm` — the `Api.elm` decoders, including that an unknown status
+  fails rather than falling through.
+- `JobTest.elm` — the pure decisions in `Main`'s job state machine:
+  `jobOutcome` (does this SSE event belong to the job we're tracking),
+  `separationOnSelect` (does opening a song keep or discard a running
+  separation, and which stream does that leave to close), and
+  `streamFailureFor` (is a dead `EventSource` a real loss or the normal
+  terminal close).
+- `UpdateTest.elm` — the `update` transitions those helpers feed:
+  navigating away from and back to a song mid-separation, a terminal event
+  arriving while the library is on screen, a stream failure, a decode failure,
+  and a superseded separation POST. `Cmd` has no equality in Elm, so these
+  assert the model half of `update` and leave the command half to the pure
+  helpers above, which is what those helpers were extracted for.
+- `SongTest.elm` — `Page.Song.needsForce` across all five `SeparationStatus`
+  values and `buttonLabel` for the same, busy and idle.
+- `LibraryTest.elm` — `Page.Library`, including `summary`'s three states.
+- `WaveformTest.elm` — `Waveform.barFor`, the peak-to-pixel geometry.
+
+No view is tested. `Main.routeFor` is still only exercised indirectly.
+
+`elm-test` needs `elm-test-rs` or the Node-based `elm-test` runner on `PATH`.
+On this machine the two halves come from different places: the compiler is
+Homebrew's `elm` formula, and the runner is the Node-based `elm-test`,
+installed globally with npm (`/opt/homebrew/bin/elm-test` is a symlink into
+`/opt/homebrew/lib/node_modules/elm-test`) — there is no `elm-test` Homebrew
+formula. So **Node is a prerequisite for running these tests**, and the
+"needs no `package.json` or `node_modules`" claim needs stating precisely: it
+is true of *this directory and what ships from it* — no manifest here, no
+dependency tree to install, nothing under `node_modules` in the built
+`app.js` — and false of the dev toolchain, which needs a global npm install to
+run the suite. What matters for the installed package is only the first half:
+`pip install sleepmix` compiles nothing and downloads no JavaScript.

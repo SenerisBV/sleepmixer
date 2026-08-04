@@ -36,6 +36,39 @@ each of those choices.
 
 **What it deliberately does not do yet — all of it Plan 3b:**
 
+- **No loop region on the waveform, and no route that could draw one.** The
+  spec's Song view asks for the detected loop region marked plus a tempo
+  readout, and Plan 3a's goal line promised "see its waveform and detected
+  loop" — but nothing in that plan could have delivered it, because **no
+  endpoint exposes a detected loop or a tempo.** `server/api/songs.py` has
+  import, list, get, peaks and separate, and nothing else; `analysis.find_loop`
+  and `_estimate_tempo` are reachable only from inside a render or a
+  `RenderSession`, never over HTTP. `Waveform.loopRegion` was written anyway
+  and is dead code on this branch: `Page/Song.elm` passes `loop = Nothing` and
+  has nothing else it could pass. The plan's goal line has since been corrected
+  (see the note at the top of
+  `docs/superpowers/plans/2026-08-04-elm-shell.md`), and the shipped docs never
+  claimed the loop, so nothing else needs unsaying. **This is a stated
+  dependency for the next plan, not an implementation detail:** drawing the
+  loop region needs a new server route — something like
+  `GET /api/songs/{id}/loop` returning start/end seconds and a tempo — and that
+  route is where the cost lives, since a cold `find_loop` is the ~1 s librosa
+  call the session cache exists to avoid paying twice. Do not plan the Elm half
+  as though the data is already there.
+
+- **The separation progress bar is real but has nothing to animate.** The SSE
+  machinery works end to end — `watchJob` opens the stream, events decode,
+  `Watching`'s fraction reaches the bar — but the separation job emits only two
+  progress points: `0.0` when it starts and `1.0` when it completes, which is
+  terminal and clears the bar. So the bar renders, sits at 0% for the entire
+  run, and then vanishes; the percentage beside it reads "0%" the whole time.
+  The port machinery is right and the payload is thin. **Plan 3b's render
+  progress should not assume the bar moves** — a render reports many
+  intermediate fractions (`pipeline.run_pipeline`'s stage checkpoints, see
+  `docs/architecture.md`) and will animate properly, but anything inheriting
+  this bar for separation should either accept the two-point behaviour or make
+  `separation.separate` report per-stem progress first.
+
 - **No mixer.** Nothing in this UI reads `/api/schema` or lets a user touch a
   single decay/reverb/tempo parameter. Separation is the only action a song
   screen offers.
@@ -50,6 +83,48 @@ each of those choices.
   and help text for every `MixConfig` field — is not consumed anywhere in
   `ui/`.
 - **No presets.** `server/api/presets.py`'s CRUD has no corresponding screen.
+
+**What the final whole-branch review changed.** Six things, all of which had
+shipped looking finished. (1) `sleepmix/static/index.html`'s stylesheet was
+written for a health-check-only page and defined three of the fifteen classes
+the Elm views emit — so `div.progress-fill`, an empty div carrying only an
+inline `width: N%`, had no height, no background and no colour, and **the live
+progress bar this whole branch exists to deliver rendered as nothing at all.**
+Library rows were default bulleted `<li>`s with a click handler and no
+`cursor: pointer`. The stylesheet now covers every emitted class, and
+`progressBar` gained a `.progress-track` element so the fill has something of a
+known size to be a percentage of. (2) The separation state became one union —
+see `ui/README.md` for the shape and the three reachable paths that used to
+strand the panel at "Separating…" forever. (3) Responses are tagged with a
+monotonic request id rather than a song id. (4) `ui/hash_sources.py` hashes the
+build *outputs* as well as its inputs, which is what makes a committed
+`make ui-dev` bundle a test failure; `sleepmix/static/events.js` is separately
+asserted byte-identical to `ui/ports/events.js`. (5) The plan's goal line was
+corrected — see the loop-region entry above. (6) `.github/workflows/tests.yml`
+is the first CI this repository has had.
+
+**A residual race in the stream-failure port, stated because it is a design
+choice and not an oversight.** `ports/events.js` reports every `EventSource`
+`onerror` to Elm, and Elm decides whether it mattered by checking whether it is
+still `Watching` that job. That works because Elm processes an incoming port
+send synchronously — the terminal event's `update` runs, sets `Idle` and
+dispatches `stopWatchingJob` before `onmessage` returns — and because `events.js`
+stays silent about a connection Elm has already told it to drop. If a browser
+ever delivered `onerror` for the server's normal end-of-stream *before* the
+preceding terminal event's `update` completed, the UI would show a spurious
+"the progress stream closed before it reported finishing". The consequence is a
+misleading message on an already-finished separation, not a stuck panel; the
+alternative — teaching `events.js` to recognise a terminal payload — would put
+the decision in the layer that is deliberately dumb.
+
+**The CI workflow does not use `pipenv`, deliberately.** The `Pipfile` installs
+`sleepmix[all]`, which pulls demucs and torch — gigabytes, to run a suite that
+passes without them through the graceful-degradation path every optional
+dependency already has (the local run reports `Demucs separation unavailable
+(no torch)` and passes). `.github/workflows/tests.yml` does
+`pip install -e ".[dev]"` and `pytest -q` instead. It does not install Elm
+either: the staleness guard is `ui/hash_sources.py`, which only reads files, so
+a forgotten `make ui` is caught without a toolchain.
 
 **A constraint carried forward from Plan 2b that shapes all of the above.**
 Plan 2b's own document (below, under "Jobs, progress, and sessions") measured
@@ -590,26 +665,8 @@ by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
   indirectly, via the job decoder's `Failed` variant on the job-status enum,
   which is a different decoder over a different field.
 
-- **`Request.elm` interpolates song ids into URL paths with plain string
-  concatenation, not `Url.Builder`.** Not exploitable — ids are
-  server-generated opaque hex, never user input — but it's the kind of
-  pattern that stops being safe the moment something less controlled gets
-  concatenated the same way.
-
-- **Entering the same song twice in quick succession can show stale data.**
-  `Main.elm`'s `GotSongDetail`/`GotPeaks` handlers guard against a slow
-  response landing after the user has navigated to a *different* song
-  (`model.selectedSongId /= Just songId`), but a `A → B → A` sequence fast
-  enough that the first `A` request is still in flight when the user lands
-  back on `A` passes that same guard — `selectedSongId` reads `Just "A"`
-  both when the stale response and the fresh response arrive, and whichever
-  lands second wins even if it's the stale one. Outside the scenario the
-  guard was written for (leaving a song outright); same-song responses are
-  usually near-identical, which is likely why this hasn't been noticed in
-  practice.
-
-- **No test covers `Page.Song` or `Main`'s routing.** `ui/tests/` exercises
-  `Api`'s decoders, `Main.jobOutcome`, `Page.Library`, and `Waveform.barFor`
-  directly, but `Page.Song`'s view logic (button labels, the `needsForce`
-  rule, the progress bar) and `Main`'s `routeFor`/top-level `update` are only
-  exercised indirectly, through the pieces they're built from.
+- **`Main.routeFor` is still only exercised indirectly.** `ui/tests/` now
+  covers `Api`'s decoders, `Main`'s job state machine and `update` transitions,
+  `Page.Song`'s `needsForce`/`buttonLabel`, `Page.Library`, and
+  `Waveform.barFor`. No view is tested — deliberately — and `routeFor`, which
+  is one `case` over a `Maybe`, is reached only through them.
