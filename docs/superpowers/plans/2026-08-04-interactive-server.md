@@ -1885,6 +1885,7 @@ from pydantic import BaseModel
 from ...config import MixConfig
 from ...paths import data_dir
 from ...pipeline import run_pipeline
+from ...progress import Cancelled
 
 router = APIRouter(prefix="/api/renders", tags=["renders"])
 
@@ -1893,6 +1894,28 @@ class RenderRequest(BaseModel):
     song_id: str
     config: dict | None = None
     preset_id: str | None = None
+
+
+def _abandon(store, render_id: str, output_path: str, status: str) -> None:
+    """Record a render that produced nothing, and leave no partial file.
+
+    Both failure paths go through here so the row can never be left at
+    "running" and a half-written file can never masquerade as a finished
+    render. Errors while cleaning up are swallowed deliberately: the original
+    exception is the one worth propagating.
+
+    Classification is by exception type rather than by consulting the cancel
+    token, so this agrees with ``JobManager._run``. Reading the flag instead
+    mislabels a genuine failure as a cancellation whenever the token happens
+    to be set but the pipeline raised for some other reason first."""
+    try:
+        store.update_render(render_id, status=status)
+    finally:
+        try:
+            if output_path and os.path.exists(output_path):
+                os.remove(output_path)
+        except OSError:
+            pass
 
 
 def _renders_dir() -> str:
@@ -1935,15 +1958,11 @@ def start_render(body: RenderRequest, request: Request) -> dict:
         try:
             mix = run_pipeline(source, config, output_path,
                                reporter=reporter, cancel=cancel)
+        except Cancelled:
+            _abandon(store, render["id"], output_path, "cancelled")
+            raise
         except Exception:
-            # Covers Cancelled (which is an Exception) as well as genuine
-            # failures. The job manager decides which it was; either way the
-            # row must not stay "running" and a partial file must not
-            # masquerade as a finished render.
-            status = "cancelled" if cancel is not None and cancel.cancelled else "failed"
-            store.update_render(render["id"], status=status)
-            if os.path.exists(output_path):
-                os.remove(output_path)
+            _abandon(store, render["id"], output_path, "failed")
             raise
         store.update_render(render["id"], status="done",
                             duration_min=mix.duration / 60.0)
