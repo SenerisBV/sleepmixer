@@ -3,7 +3,17 @@
 Both halves have burned this project before: an editable install hid a missing
 package declaration until a wheel was built, and a placeholder page shipped
 looking like a finished one.
+
+And a third, which is what the class-coverage test below is for: `index.html`
+was written for a health-check page and then never grew as later tasks added
+markup. Eleven of the fourteen classes the views emitted had no rule at all,
+including the progress bar the whole branch existed to deliver — an empty div
+with no height, no background and no colour, rendering as literally nothing.
+Six per-task reviews passed, because a review reads a diff and the missing
+thing was in a file the diff never touched. Nobody in the loop that writes this
+code can open a browser; this test is the substitute for eyes.
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -13,6 +23,7 @@ import sleepmix
 from sleepmix.server.app import create_app
 
 STATIC = Path(sleepmix.__file__).resolve().parent / "static"
+UI_SRC = Path(sleepmix.__file__).resolve().parent.parent / "ui" / "src"
 
 
 @pytest.fixture
@@ -69,6 +80,122 @@ def test_the_served_ports_module_matches_its_source(filename):
     assert served == source, (
         f"sleepmix/static/{filename} has drifted from ui/ports/{filename} — "
         f"edit ui/ports/{filename} and run `make ui`"
+    )
+
+
+# `class "a b"`, and `A.class "a"` for the SVG module's qualified import. The
+# optional paren catches `class ("a " ++ …)`, which nothing writes today and
+# `test_no_class_name_is_assembled_at_runtime` exists to keep that way.
+CLASS_LITERAL = re.compile(r'\bclass\s*\(?\s*"([^"]*)"')
+
+# A `class` applied to anything that is not a string literal. The whitespace is
+# what keeps `exposing (class, disabled)` and `exposing (class)` out of it.
+CLASS_APPLIED_TO_SOMETHING_ELSE = re.compile(r'\bclass\s+(?!")')
+
+
+def _elm_sources():
+    sources = sorted(UI_SRC.rglob("*.elm"))
+    assert sources, f"no Elm sources under {UI_SRC} — the scan would pass vacuously"
+    return sources
+
+
+def _code_only(text: str) -> str:
+    """`text` with its comments blanked out, keeping every newline.
+
+    Both scans below would otherwise read prose: `Main.elm`'s own docstring
+    says the compiler "turns a whole class of mistakes into build failures",
+    which is a `class` applied to something that is not a string literal, and
+    a class name mentioned in a comment is not a class name anything emits.
+    Blanking rather than deleting so reported line numbers still point at the
+    line the offender is on."""
+    out = []
+    i, n, depth = 0, len(text), 0
+    while i < n:
+        if depth:
+            if text.startswith("{-", i):
+                depth += 1
+                i += 2
+            elif text.startswith("-}", i):
+                depth -= 1
+                i += 2
+            else:
+                out.append("\n" if text[i] == "\n" else " ")
+                i += 1
+        elif text.startswith("{-", i):
+            depth = 1
+            i += 2
+        elif text.startswith("--", i):
+            while i < n and text[i] != "\n":
+                out.append(" ")
+                i += 1
+        elif text[i] == '"':
+            # Copied through, escapes and all: string literals are the thing
+            # being looked for, and a `--` inside one is not a comment.
+            out.append('"')
+            i += 1
+            while i < n:
+                if text[i] == "\\" and i + 1 < n:
+                    out.append(text[i:i + 2])
+                    i += 2
+                    continue
+                out.append(text[i])
+                i += 1
+                if text[i - 1] in ('"', "\n"):
+                    break
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _emitted_class_names():
+    names = set()
+    for path in _elm_sources():
+        for match in CLASS_LITERAL.finditer(_code_only(path.read_text())):
+            names.update(match.group(1).split())
+    return names
+
+
+def test_every_class_the_views_emit_has_a_rule_on_the_page():
+    """A class with no rule is not a cosmetic problem — it is an invisible element.
+
+    `.progress-fill` is the case that proves it: an empty div carrying nothing
+    but an inline width, which without a height and a colour occupies no space
+    and paints nothing. The compiler cannot see this — a class name is a
+    string on one side and a stylesheet on the other — so nothing but this
+    connects them."""
+    css = (STATIC / "index.html").read_text()
+    names = _emitted_class_names()
+    assert len(names) > 10, "the scan found suspiciously few classes; check the regex"
+    missing = sorted(
+        name for name in names
+        if not re.search(rf"\.{re.escape(name)}(?![\w-])", css)
+    )
+    assert not missing, (
+        "these classes are emitted by ui/src and have no rule in "
+        f"sleepmix/static/index.html, so whatever they style is unstyled — "
+        f"and an empty div among them renders as nothing at all: {missing}"
+    )
+
+
+def test_no_class_name_is_assembled_at_runtime():
+    """The coverage scan above reads string literals, and only those.
+
+    `class (prefix ++ suffix)` or `classList` would slip a class name past it
+    silently, which is the same hole the missing rules went through the first
+    time. Both spellings are one `if` away from two literals — see
+    `Page.Mixer`'s solo button — so the cost of this rule is a line, and what
+    it buys is that the scan cannot be wrong by omission."""
+    offenders = []
+    for path in _elm_sources():
+        text = _code_only(path.read_text())
+        for pattern in (CLASS_APPLIED_TO_SOMETHING_ELSE, re.compile(r"\bclassList\b")):
+            for match in pattern.finditer(text):
+                line = text.count("\n", 0, match.start()) + 1
+                offenders.append(f"{path.name}:{line}")
+    assert not offenders, (
+        "class names must be written as string literals so they can be checked "
+        f"against the stylesheet; these are built some other way: {offenders}"
     )
 
 
