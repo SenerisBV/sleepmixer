@@ -20,6 +20,16 @@ from ..session import RenderSession
 
 
 class SessionRegistry:
+    """Warm ``RenderSession`` objects, capped and least-recently-used.
+
+    ``get`` builds a new session while holding ``self._lock``, so two
+    concurrent requests for *different* songs serialize — the second waits
+    out the first's separation rather than building alongside it. That is
+    deliberate, not an oversight: it makes it impossible for two callers to
+    double-build the same session, and separation itself is disk-cached, so
+    the second caller usually pays a cache read, not the model again.
+    """
+
     def __init__(self, max_sessions: int = 2, separate_fn=None) -> None:
         self.max_sessions = max(int(max_sessions), 1)
         self._separate_fn = separate_fn
