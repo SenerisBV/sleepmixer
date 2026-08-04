@@ -82,6 +82,27 @@ def test_peaks_rejects_an_absurd_bucket_count(client, tmp_path):
     assert client.get(f"/api/songs/{song['id']}/peaks?buckets=10000000").status_code == 422
 
 
+def test_peaks_are_finite_for_a_file_containing_nan(client, tmp_path):
+    """A single bad sample must not blank the whole waveform in the UI.
+
+    Non-finite floats serialize as JSON `null`, which fails an Elm decoder for
+    `list (list float)` and takes the entire waveform with it."""
+    import json
+
+    import soundfile as sf
+
+    path = tmp_path / "nan.wav"
+    y = np.zeros((2048, 2), dtype=np.float32)
+    y[100] = np.nan
+    y[200] = np.inf
+    sf.write(str(path), y, 22050, subtype="FLOAT")
+
+    song = client.post("/api/songs", json={"path": str(path)}).json()
+    body = client.get(f"/api/songs/{song['id']}/peaks?buckets=32").json()
+    assert "null" not in json.dumps(body["peaks"])
+    assert all(np.isfinite(p).all() for p in body["peaks"])
+
+
 def test_peaks_404s_when_the_file_has_moved(client, tmp_path):
     path = _song_file(tmp_path / "a.wav")
     song = client.post("/api/songs", json={"path": path}).json()

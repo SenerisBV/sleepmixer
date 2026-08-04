@@ -267,6 +267,145 @@ concatenated where a real render crossfades consecutive iterations over
 `cycle_crossfade_ms`, so the reverb hears a join the render does not. A wet
 window is representative; a dry one is exact. See `docs/project-state.md`.
 
+## Matching a preview's loudness to the render
+
+A preview window is one loop iteration, rendered on its own. A full render is
+peak-normalized once, over the entire stream, at the very end
+(`pipeline.run_pipeline`'s closing `normalize_peak(mix, config.output.peak_db)`).
+Those are two different operations, and running them independently means a
+preview of, say, an already-half-decayed iteration gets normalized to fill the
+same headroom as the render's single loudest moment, rather than sitting at
+the level it would actually occupy relative to the rest of the mix. Concretely:
+without a correction, a preview plays about 4 dB above the render it
+represents — and because louder reads as *less decayed*, that's exactly the
+judgement a preview exists to let someone make correctly. The purity property
+that makes previewing cheap (see above) says nothing about loudness; it only
+guarantees a window's *samples* match a render's, before normalization ever
+enters the picture.
+
+This was found by listening during development, not by a test.
+`render_window`'s bit-identity guarantee (`tests/test_preview.py`) compares a
+preview window against the corresponding render iteration pre-reverb and
+pre-master, so it kept passing the entire time this was wrong — the
+divergence only appears at the whole-stream normalization step, which no
+per-window test exercises by construction.
+
+The fix, `preview.master_gain`, measures a single gain factor and applies it
+uniformly to every window rather than normalizing each one on its own. It can,
+because decay only removes energy — spectral holes, dropouts, amplitude fade,
+and a rising noise floor all pull a stem's level down or leave it unchanged,
+never up — so the peak across the whole arc falls monotonically, and the
+loudest point is always iteration 0 (`progress=0.0`), where `apply_decay` is a
+pure passthrough that no decay setting can move. `master_gain` renders exactly
+that one window (`render_window(session, 0.0, reverb=True, master=False)`),
+measures its peak, and computes the ratio to `db_to_amp(config.output.peak_db)`
+— the same target `normalize_peak` aims for on a real render. That single
+factor, memoized on the session (`RenderSession.master_gain`), is what
+`render_window(..., master=True)` (the default) applies to every subsequent
+preview regardless of where in the arc it sits. Applying one factor everywhere
+rather than normalizing per window is what preserves the arc: later windows
+end up quieter because they genuinely contain less energy, not because each
+one was independently pushed back up to full scale, which would flatten the
+whole point of the decay.
+
+`RenderSession._master_key` decides when the memoized factor is stale.
+Deliberately excluded: every stem's `decay` settings, `soundbed`, and `seed` —
+none of them can move a number measured at progress 0. Included: `reverb`,
+`output.peak_db`, `output.channels`, and each stem's `enabled`/`gain_db`/
+`reverb_send` — everything that actually changes what iteration 0 sounds like.
+Getting this split wrong in either direction was caught twice during this
+plan's own review: once from a stem's `enabled` flag being left off the key
+while affecting the gain anyway, and once from the session registry calling
+`update_config` on every request and clearing the memo unconditionally,
+recomputing it — a second window render — on every single preview.
+
+After the fix, a direct RMS measurement against a real render at a mid-arc
+window landed within +0.005 dB — effectively exact. Separately, and more
+convincingly because it doesn't share the developer's own instrumented test,
+listening files were regenerated and re-measured by ear: the point in the
+render where the preview's loudness best matched moved from 0:20 to 4:45,
+which is where an independently-run spectral match had already put it (4:55).
+Before the fix, the two methods disagreed by over four minutes on a
+twenty-five-minute mix; after it, they agree to within ten seconds.
+
+This does not close every gap of the same shape. `master_gain` is measured
+from `render_window`, which never mixes the sound bed in at all — but
+`run_pipeline` adds the sound bed to the mix *before* peak-normalizing. With
+`config.soundbed.enabled = True`, the real render's peak can be higher than
+what `master_gain` predicted from stems alone, so a preview would again sit
+above the render, for the identical underlying reason: something contributes
+to the render's final peak that the calibration window never saw. The sound
+bed defaults to off, so this is latent rather than live today; it is recorded,
+not fixed, in `docs/project-state.md`.
+
+## Jobs, progress, and sessions
+
+Four design choices in `sleepmix/server/jobs.py`, `sessions.py`, and
+`api/preview.py` look arbitrary in isolation and are not.
+
+**One worker, deliberately.** `JobManager` defaults to
+`ThreadPoolExecutor(max_workers=1)`. A render is CPU-bound numpy running for
+minutes over hundreds of loop iterations; two running at once would halve
+each other's throughput and double peak memory, in exchange for nothing —
+this is a tool one person uses at a time, not a multi-tenant service. Starting
+a second render while one is in flight does not fail or block the request:
+`submit` always accepts the job, creates its row, and returns immediately. The
+second job simply queues behind the pool's one worker and stays at whatever
+status `Job` starts in (`"queued"`) until the first job's thread frees up —
+nothing runs it in parallel, and nothing makes it wait longer than the first
+job actually takes.
+
+**Progress crosses the thread boundary through `call_soon_threadsafe`, and
+that is the only safe way to do it.** A job's `fn` runs on the pool's worker
+thread, not the event loop; every progress event it reports flows through
+`ProgressReporter` into `JobManager._on_event` → `_update` → `_publish`, which
+ends in `loop.call_soon_threadsafe(queue.put_nowait, snapshot)`
+(`jobs.py:153-165`). `asyncio.Queue` is not thread-safe — nothing about it
+guards against two threads mutating its internal deque at once — and
+`call_soon_threadsafe` is the one API asyncio provides for scheduling a
+callback to run *on the loop*, from any other thread, safely. Calling
+`queue.put_nowait` directly from the worker thread would race the event
+loop's own bookkeeping of that same queue and corrupt it; `subscribe()`'s own
+unguarded `put_nowait` for the late-subscriber snapshot (below) is safe for
+the opposite reason — it never runs anywhere but the loop thread, which
+`server/api/jobs.py`'s `stream_job` says explicitly at the call site.
+
+**A late subscriber gets an immediate snapshot because nothing else will ever
+wake it.** `JobManager.subscribe()` checks whether the job is already in a
+`TERMINAL_STATUSES` state, and if so, pushes the job's current snapshot onto
+the new queue right there, before returning it. Without this, a client that
+opens `/api/jobs/{id}/events` after the render already finished — a page
+refresh, a second tab, a reconnect — would await a queue that nothing will
+ever populate again, because `_update` (the only thing that publishes) is
+only ever called from within `_run`, which by then has already returned. The
+snapshot turns "connected too late" into "sees the outcome immediately"
+instead of "hangs forever."
+
+**The session registry is capped at two because a session is expensive to
+hold, not expensive to build twice.** `SessionRegistry(max_sessions=2)` keeps
+warm `RenderSession`s so consecutive preview requests for the *same* song
+skip re-separating and re-stretching; a session holds every stem decoded in
+memory — roughly fifty megabytes per stem for a five-minute stereo track,
+more once stretched loops are cached alongside the originals. `get()` moves
+the just-used entry to the end of an `OrderedDict` and, once the registry
+holds more than `max_sessions`, evicts from the *other* end
+(`popitem(last=False)`) — the least-recently-used song, never the one just
+requested. Two is enough to A/B two songs at once without the process's
+memory growing without bound as someone works through a library.
+
+**A preview returns raw WAV bytes because nothing about it should touch
+disk, and Elm cannot carry the bytes anyway.** `POST /api/preview` calls
+`encode_wav` and returns the result directly as an `audio/wav` response body,
+never `save_audio`-ing anything to a path first. A preview is expected to
+fire on every slider drag; writing a temporary file per request would be both
+slower and a cleanup problem with no upside, since nothing needs the bytes to
+persist past the one response that carries them. The bytes-not-URL choice is
+also forced from the other direction: Elm has no way to receive binary data
+over a port, so a small JavaScript port fetches `/api/preview` directly and
+hands the decoded buffer to the Web Audio API, while Elm only ever sends the
+parameters that produced it. A URL would still need that same JS-side fetch
+to turn into audio, so returning one would add a round trip for no benefit.
+
 ## Where data lives
 
 `paths.data_dir()` — a per-user location outside the project directory — is

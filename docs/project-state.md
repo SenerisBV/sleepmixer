@@ -1,15 +1,57 @@
 # Project state
 
-Status as of the end of the `feat/server-foundation` branch (Plan 2a of the
-spec, all 7 tasks complete), on top of `feat/core-hooks` (Plan 1, all 10
-tasks complete). Plan 1 gave the pipeline the hooks a local web UI needs —
-session staging, cheap preview, structured progress, stable data paths, a
-config schema — without building the UI itself. Plan 2a puts an HTTP server
-in front of that: a FastAPI app, a SQLite library store, and enough of a
-songs API to import a file and draw its waveform. Read `docs/architecture.md`
-first for how the pieces fit together; this document is about what's true
-right now, what was traded off to get here, and what's explicitly not done
-yet.
+Status as of the end of the `feat/interactive-server` branch (Plan 2b of the
+spec, all 8 tasks complete), on top of `feat/server-foundation` (Plan 2a, all
+7 tasks complete) and `feat/core-hooks` (Plan 1, all 10 tasks complete). Plan 1
+gave the pipeline the hooks a local web UI needs — session staging, cheap
+preview, structured progress, stable data paths, a config schema — without
+building the UI itself. Plan 2a put an HTTP server in front of that: a FastAPI
+app, a SQLite library store, and enough of a songs API to import a file and
+draw its waveform. Plan 2b is the rest of the API: preview, background jobs
+with live progress and cancellation, renders, and presets. **The server is now
+feature-complete for Plan 3** — everything the eventual Elm interface needs to
+call already exists and is tested; what's left is building that interface, not
+the API underneath it. Read `docs/architecture.md` first for how the pieces
+fit together; this document is about what's true right now, what was traded
+off to get here, and what's explicitly not done yet.
+
+## Plan 2b: what's built
+
+`sleepmix/server/jobs.py`'s `JobManager` runs separation and renders on a
+single background worker thread and fans progress out to per-subscriber
+`asyncio.Queue`s; `server/api/jobs.py` exposes polling and cancellation plus an
+SSE stream (`GET /api/jobs/{id}/events`) the eventual UI watches. `preview.py`
+gained `master_gain` and a `master` parameter on `render_window` so
+`POST /api/preview` (`server/api/preview.py`) can return one point in the
+decay arc, loudness-matched to the render it represents, as raw WAV bytes in
+well under a second. `server/sessions.py`'s `SessionRegistry` keeps up to two
+`RenderSession`s warm so consecutive preview requests for the same song stay
+cheap. `server/api/renders.py` starts a full render as a background job,
+records it in the `renders` table from the moment it's queued, and serves the
+finished file or a clean cancellation. `server/api/presets.py` adds named,
+validated config snapshots over the `presets` table Plan 2a's schema already
+had. `server/api/songs.py` gained `POST /api/songs/{id}/separate`, with a
+`force` flag that calls `separation.invalidate_cache` — the fix for a
+separation cache that used to keep reporting a stale "Demucs unavailable"
+fallback forever, even after the `separation` extra was installed. See
+`docs/architecture.md` for how the pieces above actually fit together — the
+single worker, the thread-boundary progress hop, the session cap, and why
+preview returns bytes rather than a URL are all explained there, not repeated
+here.
+
+Task 8, the last of this plan, carried forward four small items from Plan
+2a's own final review (an inaccurate loopback-refusal message, a missing
+API-level test for the peaks NaN/Inf coercion, an import placed for `flake8`
+reasons rather than readability, and an over-claim in this document about an
+`unreachable` code branch that turned out to be reachable) and closed three
+deferred items from earlier in this plan: a sticky separation-cache fallback,
+duplicate library rows for the same imported path, and an unvalidated
+negative seed. A fourth earlier item — the Demucs fallback reason not
+reaching a song's `separation_status`/`separation_reason` columns — turned out
+to have been resolved by `POST /api/songs/{id}/separate` too, in passing,
+before Task 8 started. Each of those is removed from the list below rather
+than left listed, since leaving a resolved item as a known weakness is
+exactly the kind of inaccuracy this document exists to avoid.
 
 ## Plan 2a: what's built, and what it deliberately doesn't do yet
 
@@ -127,8 +169,72 @@ can be deleted; nothing here depends on it existing.
 
 These were identified and left as-is; each has a reason it wasn't worth
 fixing in the branch that found it. Plan 1 (`feat/core-hooks`) items are
-listed first, followed by Plan 2a (`feat/server-foundation`) items found
-during this plan's review.
+listed first, followed by Plan 2a (`feat/server-foundation`) items, followed
+by Plan 2b (`feat/interactive-server`) items found during this plan's review.
+
+- **A preview does not account for the sound bed, and it is the most
+  important gap left in the level-matching this plan otherwise fixed.**
+  `preview.master_gain` measures its one calibration window with
+  `preview.render_window(session, 0.0, reverb=True, master=False)`, which sums
+  only the configured stems — it never calls `soundbed.build_soundbed`. But
+  `pipeline.run_pipeline` adds the sound bed to the mix *before*
+  `normalize_peak` runs, so when `config.soundbed.enabled` is `True` the real
+  render's peak includes noise and binaural tones a preview's calibration
+  never saw. The real peak can then be higher than `master_gain` predicted, so
+  a preview would once again sit above the render it represents — the exact
+  defect `docs/architecture.md`'s "Matching a preview's loudness to the
+  render" describes fixing, reappearing for a different reason.
+  `SoundbedConfig.enabled` defaults to `False`, so this is latent rather than
+  live in the default configuration, but it is not fixed: enabling the sound
+  bed and previewing is enough to trigger it today.
+
+- **`server/jobs.py`'s `_jobs` and `_subscribers` dictionaries are never
+  evicted.** Every job ever submitted — every separation, every render —
+  stays in `JobManager._jobs` for the life of the process, and every job id
+  gets a permanent (if eventually empty) entry in `_subscribers`. Fine for a
+  session-length local tool that gets restarted often; it becomes a slow
+  memory leak for a server left running for days.
+
+- **A `BaseException` escaping a job leaves it stuck at `"running"` forever.**
+  `JobManager._run` catches `Cancelled` and `Exception`, but a `SystemExit` or
+  `KeyboardInterrupt` raised inside a job function would propagate past both,
+  and nothing in `_run` would ever set a terminal status — the job's row (and
+  any render or song row it was updating) is left reporting `"running"`
+  indefinitely, and the SSE stream watching it never closes.
+
+- **`server/jobs.py` imports `field` from `dataclasses` and never uses it.**
+  `Job`'s fields all take plain defaults; none needs `field(default_factory=…)`.
+
+- **No test exercises SSE client-disconnect cleanup, and the heartbeat branch
+  is untested.** `server/api/jobs.py`'s `stream_job` unsubscribes in a
+  `finally` block whose correctness rests entirely on Starlette propagating
+  cancellation into the generator when a client goes away mid-stream — nothing
+  in `tests/test_api_jobs_sse.py` drops a connection before a job finishes to
+  prove that actually happens. The `asyncio.TimeoutError` → `": keepalive\n\n"`
+  branch, reached when `_HEARTBEAT_SECONDS` (15s) elapses with no event, is
+  likewise never driven by any test.
+
+- **`separation.invalidate_cache` imports `shutil` inside the function,** while
+  the module imports `os` and `hashlib` at the top. Harmless, just inconsistent
+  with the rest of the file.
+
+- **`encode_wav` has no test with a mono buffer.** `tests/test_audio_encode.py`
+  only ever builds stereo (and empty-stereo) buffers; a single-channel
+  `AudioBuffer` going through `encode_wav` is untested.
+
+- **`presets.py` validates a config only through a call whose result it
+  discards.** `create_preset` calls `MixConfig.from_dict(body.config)` purely
+  so a bad config raises `ValueError` (turned into a 400) before anything is
+  stored — the returned `MixConfig` is never used; the raw dict is what gets
+  saved. That makes the validation a side effect of a call that looks like
+  dead code, one `# unused` cleanup away from being deleted along with the 400
+  path it provides. Separately: `start_render` *does* independently reconstruct
+  and validate a `MixConfig` from whatever config it's given, preset or not, so
+  a preset is never actually used unvalidated — but nothing prevents an
+  invalid preset from being *saved* in the first place except that same
+  discardable call, so if it were ever removed, a bad preset would fail
+  silently at save time and loudly, later, the first time someone tries to
+  render with it.
 
 - **`RenderSession`'s loop-stage cache key is coarser than it needs to be.**
   It covers all of `LoopConfig`, so changing only `crossfade_ms` — which only
@@ -138,14 +244,6 @@ during this plan's review.
   `loop_point()`'s. Not done because no caller yet changes `crossfade_ms`
   interactively without also touching something that already invalidates
   the loop.
-
-- **`util.iteration_rng` does not validate `seed >= 0`.** `numpy`'s
-  `SeedSequence` requires non-negative entropy; a negative seed will raise
-  deep inside `numpy`, not at the point where the bad value was supplied.
-  Unreachable through the current config path (nothing generates a negative
-  seed today), but a UI that accepts arbitrary integer seed input from a user
-  would reach it. Needs a validation point before that UI exists, not
-  necessarily in this function.
 
 - **`test_reporter_receives_ordered_monotonic_events` cannot fail.**
   `ProgressReporter.emit` clamps its own output to be monotonic
@@ -167,56 +265,32 @@ during this plan's review.
   directly on `MixConfig` rather than in one of the nested per-section
   dataclasses `config_schema()` was designed around.
 
-- **`MixConfig` has no validation layer.** `config_schema()` publishes bounds
-  (`min`/`max`/`step`/`choices`) for every field, but nothing enforces them —
-  they are advisory metadata for a UI to build controls from. A config loaded
-  from YAML with `tempo.speed: 50` is accepted and rendered. A UI that trusts
-  its own controls is fine; an HTTP endpoint accepting arbitrary JSON is not.
-  No Plan 2a endpoint accepts a `MixConfig` yet, so this hasn't bitten;
-  validation has to land with whichever Plan 2b endpoint first accepts one
-  over HTTP (presets, preview, or renders).
+- **`MixConfig`'s validation layer covers one field.** `MixConfig.validate()`
+  (called from `MixConfig.from_dict`, which every config-accepting endpoint —
+  presets, preview, renders — routes through) rejects a negative `seed`, and
+  that is the only thing it checks. `config_schema()` publishes bounds
+  (`min`/`max`/`step`/`choices`) for every other field, but nothing enforces
+  them — they remain advisory metadata for a UI to build controls from. A
+  config posted with `tempo.speed: 50` is still accepted and rendered.
 
-- **The Demucs fallback is explained internally now, but that explanation
-  doesn't reach a song's record yet.** `separation.separate_detailed` returns
-  a `SeparationResult` carrying `fallback_reason`, and `_save_fallback_reason`
-  writes that reason into a marker file beside the cached stems, so a later
-  cache hit still reports the fallback instead of quietly looking like a
-  clean separation — the mechanism the original deferred item was missing
-  now exists. But nothing connects it to a song row: `server/store.py`'s
-  `songs` table has `separation_status` (`DEFAULT 'pending'`) and
-  `separation_reason` columns for exactly this, and no server code ever calls
-  `update_song` with them — that requires `POST /api/songs/{id}/separate`,
-  which doesn't exist until Plan 2b. Until it does, the UI cannot yet explain
-  why a song came back with one `mix` stem instead of four, even though the
-  reason is sitting two layers down in the core. That was the whole point of
-  the original item, so it's only half-closed.
-
-- **A cached fallback is sticky, and `POST /api/songs/{id}/separate` will have
-  to break the stickiness itself.** `separation._cache_key` is
-  `sha1(abspath : size : mtime : model)` — it says nothing about whether Demucs
-  was actually available when those stems were written. So once a fallback is
-  cached, `separate_detailed` finds the cached single `mix` stem, returns early
-  at the `_load_cache` hit, and never retries the real model. That includes
-  *after* the operator installs the `separation` extra: the file hasn't
-  changed, so the key hasn't changed, so they keep getting "Demucs
-  unavailable" on a machine where Demucs now works, with no indication that
-  the answer is stale rather than current.
-
-  This is invisible today because nothing re-runs separation. Plan 2b's
-  `POST /api/songs/{id}/separate` makes it the first thing an operator hits:
-  they see one `mix` stem, install the extra, press the button, get the same
-  answer. That endpoint needs a force/invalidate path — delete
-  `.sleepmix_cache/<key>/` and recompute — or the cache key needs to
-  incorporate fallback-ness. Straight `separate()` calls should keep the
-  current short-circuit; the point is that the *user-initiated retry* must be
-  able to say "no, actually try again."
-
-  Related and same cause: `_save_fallback_reason`'s `reason is None →
-  os.remove(path)` branch, which exists to clear a stale marker when a
-  later run succeeds, is unreachable in the ordinary flow. Anything that would
-  reach it with a stale marker on disk has already returned from the cache hit
-  above. It becomes live again as soon as invalidation exists — worth keeping,
-  not worth deleting as dead code.
+- **`_save_fallback_reason`'s `reason is None → os.remove(path)` branch is
+  reachable — an earlier version of this document said otherwise.** The
+  original claim was that anything reaching this branch with a stale marker
+  on disk would already have returned from `_load_cache`'s cache hit first.
+  That reasoning missed the case its own docstring names: if the marker is
+  written but `_save_cache` then fails or is interrupted before any `.wav`
+  file lands, the next call finds a marker with no cached stems.
+  `_load_cache` requires at least one `.wav` file to report a hit, so it
+  returns `None` — the call recomputes rather than trusting the directory
+  (`tests/test_separation.py::test_a_marker_without_stems_does_not_masquerade_as_success`
+  proves the recompute happens; it just doesn't happen to succeed in that
+  test). If a recompute in that state *does* succeed, `_save_fallback_reason`
+  is called with `reason=None` and finds the earlier run's marker still on
+  disk, and removes it. `separation.invalidate_cache` (added this plan) does
+  not add a second route to this same line — it deletes the whole cache
+  directory, marker included, so a forced re-separation never finds a marker
+  left over to remove; it sidesteps the branch rather than exercising it. The
+  original conclusion — keep the branch — was right regardless.
 
 - **`Store` is locked now — and the reason the earlier deferral was wrong is
   worth keeping.** An earlier version of this document claimed "every request
@@ -240,11 +314,12 @@ during this plan's review.
   body. **`RLock`, not `Lock`** — `update_song` calls `get_song` while already
   holding the lock, and a non-reentrant lock deadlocks there on the first
   update (verified). `tests/test_store.py::test_concurrent_writers_and_readers_do_not_lose_rows`
-  exercises it with eight threads. Plan 2b's job manager will add a genuinely
-  separate worker thread writing into `renders`; the lock is already in place
-  for it.
+  exercises it with eight threads. Plan 2b's `JobManager` (`server/jobs.py`)
+  did go on to add a genuinely separate worker thread writing into `renders`
+  and `songs`; the lock was already in place for it, and nothing about that
+  addition needed to touch `Store`.
 
-- **`load_audio` materialises the whole file in RAM, on every `/peaks`
+- **`load_audio` still materialises the whole file in RAM, on every `/peaks`
   request.** `server/api/songs.py`'s `import_song` decodes the file once to
   get `duration_s`/`sample_rate` for the store row, and `get_peaks` decodes it
   again, in full, on *every* call — there is nothing between a request and
@@ -253,8 +328,8 @@ during this plan's review.
   float32, and `import_song` accepts any path, so a single request can OOM the
   process. `soundfile.blocks()` would make peak computation O(1) in memory and
   is the obvious fix — peaks are a streaming reduction and never need the
-  whole array at once. Worth doing in Plan 2b, before the UI starts calling
-  `/peaks` on every song-view load.
+  whole array at once. Not done in Plan 2b either; still worth doing before
+  the eventual UI starts calling `/peaks` on every song-view load.
 
 - **`import_song` accepts an arbitrary absolute filesystem path from the
   request body with no allow-listing.** It resolves `~` and relative
@@ -283,15 +358,6 @@ during this plan's review.
   for that reason, not overlooked. Whoever adds it must allow the test host
   (or make the allow-list injectable) in the same change.
 
-- **Nothing prevents duplicate song rows for the same path.** `add_song`
-  always inserts a new row with a new id, so importing the same file twice
-  gives two library entries pointing at one file, each with its own render
-  history — and the UI has no way to tell the operator they are the same song.
-  Either a `UNIQUE` index on `songs.path` (with `import_song` returning the
-  existing row instead of 201-ing a duplicate), or a deliberate decision that
-  duplicates are allowed and the UI dedupes on display. Pick one in Plan 2b;
-  the current state is neither.
-
 - **`cli.py`'s `ui` command only guards the `uvicorn` import.** The
   `try/except ImportError` around `import uvicorn` does not extend to the
   following `from .server.app import create_app`, which pulls in `fastapi`.
@@ -310,7 +376,11 @@ during this plan's review.
   `float()` and pydantic serialized them to JSON `null` on a `-> dict` route,
   which would fail the Elm frontend's `list (list float)` decode and blank the
   whole waveform with nothing logged server-side to explain it. The clamp is in
-  `peaks.py` rather than the route so the CLI and Python paths get it too.
+  `peaks.py` rather than the route so the CLI and Python paths get it too. The
+  clamp itself was tested only at the function level until this plan;
+  `tests/test_api_songs.py::test_peaks_are_finite_for_a_file_containing_nan`
+  now drives a `NaN`/`Inf`-carrying WAV through `GET /api/songs/{id}/peaks`
+  end to end.
 
 - **`test_warm_analysis_makes_the_next_loop_search_fast`'s budget is loose.**
   It asserts a post-warm-up `find_loop` call finishes in under 5 seconds. That

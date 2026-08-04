@@ -5,13 +5,26 @@ from __future__ import annotations
 
 import click
 
-# Binding anywhere else exposes an unauthenticated server that will read any
-# audio file the process can read (see the `ui` command's guard).
-_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
-
 from .config import MixConfig
 from .pipeline import run_pipeline
 from .progress import ProgressReporter, echo_sink
+
+
+def _is_loopback(host: str) -> bool:
+    """True for any spelling of localhost.
+
+    A string set gets this wrong: `::1`, `0:0:0:0:0:0:0:1` and `127.0.0.2` are
+    all loopback and all miss a naive allow-list. Binding anywhere else exposes
+    an unauthenticated server that will read any audio file the process can
+    read (see the `ui` command's guard)."""
+    import ipaddress
+
+    if host in ("localhost", ""):
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
 
 
 @click.group()
@@ -74,7 +87,7 @@ def ui(host, port, open_browser, allow_remote):
     """Start the local web UI."""
     # Checked before anything is imported or bound: refusing has to happen
     # while there is still nothing listening.
-    if host not in _LOOPBACK_HOSTS and not allow_remote:
+    if not _is_loopback(host) and not allow_remote:
         raise SystemExit(
             f"Refusing to bind {host}: that is not a loopback address.\n"
             "\n"

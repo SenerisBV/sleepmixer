@@ -105,14 +105,30 @@ def test_ui_refuses_a_non_loopback_bind_and_says_why():
     assert "--allow-remote" in result.output
 
 
-def test_ui_accepts_loopback_hosts_without_the_flag():
-    """The guard must not fire on the addresses that are actually fine.
+def test_is_loopback_accepts_every_spelling_and_rejects_look_alikes():
+    """A string-set membership test gets these wrong; a real check must not.
 
-    Asserted via `--help`-free invocation would start a server, so this checks
-    the predicate the command uses rather than running it."""
-    from sleepmix.cli import _LOOPBACK_HOSTS
+    `0:0:0:0:0:0:0:1` is the fully-expanded form of `::1`, and `127.0.0.2` is
+    just as much loopback as `127.0.0.1` — the whole `127.0.0.0/8` block is."""
+    from sleepmix.cli import _is_loopback
 
-    assert {"127.0.0.1", "::1", "localhost"} <= _LOOPBACK_HOSTS
+    for host in ("127.0.0.1", "127.0.0.2", "localhost", "", "::1",
+                 "0:0:0:0:0:0:0:1", "[::1]"):
+        assert _is_loopback(host), host
+    for host in ("0.0.0.0", "::", "192.168.1.5", "example.com", "not-an-ip"):
+        assert not _is_loopback(host), host
+
+
+def test_ui_accepts_an_ipv6_loopback_host_without_the_flag(monkeypatch):
+    """The guard must not fire on `::1` — the exact spelling a naive
+    string-set membership test used to reject."""
+    from click.testing import CliRunner
+
+    from sleepmix.cli import main
+
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+    result = CliRunner().invoke(main, ["ui", "--host", "::1", "--no-open"])
+    assert result.exit_code == 0, result.output
 
 
 def test_ui_help_documents_allow_remote():

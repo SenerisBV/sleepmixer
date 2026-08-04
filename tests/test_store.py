@@ -82,6 +82,18 @@ def test_update_song_returns_none_when_absent(store):
     assert store.update_song("nope", title="x") is None
 
 
+def test_add_song_twice_with_the_same_path_returns_the_existing_row(store):
+    """Importing the same file twice must not create a second library entry
+    with its own, separate render history."""
+    first = store.add_song(path="/tmp/dup.wav", title="A", duration_s=1.0, sample_rate=44100)
+    second = store.add_song(path="/tmp/dup.wav", title="A (again)",
+                            duration_s=2.0, sample_rate=48000)
+    assert second["id"] == first["id"]
+    assert second["title"] == "A"
+    assert second["duration_s"] == 1.0
+    assert len(store.list_songs()) == 1
+
+
 def test_presets_round_trip_config_as_a_dict(store):
     p = store.add_preset("Slow", {"tempo": {"speed": 0.5}})
     assert p["config"] == {"tempo": {"speed": 0.5}}

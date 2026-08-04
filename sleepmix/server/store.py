@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS songs (
     stems              TEXT,
     added_at           TEXT NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS songs_path_unique ON songs (path);
 CREATE TABLE IF NOT EXISTS presets (
     id         TEXT PRIMARY KEY,
     name       TEXT NOT NULL UNIQUE,
@@ -101,20 +102,37 @@ class Store:
     # -- songs ----------------------------------------------------------
     def add_song(self, path: str, title: str, duration_s: float,
                  sample_rate: int) -> dict:
+        """Register a song, or return the existing row for the same path.
+
+        Importing twice used to make two rows with separate ids and separate
+        render histories, which reads as a duplicate in the library and splits
+        a song's renders across two entries."""
         with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM songs WHERE path = ?", (path,)).fetchone()
+            if row is not None:
+                return _song_from_row(row)
             row_id = _new_id()
             self._conn.execute(
                 "INSERT INTO songs (id, path, title, duration_s, sample_rate, added_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
                 (row_id, path, title, float(duration_s), int(sample_rate), _now()))
             self._conn.commit()
-            return self.get_song(row_id)
+            return self._get_song_locked(row_id)
 
     def get_song(self, song_id: str) -> dict | None:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone()
-            return _song_from_row(row)
+            return self._get_song_locked(song_id)
+
+    def _get_song_locked(self, song_id: str) -> dict | None:
+        """``get_song``'s body, callable while ``self._lock`` is already held.
+
+        ``add_song`` needs exactly this after an insert; calling the public
+        ``get_song`` would work too (the lock is an ``RLock``) but this makes
+        the re-entrance explicit rather than incidental."""
+        row = self._conn.execute(
+            "SELECT * FROM songs WHERE id = ?", (song_id,)).fetchone()
+        return _song_from_row(row)
 
     def list_songs(self) -> list[dict]:
         with self._lock:

@@ -123,11 +123,27 @@ sleepmix render --input song.flac --duration 45 --speed 0.6 --soundbed
 sleepmix ui
 ```
 
-Starts a local server on `127.0.0.1:8765` and opens a browser tab. Right now
-that tab shows a placeholder page — the interactive interface (library,
-waveform, live preview) is a separate, later change. What's already there is
-the server underneath it: import a song, list your library, pull its
-waveform. Nothing here renders audio yet.
+Starts a local server on `127.0.0.1:8765` and opens a browser tab. That tab
+still shows a placeholder page — the interactive interface (library, waveform,
+mixer) is a separate, later change (Plan 3, if you're following along in
+`docs/project-state.md`). What's already there, and works today, is everything
+underneath that interface: the whole workflow, driven by HTTP.
+
+Import a song by path and the server decodes it, registers it in a local
+SQLite library, and gives you back a waveform. Kick off stem separation
+(vocals/drums/bass/other, via Demucs, with a plain-mix fallback if you haven't
+installed it) as a background job and watch it progress over server-sent
+events. Ask for a preview — any single point in the decay arc, by a `progress`
+value from 0 to 1 — and get raw WAV bytes back in well under a second, no
+matter how far into a twenty-five-minute mix that point is; that's the same
+cheap-preview property described under "The disintegration model" above, now
+reachable over HTTP. Start a full render as another background job, watch it
+the same way, cancel it if you want to, and download the finished file once
+it's done. Save a set of decay settings as a named preset and reuse it. All of
+this already exists, is tested, and works from a shell with `curl` — there
+just isn't a page wrapping it in a mixer yet. That page is the entire content
+of the next piece of work; nothing about the API is expected to change to make
+room for it.
 
 **Keep it on localhost.** There is no authentication, and importing a song
 takes a filesystem path — so anything that can reach the port can ask the
