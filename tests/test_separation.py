@@ -212,6 +212,8 @@ def test_a_write_interrupted_partway_leaves_no_cache_at_all(tmp_path, monkeypatc
 
     assert _load_cache(str(tmp_path), "k") is None, (
         "a partial write must be invisible, not a smaller valid separation")
+    assert os.listdir(tmp_path) == [], (
+        "a failed write must not leave a staging directory behind")
 
 
 def test_an_interrupted_write_does_not_destroy_the_previous_cache(tmp_path, monkeypatch):
@@ -220,10 +222,21 @@ def test_an_interrupted_write_does_not_destroy_the_previous_cache(tmp_path, monk
     _write_cache(str(tmp_path), "k", _stems(4), None)
     before = sorted(_load_cache(str(tmp_path), "k"))
 
-    def always_explode(buf, path):
-        raise OSError("disk went away")
+    calls = {"n": 0}
+    real_save = sep.save_audio
 
-    monkeypatch.setattr(sep, "save_audio", always_explode)
+    def explode_on_the_second(buf, path):
+        # Explodes after at least one real stem has landed in staging, so the
+        # assertion below actually exercises "an old cache survives a
+        # partially-written staging directory" rather than "an old cache
+        # survives a write that never touched disk" — which would pass
+        # against the pre-atomic implementation too.
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError("disk went away")
+        real_save(buf, path)
+
+    monkeypatch.setattr(sep, "save_audio", explode_on_the_second)
     with pytest.raises(OSError):
         _write_cache(str(tmp_path), "k", _stems(2), None)
 
@@ -245,3 +258,39 @@ def test_writing_without_a_reason_clears_a_stale_marker(tmp_path):
 def test_no_staging_directories_are_left_behind(tmp_path):
     _write_cache(str(tmp_path), "k", _stems(2), None)
     assert sorted(os.listdir(tmp_path)) == ["k"]
+
+
+def test_a_stuck_old_stem_does_not_turn_the_cache_into_a_subset(tmp_path, monkeypatch):
+    """Proves the remove-then-rename fix rather than asserting it.
+
+    ``shutil.rmtree(..., ignore_errors=True)`` does not abort on the first
+    error, it suppresses each one and keeps walking. Against the earlier
+    remove-then-rename implementation, one undeletable old stem file left the
+    old directory non-empty; ``os.replace`` onto that leftover then raised,
+    and the cache directory was left holding a one-file subset of the old,
+    four-stem separation — worse than either the old or the new result.
+    Rename-then-remove never exposes that state: the old directory is only
+    ever touched (via ``rmtree``) after the new one has already replaced it,
+    so a stubborn old file becomes a harmless orphaned ``.k.replacing``
+    directory instead of a corrupted live cache."""
+    _write_cache(str(tmp_path), "k", _stems(4), None)
+
+    # shutil.rmtree deletes files via os.unlink, not os.remove (they are the
+    # same underlying syscall but different names in the os module) — this
+    # has to patch the one rmtree actually calls, or the walk never sees the
+    # obstruction.
+    real_unlink = os.unlink
+
+    def unlink_unless_stem0(path, *a, **kw):
+        if os.path.basename(path) == "stem0.wav":
+            raise OSError("permission denied")
+        real_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(os, "unlink", unlink_unless_stem0)
+
+    _write_cache(str(tmp_path), "k", _stems(2), None)
+
+    stems = _load_cache(str(tmp_path), "k")
+    assert stems is not None and set(stems) == {"stem0", "stem1"}, (
+        "a stubborn old file must not surface as a corrupted subset of the "
+        f"old cache; got {sorted(stems) if stems else stems}")

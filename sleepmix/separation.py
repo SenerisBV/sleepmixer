@@ -141,21 +141,46 @@ def _write_cache(cache_dir: str, key: str, stems: dict[str, AudioBuffer],
     and the stems second, chosen so that a failure between them left no stems
     and a stale marker (recoverable) rather than fallback stems and no marker
     (which reads as a successful separation). That ordering was the best
-    available while the write could not be made atomic. It can be now."""
+    available while the write could not be made atomic. It can be now.
+
+    A killed writer (Task 2 makes separation killable) can also leave a
+    staging directory behind with no process left to clean it up. Those are
+    swept here, scoped to this ``key`` only — sweeping the whole cache
+    directory would race a concurrent write of a different song, but a single
+    worker only ever has one write in flight for a given key at a time."""
     final = _cache_path(cache_dir, key)
     os.makedirs(cache_dir, exist_ok=True)
-    staging = tempfile.mkdtemp(prefix=f".{key}.", dir=cache_dir)
+    prefix = f".{key}."
+    for entry in os.listdir(cache_dir):
+        if entry.startswith(prefix):
+            shutil.rmtree(os.path.join(cache_dir, entry), ignore_errors=True)
+    staging = tempfile.mkdtemp(prefix=prefix, dir=cache_dir)
     try:
         if reason is not None:
             with open(os.path.join(staging, _FALLBACK_MARKER), "w") as fh:
                 fh.write(reason)
         for name, buf in stems.items():
             save_audio(buf, os.path.join(staging, f"{name}.wav"))
-        # rename() onto a non-empty directory fails, so the old one goes first.
-        # A crash in this window leaves no cache, which recomputes — the one
-        # outcome that is always safe.
-        shutil.rmtree(final, ignore_errors=True)
+        # Rename-then-remove, not remove-then-rename: `shutil.rmtree(final,
+        # ignore_errors=True)` does not abort on the first error, it swallows
+        # each one and keeps walking, so a permission error or a locked handle
+        # partway through can leave `final` holding some but not all of the
+        # *old* stems. `os.replace` onto that non-empty leftover then fails,
+        # and the old cache is left as a subset — exactly the state this
+        # function exists to make impossible. Renaming first means `final` is
+        # only ever swapped between two complete directories (the rename
+        # itself is atomic), and the old one is deleted only after it has
+        # already been replaced. A crash between the two renames leaves no
+        # cache at all, which recomputes — the one outcome that is always
+        # safe.
+        doomed = os.path.join(cache_dir, f".{key}.replacing")
+        shutil.rmtree(doomed, ignore_errors=True)  # a leftover from an earlier crash
+        replaced = os.path.isdir(final)
+        if replaced:
+            os.replace(final, doomed)
         os.replace(staging, final)
+        if replaced:
+            shutil.rmtree(doomed, ignore_errors=True)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
