@@ -115,7 +115,18 @@ def ui(host, port, open_browser, allow_remote):
             "The UI needs extra dependencies. Install them with:\n"
             "    pip install \"sleepmix[ui]\""
         ) from None
-    from .server.app import create_app
+    from .server.app import DEFAULT_ALLOWED_HOSTS, create_app
+
+    # A `Host` allow-list, so a rebound page cannot drive this API. The bound
+    # host joins the loopback defaults because `--allow-remote` binds
+    # elsewhere on purpose and would otherwise reject every request it
+    # received; a wildcard bind cannot name its own reachable hosts, so it
+    # opts out rather than silently allowing one arbitrary spelling.
+    allowed = list(DEFAULT_ALLOWED_HOSTS)
+    if host in {"0.0.0.0", "::", ""}:
+        allowed = ["*"]
+    elif host not in allowed:
+        allowed.append(host.strip("[]"))
 
     if open_browser:
         import threading
@@ -128,7 +139,8 @@ def ui(host, port, open_browser, allow_remote):
             browse_host = f"[{browse_host}]"
         url = f"http://{browse_host}:{port}/"
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
-    uvicorn.run(create_app(), host=host, port=port, log_level="info")
+    uvicorn.run(create_app(allowed_hosts=allowed), host=host, port=port,
+                log_level="info")
 
 
 if __name__ == "__main__":

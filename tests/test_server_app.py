@@ -175,3 +175,129 @@ def test_subpackages_are_declared_for_distribution():
     text = pyproject.read_text()
     assert "[tool.setuptools.packages.find]" in text
     assert 'include = ["sleepmix*"]' in text
+
+
+def test_a_rebound_host_header_is_rejected():
+    """DNS rebinding is the live vector for a loopback service.
+
+    Binding 127.0.0.1 stops other machines connecting; it does not stop a page
+    the operator visits from re-resolving `evil.example` to 127.0.0.1 and
+    becoming same-origin with this API. Such a request still carries the
+    attacker's hostname in `Host`, which is the one thing that distinguishes it
+    from a genuine local one — and the surface it reaches is no longer
+    read-only: `POST /api/renders` costs minutes of CPU and a ~300 MB file per
+    request, with no rate limit and no delete path."""
+    with TestClient(create_app()) as client:
+        r = client.get("/api/health", headers={"Host": "evil.example"})
+        assert r.status_code == 400
+
+
+def test_the_loopback_spellings_and_the_test_host_are_allowed():
+    """A browser can send any of these for a loopback bind, and `TestClient`
+    sends `testserver` — the reason an allow-list was deferred rather than
+    added. All four must pass, or this middleware breaks ordinary local use."""
+    with TestClient(create_app()) as client:
+        for host in ("localhost", "localhost:8765", "127.0.0.1",
+                     "127.0.0.1:8765", "[::1]:8765", "testserver"):
+            r = client.get("/api/health", headers={"Host": host})
+            assert r.status_code == 200, f"{host} -> {r.status_code}"
+
+
+def test_the_allow_list_is_a_parameter():
+    """`cli.py` passes the bound host, so `--allow-remote` still works."""
+    app = create_app(allowed_hosts=["studio.local", "testserver"])
+    with TestClient(app) as client:
+        assert client.get("/api/health",
+                          headers={"Host": "studio.local"}).status_code == 200
+        assert client.get("/api/health",
+                          headers={"Host": "localhost"}).status_code == 400
+
+
+def test_ui_passes_the_bound_host_into_the_allow_list(monkeypatch):
+    """A remote bind that rejected its own hostname would be unusable."""
+    from click.testing import CliRunner
+
+    from sleepmix.cli import main
+
+    seen = {}
+
+    def fake_create_app(*args, **kwargs):
+        seen.update(kwargs)
+        return object()
+
+    monkeypatch.setattr("sleepmix.server.app.create_app", fake_create_app)
+    monkeypatch.setattr("uvicorn.run", lambda *a, **k: None)
+
+    result = CliRunner().invoke(
+        main, ["ui", "--host", "192.168.1.5", "--allow-remote", "--no-open"])
+    assert result.exit_code == 0, result.output
+    assert "192.168.1.5" in seen["allowed_hosts"]
+    assert "127.0.0.1" in seen["allowed_hosts"]
+
+    seen.clear()
+    result = CliRunner().invoke(
+        main, ["ui", "--host", "0.0.0.0", "--allow-remote", "--no-open"])
+    assert result.exit_code == 0, result.output
+    # A wildcard bind cannot enumerate its own reachable hostnames, so it opts
+    # out rather than allow one arbitrary spelling and reject the rest.
+    assert seen["allowed_hosts"] == ["*"]
+
+
+def test_a_missing_host_header_is_rejected():
+    """No `Host` is not a pass. HTTP/1.1 requires one; anything without it is
+    either malformed or deliberately probing what the allow-list skips."""
+    from sleepmix.server.app import _HostAllowList, _host_without_port
+
+    assert _host_without_port("") not in {"localhost", "127.0.0.1"}
+    allow = _HostAllowList(app=None, allowed_hosts=["localhost"])
+    assert not allow.allow_any
+
+
+def test_host_parsing_handles_every_shape():
+    """The parse `TrustedHostMiddleware` gets wrong is the reason this is ours.
+
+    `"[::1]:8765".split(":")[0]` is `"["`, and `"::1".split(":")[0]` is `""` —
+    so an IPv6 literal cannot be allow-listed there however it is spelled,
+    which would 400 every request from `sleepmix ui --host ::1`."""
+    from sleepmix.server.app import _host_without_port
+
+    cases = {
+        "localhost": "localhost",
+        "localhost:8765": "localhost",
+        "127.0.0.1": "127.0.0.1",
+        "127.0.0.1:8765": "127.0.0.1",
+        "[::1]": "::1",
+        "[::1]:8765": "::1",
+        "[0:0:0:0:0:0:0:1]:8765": "0:0:0:0:0:0:0:1",
+        "LOCALHOST:8765": "localhost",
+        " testserver ": "testserver",
+        "": "",
+    }
+    for raw, expected in cases.items():
+        assert _host_without_port(raw) == expected, raw
+
+
+def test_an_ipv6_loopback_bind_answers_its_own_browser_url():
+    """`cli.py` opens `http://[::1]:8765/` for `--host ::1`, so that exact
+    `Host` must be accepted — end to end, not just in the parser."""
+    with TestClient(create_app()) as client:
+        for host in ("[::1]", "[::1]:8765"):
+            assert client.get("/api/health",
+                              headers={"Host": host}).status_code == 200, host
+        assert client.get("/api/health",
+                          headers={"Host": "[::2]:8765"}).status_code == 400
+
+
+def test_the_all_extra_includes_the_ui_dependencies():
+    """`pip install "sleepmix[all]"` then `sleepmix ui` is the install story the
+    UI spec tells. Without fastapi/uvicorn in `all` it fails at the last step."""
+    from pathlib import Path
+
+    import sleepmix
+
+    pyproject = (Path(sleepmix.__file__).resolve().parent.parent
+                 / "pyproject.toml").read_text()
+    line = next(ln for ln in pyproject.splitlines() if ln.startswith("all = ["))
+    block = pyproject.split("all = [", 1)[1].split("]", 1)[0]
+    assert "fastapi" in block, line
+    assert "uvicorn" in block, line
