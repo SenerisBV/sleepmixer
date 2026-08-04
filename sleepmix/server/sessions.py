@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
+from contextlib import contextmanager
+from typing import Iterator
 
 from ..config import MixConfig
 from ..session import RenderSession
@@ -22,12 +24,19 @@ from ..session import RenderSession
 class SessionRegistry:
     """Warm ``RenderSession`` objects, capped and least-recently-used.
 
-    ``get`` builds a new session while holding ``self._lock``, so two
-    concurrent requests for *different* songs serialize — the second waits
-    out the first's separation rather than building alongside it. That is
-    deliberate, not an oversight: it makes it impossible for two callers to
-    double-build the same session, and separation itself is disk-cached, so
-    the second caller usually pays a cache read, not the model again.
+    ``self._lock`` protects *the dictionary and nothing else*. It guarantees
+    that the bookkeeping — insert, LRU reorder, eviction — is atomic, and that
+    two callers asking for the same song id get the same object rather than
+    double-building it. It guarantees nothing at all about what happens to
+    that object afterwards, and in particular it is **not** held across
+    separation: ``RenderSession.__init__`` does no work, ``stems()`` is lazy,
+    and the first ``prepared_loop`` call that actually separates runs long
+    after ``get`` returned and released the lock.
+
+    Using a returned session concurrently is therefore unsafe on its own —
+    ``update_config`` clears caches an in-flight ``render_window`` is reading.
+    Callers that render must go through :meth:`session_for`, which adds a
+    per-song lock covering the whole use, not just the lookup.
     """
 
     def __init__(self, max_sessions: int = 2, separate_fn=None) -> None:
@@ -36,6 +45,13 @@ class SessionRegistry:
         self._lock = threading.RLock()
         # song_id -> (input_path, session); ordered least-recently-used first.
         self._sessions: OrderedDict[str, tuple[str, RenderSession]] = OrderedDict()
+        # song_id -> lock guarding *use* of that song's session. Keyed by id
+        # rather than by session object, and never removed on eviction: a
+        # thread can be holding one while another evicts the session out from
+        # under it, and dropping the lock there would hand the next arrival a
+        # fresh lock and no mutual exclusion at all. They are a few dozen bytes
+        # each and bounded by the number of songs ever previewed in a process.
+        self._use_locks: dict[str, threading.RLock] = {}
 
     def get(self, song_id: str, input_path: str, config: MixConfig) -> RenderSession:
         """The warm session for ``song_id``, building one only if needed."""
@@ -56,6 +72,40 @@ class SessionRegistry:
                 self._sessions.popitem(last=False)
             return session
 
+    @contextmanager
+    def session_for(self, song_id: str, input_path: str,
+                    config: MixConfig) -> Iterator[RenderSession]:
+        """Yield the warm session for ``song_id``, held against concurrent use.
+
+        The registry's own lock only protects the dictionary. Rendering runs
+        unlocked and takes long enough that a second request routinely overlaps
+        it — and ``update_config`` clears caches that an in-flight render is
+        already reading. The failure is either a KeyError or, worse, a window
+        built from two different configs with no error at all.
+
+        Concretely: thread A is inside ``prepared_loop``, has already found the
+        stem present, and is about to index ``self._prepared``; thread B calls
+        ``get`` with a different tempo, whose ``update_config`` clears that
+        dict. A raises ``KeyError`` and the preview 500s. The silent variant is
+        the dangerous one — A reads ``session.config`` under the old config and
+        then renders against B's newly-stretched loop.
+
+        ``/api/preview`` is a sync ``def`` route, so FastAPI runs it in AnyIO's
+        threadpool: two overlapping previews of one song really are two threads
+        on one ``RenderSession``, which the Elm scrubber will produce by the
+        handful per drag. So the lock covers the whole body — config read and
+        render both — not just the lookup.
+        """
+        with self._lock:
+            lock = self._use_locks.get(song_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._use_locks[song_id] = lock
+        with lock:
+            # Inside the per-song lock: another thread's update_config cannot
+            # land between resolving the session and rendering with it.
+            yield self.get(song_id, input_path, config)
+
     def discard(self, song_id: str) -> None:
         with self._lock:
             self._sessions.pop(song_id, None)
@@ -63,6 +113,10 @@ class SessionRegistry:
     def clear(self) -> None:
         with self._lock:
             self._sessions.clear()
+            # Only place the use-locks are dropped. Shutdown-shaped, so no
+            # renderer should still be holding one; and a stale lock kept
+            # forever would be the one real leak this dict could cause.
+            self._use_locks.clear()
 
     def song_ids(self) -> list[str]:
         """Live song ids, least-recently-used first."""

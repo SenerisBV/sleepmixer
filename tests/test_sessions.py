@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 import pytest
 
@@ -90,7 +92,7 @@ def test_master_gain_survives_a_decay_only_change(tmp_path, registry):
     changed = MixConfig()
     changed.stems[0].decay.amp_end_db = -30.0
     registry.get("a", path, changed)
-    assert session.master_gain == gain, "a decay change must not clear the gain"
+    assert session.master_gain[True] == gain, "a decay change must not clear the gain"
 
 
 def test_master_gain_is_cleared_by_a_reverb_change(tmp_path, registry):
@@ -103,7 +105,7 @@ def test_master_gain_is_cleared_by_a_reverb_change(tmp_path, registry):
     changed = MixConfig()
     changed.reverb.wet = 0.1
     registry.get("a", path, changed)
-    assert session.master_gain is None
+    assert session.master_gain == {}
 
 
 def test_master_gain_is_cleared_by_a_tempo_change(tmp_path, registry):
@@ -117,7 +119,7 @@ def test_master_gain_is_cleared_by_a_tempo_change(tmp_path, registry):
     changed = MixConfig()
     changed.tempo.speed = 0.4
     registry.get("a", path, changed)
-    assert session.master_gain is None
+    assert session.master_gain == {}
 
 
 def test_an_unchanged_config_does_not_clear_the_gain(tmp_path, registry):
@@ -129,4 +131,140 @@ def test_an_unchanged_config_does_not_clear_the_gain(tmp_path, registry):
     session = registry.get("a", path, MixConfig())
     gain = master_gain(session)
     registry.get("a", path, MixConfig())
-    assert session.master_gain == gain
+    assert session.master_gain[True] == gain
+
+
+def test_session_for_serializes_renders_against_a_config_swap(tmp_path, registry):
+    """Concurrent previews of one song must not tear on a config change.
+
+    `/api/preview` is a sync `def` route, so FastAPI runs it in AnyIO's
+    threadpool — a scrubber drag really does put several `render_window` calls
+    on one `RenderSession` at once, and the Elm frontend is built to do exactly
+    that. `SessionRegistry._lock` protects only the dictionary and releases
+    before the render begins, so with `get` alone the interleaving is: thread A
+    is inside `prepared_loop`, has found the stem present, and is about to
+    index `self._prepared`; thread B's `get` calls `update_config` with a
+    different tempo, which clears that dict; A raises `KeyError` and the
+    preview 500s. The silent variant is worse — A reads `session.config` under
+    one config and renders against another's stretched loop, producing a window
+    from two configs with no error at all.
+
+    Every thread here asks for a *different* tempo, so every pass through
+    `session_for` really does invalidate the prepared-loop cache the others are
+    reading. Nothing may escape, and every window must be a real buffer.
+
+    Modelled on `tests/test_store.py`'s concurrent-writer test, and load-bearing
+    in the same way: remove the per-song lock from `session_for` and this fails
+    (`KeyError` out of `prepared_loop`) rather than merely getting slower.
+    """
+    import sys
+
+    from sleepmix.preview import render_window
+
+    path = _song(tmp_path / "a.wav")
+    speeds = [0.5, 0.55, 0.6, 0.65, 0.7]
+
+    def one(speed: float):
+        cfg = MixConfig()
+        cfg.output.duration_min = 1.0
+        cfg.tempo.speed = speed
+        return cfg
+
+    # A stretched loop's length is a function of tempo, so the frame count is a
+    # fingerprint of *which config a window was actually built from*. Measured
+    # serially first, where no interleaving is possible.
+    expected = {}
+    for speed in speeds:
+        with registry.session_for("a", path, one(speed)) as session:
+            expected[speed] = render_window(
+                session, 0.5, stems=session.stem_names()[:1], reverb=False).n_frames
+    assert len(set(expected.values())) == len(speeds), \
+        "the speeds chosen must give distinguishable window lengths"
+
+    n_threads, per_thread = 6, 8
+    errors: list[BaseException] = []
+    frames: list[int] = []
+    guard = threading.Lock()
+    start = threading.Barrier(n_threads)
+
+    def worker(t: int) -> None:
+        try:
+            start.wait(timeout=30)
+            for i in range(per_thread):
+                speed = speeds[(t + i) % len(speeds)]
+                with registry.session_for("a", path, one(speed)) as session:
+                    # Both halves inside the lock: reading the config and
+                    # rendering against it are one operation, not two.
+                    assert session.config.tempo.speed == speed
+                    window = render_window(session, ((t + i) % 7) / 6.0,
+                                           stems=session.stem_names()[:1],
+                                           reverb=False)
+                assert window.n_frames == expected[speed], (
+                    f"speed {speed} produced {window.n_frames} frames, expected "
+                    f"{expected[speed]} — this window was built from another "
+                    f"thread's config")
+                with guard:
+                    frames.append(window.n_frames)
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the main thread
+            with guard:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
+    # Force the interpreter to preempt often: the unsynchronized window between
+    # `_prepared`'s store and its read is a couple of bytecodes wide, and at the
+    # 5 ms default it is hit rarely enough to make this test useless as a guard.
+    previous_interval = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=180)
+            assert not t.is_alive(), "a worker deadlocked — is the use lock an RLock?"
+    finally:
+        sys.setswitchinterval(previous_interval)
+
+    assert errors == [], f"{len(errors)} thread(s) raised: {errors[:3]}"
+    assert len(frames) == n_threads * per_thread
+
+
+def test_session_for_yields_the_same_object_get_would(tmp_path, registry):
+    path = _song(tmp_path / "a.wav")
+    direct = registry.get("a", path, MixConfig())
+    with registry.session_for("a", path, MixConfig()) as held:
+        assert held is direct
+
+
+def test_the_use_lock_is_reentrant(tmp_path, registry):
+    """Nesting must not deadlock — `get` reaches for the registry lock inside it."""
+    path = _song(tmp_path / "a.wav")
+    with registry.session_for("a", path, MixConfig()) as outer:
+        with registry.session_for("a", path, MixConfig()) as inner:
+            assert inner is outer
+
+
+def test_clear_drops_the_use_locks(tmp_path, registry):
+    """The lock dict is the one structure here that could grow without bound."""
+    path = _song(tmp_path / "a.wav")
+    with registry.session_for("a", path, MixConfig()):
+        pass
+    assert registry._use_locks
+    registry.clear()
+    assert registry._use_locks == {}
+
+
+def test_evicting_a_session_does_not_strand_a_held_lock(tmp_path, registry):
+    """A lock outlives the session it guarded, deliberately.
+
+    Dropping it on eviction would hand the next caller a fresh lock while a
+    thread still holds the old one — no mutual exclusion, and no error to say
+    so. Keying by song id and clearing only in `clear()` avoids reference
+    counting for a dict of a few dozen bytes per song."""
+    path = _song(tmp_path / "a.wav")
+    with registry.session_for("a", path, MixConfig()):
+        registry.get("b", _song(tmp_path / "b.wav"), MixConfig())
+        registry.get("c", _song(tmp_path / "c.wav"), MixConfig())   # evicts a
+        assert registry.song_ids() == ["b", "c"]
+    lock = registry._use_locks["a"]
+    with registry.session_for("a", path, MixConfig()):
+        assert registry._use_locks["a"] is lock

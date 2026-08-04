@@ -47,7 +47,12 @@ def preview(body: PreviewRequest, request: Request) -> Response:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    session = request.app.state.sessions.get(body.song_id, song["path"], config)
-    window = render_window(session, body.progress,
-                           stems=body.stems, reverb=body.reverb)
+    # Held for the whole render, not just the lookup. This route is a sync
+    # ``def``, so FastAPI runs it in the threadpool and a scrubber drag puts
+    # several of these on one ``RenderSession`` at once — where a concurrent
+    # ``update_config`` would clear caches mid-render. See ``session_for``.
+    with request.app.state.sessions.session_for(
+            body.song_id, song["path"], config) as session:
+        window = render_window(session, body.progress,
+                               stems=body.stems, reverb=body.reverb)
     return Response(content=encode_wav(window), media_type="audio/wav")
