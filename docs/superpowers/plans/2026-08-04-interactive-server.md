@@ -974,6 +974,7 @@ Add to `sleepmix/server/api/songs.py`:
 
 ```python
 from ...paths import cache_dir
+from ...progress import Cancelled
 from ...separation import invalidate_cache, separate_detailed
 
 
@@ -1000,10 +1001,23 @@ def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
 
     def work(reporter, cancel) -> dict:
         reporter.emit("separate", "Separating stems…", 0.0)
-        if force:
-            invalidate_cache(path, model, cache_dir=str(cache_dir()))
-        cancel.check()
-        result = separate_detailed(path, model, cache_dir=str(cache_dir()))
+        try:
+            if force:
+                invalidate_cache(path, model, cache_dir=str(cache_dir()))
+            cancel.check()
+            result = separate_detailed(path, model, cache_dir=str(cache_dir()))
+        except Cancelled:
+            # Nothing was produced, so the honest state is the one we started
+            # from — not "failed", which would imply the song is broken.
+            store.update_song(song_id, separation_status="pending",
+                              separation_reason=None)
+            raise
+        except Exception as exc:
+            # Without this the row stays "running" for good, and force=true
+            # cannot rescue it because it re-enters this same closure.
+            store.update_song(song_id, separation_status="failed",
+                              separation_reason=f"{type(exc).__name__}: {exc}")
+            raise
         status = "fallback" if result.fallback_reason else "done"
         store.update_song(song_id,
                           separation_status=status,
