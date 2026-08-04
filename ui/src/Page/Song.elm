@@ -1,4 +1,4 @@
-module Page.Song exposing (view)
+module Page.Song exposing (buttonLabel, needsForce, view)
 
 {-| One song: what it is, what it looks like, and whether it has been split.
 
@@ -103,6 +103,15 @@ stemList stems =
         p [ class "dim" ] [ text (String.join " · " stems) ]
 
 
+{-| A track with a fill inside it, rather than a bare fill: the fill carries
+nothing but an inline `width`, so it needs a sibling-free parent of a known
+size to be a percentage *of*, and the track is what shows the remainder.
+
+Separation currently reports two progress points — 0.0 when it starts and 1.0
+when it finishes, which is terminal and clears the bar — so in practice this
+sits empty for the whole run. That is the payload being thin, not the bar
+being broken; see `docs/project-state.md`.
+-}
 progressBar : Maybe Float -> Html msg
 progressBar progress =
     case progress of
@@ -111,12 +120,14 @@ progressBar progress =
 
         Just fraction ->
             div [ class "progress" ]
-                [ div
-                    [ class "progress-fill"
-                    , Html.Attributes.style "width"
-                        (String.fromFloat (fraction * 100) ++ "%")
+                [ div [ class "progress-track" ]
+                    [ div
+                        [ class "progress-fill"
+                        , Html.Attributes.style "width"
+                            (String.fromFloat (fraction * 100) ++ "%")
+                        ]
+                        []
                     ]
-                    []
                 , span [ class "dim" ]
                     [ text (String.fromInt (round (fraction * 100)) ++ "%") ]
                 ]

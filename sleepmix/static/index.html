@@ -3,6 +3,11 @@
 <title>sleepmix</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
+  /* Every class the Elm views emit has a rule here, and the list is the whole
+     point: `.progress-fill` is an empty div carrying only an inline width, so
+     without a height and a colour the live progress bar this interface exists
+     to show renders as literally nothing. Plain and legible rather than
+     designed — this is a local tool, and the job is to make state visible. */
   :root { color-scheme: dark; --bg: #17181b; --fg: #ddd; --dim: #8b8f98;
           --line: #2a2d33; --accent: #7aa2f7; }
   * { box-sizing: border-box; }
@@ -10,8 +15,50 @@
          margin: 0; color: var(--fg); background: var(--bg); }
   .app { max-width: 62rem; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
   h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: .02em; margin: 0 0 1.5rem; }
+  h2 { font-size: 1.05rem; font-weight: 600; margin: 0 0 .25rem; }
+  p { margin: .4rem 0; }
   .error { color: #f7768e; }
   .dim { color: var(--dim); }
+
+  button { font: inherit; color: var(--fg); background: #22242a;
+           border: 1px solid var(--line); border-radius: 5px;
+           padding: .4rem .85rem; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { cursor: default; opacity: .5; }
+  input { font: inherit; color: var(--fg); background: #101115;
+          border: 1px solid var(--line); border-radius: 5px;
+          padding: .4rem .6rem; }
+  input:focus { outline: none; border-color: var(--accent); }
+
+  /* Library */
+  .library { margin-top: 1rem; }
+  .import { display: flex; gap: .5rem; margin: .75rem 0 1.5rem; }
+  .import input { flex: 1; min-width: 0; }
+  .songs { list-style: none; margin: 0; padding: 0;
+           border-top: 1px solid var(--line); }
+  .songs .song { display: flex; gap: 1rem; align-items: baseline;
+                 padding: .6rem .5rem; border-bottom: 1px solid var(--line);
+                 cursor: pointer; }
+  .songs .song:hover { background: #1d1f24; }
+  .songs .song .title { flex: 1; min-width: 0; overflow: hidden;
+                        text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Song view */
+  .song-view .back { margin-bottom: 1.25rem; }
+  .waveform { display: block; width: 100%; margin: 1rem 0 1.5rem;
+              background: #101115; border: 1px solid var(--line);
+              border-radius: 5px; }
+  .separation { border-top: 1px solid var(--line); padding-top: 1rem; }
+  .separation button { margin-top: .75rem; }
+
+  /* The bar. `.progress-fill` is an empty div whose only other attribute is an
+     inline `width: N%`, so the height, the colour and the track it sits in all
+     have to come from here or there is nothing on screen at all. */
+  .progress { display: flex; align-items: center; gap: .75rem; margin: .75rem 0; }
+  .progress-track { flex: 1; height: 6px; border-radius: 3px;
+                    background: var(--line); overflow: hidden; }
+  .progress-fill { height: 100%; background: var(--accent);
+                   transition: width .2s linear; }
 </style>
 <div id="app"></div>
 <script src="/static/app.js"></script>

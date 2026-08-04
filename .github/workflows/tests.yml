@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The `dev` extra, not the `all` extra and not the Pipfile. The Pipfile
+      # installs `sleepmix[all]`, which pulls demucs and torch — gigabytes, to
+      # run a suite that passes without them via the graceful-degradation path
+      # every optional dependency already has. Elm is not installed here
+      # either: the staleness check is `ui/hash_sources.py`, which only reads
+      # files, so it catches a forgotten `make ui` without a toolchain.
+      - run: pip install -e ".[dev]"
+
+      - run: pytest -q

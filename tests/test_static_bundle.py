@@ -4,7 +4,6 @@ Both halves have burned this project before: an editable install hid a missing
 package declaration until a wheel was built, and a placeholder page shipped
 looking like a finished one.
 """
-import re
 from pathlib import Path
 
 import pytest
@@ -52,6 +51,24 @@ def test_the_root_page_is_served(client):
     assert "text/html" in r.headers["content-type"]
 
 
+def test_the_served_ports_module_matches_its_source():
+    """`sleepmix/static/events.js` is a copy, and the copy is what ships.
+
+    `ui/ports/events.js` is the file anyone edits and the file `ui/README.md`
+    documents; `make ui` copies it next to the bundle because that is what the
+    page loads. Nothing but this compares them, so a change made to the copy —
+    or a `make ui` nobody ran — leaves two versions of the port layer in the
+    repository with the served one silently winning.
+    """
+    root = Path(sleepmix.__file__).resolve().parent.parent
+    source = (root / "ui" / "ports" / "events.js").read_bytes()
+    served = (STATIC / "events.js").read_bytes()
+    assert served == source, (
+        "sleepmix/static/events.js has drifted from ui/ports/events.js — "
+        "edit ui/ports/events.js and run `make ui`"
+    )
+
+
 def test_the_bundle_is_not_stale_relative_to_the_sources():
     """A committed artefact silently drifts from its source.
 
@@ -59,6 +76,11 @@ def test_the_bundle_is_not_stale_relative_to_the_sources():
     file carries checkout time in arbitrary order, so an mtime comparison would
     flake for anyone but the person who built it. Invokes the same script the
     Makefile uses, so the two sides cannot compute the hash differently.
+
+    The hash covers the built `app.js` and `events.js` as well as the sources
+    they came from, which is what makes a committed `make ui-dev` bundle fail
+    here: a `--debug` build changes nothing on the input side, so an
+    inputs-only hash matched it exactly.
     """
     import subprocess
     import sys
