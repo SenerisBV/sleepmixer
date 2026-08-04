@@ -1,4 +1,4 @@
-module Request exposing (importSong, peaks, song, songs, startSeparation)
+module Request exposing (importSong, peaks, schema, song, songs, startSeparation)
 
 {-| Every HTTP call the application makes, in one place.
 
@@ -17,6 +17,7 @@ import Api
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Schema
 import Url.Builder
 
 
@@ -58,6 +59,14 @@ startSeparation songId force toMsg =
                 )
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg Api.job
+        }
+
+
+schema : (Result Http.Error Schema.Schema -> msg) -> Cmd msg
+schema toMsg =
+    Http.get
+        { url = Url.Builder.absolute [ "api", "schema" ] []
+        , expect = Http.expectJson toMsg Schema.decoder
         }
 
 
