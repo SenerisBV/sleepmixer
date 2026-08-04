@@ -61,7 +61,7 @@ type State
     | Warming
     | Idle
     | InFlight Params
-    | Queued Params Params
+    | Queued Params
 
 
 {-| Playable once the first preview has returned. Until then the session may
@@ -82,7 +82,7 @@ isPlayable state =
         InFlight _ ->
             True
 
-        Queued _ _ ->
+        Queued _ ->
             True
 
 
@@ -110,13 +110,13 @@ request params state =
         Idle ->
             ( InFlight params, Just params )
 
-        InFlight current ->
-            ( Queued current params, Nothing )
+        InFlight _ ->
+            ( Queued params, Nothing )
 
-        Queued current _ ->
+        Queued _ ->
             -- Latest wins: the position the user has already moved past is of
             -- no interest by the time the server answers.
-            ( Queued current params, Nothing )
+            ( Queued params, Nothing )
 
 
 {-| Call when a preview returns, whether it succeeded or failed — either way
@@ -125,7 +125,7 @@ the slot is free and anything waiting should go now.
 arrived : State -> ( State, Maybe Params )
 arrived state =
     case state of
-        Queued _ pending ->
+        Queued pending ->
             ( InFlight pending, Just pending )
 
         InFlight _ ->

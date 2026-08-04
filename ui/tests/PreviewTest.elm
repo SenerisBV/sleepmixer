@@ -37,13 +37,13 @@ suite =
                 \_ ->
                     Preview.request (params 0.6) (Preview.InFlight (params 0.5))
                         |> Expect.equal
-                            ( Preview.Queued (params 0.5) (params 0.6), Nothing )
+                            ( Preview.Queued (params 0.6), Nothing )
             , test "a second queued request replaces the first — latest wins" <|
                 \_ ->
                     Preview.request (params 0.7)
-                        (Preview.Queued (params 0.5) (params 0.6))
+                        (Preview.Queued (params 0.6))
                         |> Expect.equal
-                            ( Preview.Queued (params 0.5) (params 0.7), Nothing )
+                            ( Preview.Queued (params 0.7), Nothing )
             , test "a cold session does not send" <|
                 \_ ->
                     Preview.request (params 0.5) Preview.Cold
@@ -56,7 +56,7 @@ suite =
                         |> Expect.equal ( Preview.Idle, Nothing )
             , test "a queued request is sent when the in-flight one returns" <|
                 \_ ->
-                    Preview.arrived (Preview.Queued (params 0.5) (params 0.7))
+                    Preview.arrived (Preview.Queued (params 0.7))
                         |> Expect.equal
                             ( Preview.InFlight (params 0.7), Just (params 0.7) )
             , test "arriving while idle changes nothing" <|
@@ -102,7 +102,7 @@ suite =
                             ]
             ]
         , describe "the property that matters"
-            [ test "a drag of twenty positions sends at most two requests" <|
+            [ test "a drag of twenty positions sends one request while the first is in flight" <|
                 \_ ->
                     let
                         drag state sent position =
