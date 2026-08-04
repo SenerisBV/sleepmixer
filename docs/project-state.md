@@ -1,6 +1,7 @@
 # Project state
 
-Status as of the end of the `feat/elm-shell` branch (Plan 3a of the spec, all
+Status as of the end of the `feat/mixer` branch (Plan 3b of the spec, all 6
+tasks complete), on top of `feat/elm-shell` (Plan 3a of the spec, all
 6 tasks complete), on top of `feat/interactive-server` (Plan 2b, all 8 tasks
 complete), `feat/server-foundation` (Plan 2a, all 7 tasks complete), and
 `feat/core-hooks` (Plan 1, all 10 tasks complete). Plan 1 gave the pipeline the
@@ -11,10 +12,81 @@ store, and enough of a songs API to import a file and draw its waveform.
 Plan 2b built the rest of the API: preview, background jobs with live progress
 and cancellation, renders, and presets. Plan 3a is the first real frontend —
 an Elm application replacing the placeholder `index.html` — and it is scoped
-to *browsing and separating*, not yet to mixing or rendering. Read
+to *browsing and separating*, not yet to mixing or rendering. Plan 3b adds the
+mixer: controls generated from the config schema, a scrubber over the decay
+arc, and audio that plays while you shape it. Rendering still has no screen.
+Read
 `docs/architecture.md` first for how the pieces fit together; this document is
 about what's true right now, what was traded off to get here, and what's
 explicitly not done yet.
+
+## Plan 3b: the mixer
+
+`ui/src/Page/Mixer.elm` is the screen the previous two plans were building
+toward — a progress scrubber over the decay arc, per-stem enable/gain/reverb-
+send/decay, solo, and the loop region drawn on the waveform with its tempo. It
+is reached from the song screen and it plays: `ui/ports/audio.js` fetches
+`POST /api/preview`, decodes the WAV and loops it, swapping buffers at the next
+loop boundary.
+
+Almost none of the controls are written. `GET /api/schema` describes every
+config field and `ui/src/Config.elm` holds the values and re-nests them for
+`MixConfig.from_dict`; neither module names a single config parameter, with
+three structural exceptions it documents. Adding a field in
+`sleepmix/config.py` puts a control in the mixer with no frontend change. The
+same reasoning went the other way once during this task: `MixConfig.seed` now
+carries `min: 0` in its metadata, because `validate` rejects a negative seed and
+the UI's bounds come from the schema alone — without the floor, a generated
+control could produce a config the server refuses, and it would surface as a
+400 on a preview rather than as a slider that will not go there.
+
+What it does not do yet, and what to know before changing it:
+
+- **The mixer starts from the schema's stem defaults, not `MixConfig`'s curated
+  ones.** A fresh mixer has every stem enabled at the same decay curve, where
+  `sleepmix render` starts with drums off and bass undecayed. The schema
+  deliberately does not describe list-typed fields, so there is nothing to read
+  those from, and hard-coding them in Elm is exactly the drift the schema
+  exists to prevent. The mixer is honest about what it will render; it just
+  does not start where the CLI starts. A `GET /api/config/default` would close
+  this properly.
+- **The sound bed is not in previews.** `preview.render_window` does not add it;
+  `pipeline.run_pipeline` does. The section says so in place, because otherwise
+  you turn on binaural beats, hear nothing, and conclude the mixer is broken.
+- **The mixer will not open without stems, or while a separation is running.**
+  Its rows *are* the stems, and a preview of an unseparated song would run
+  Demucs inside the preview lock with nothing reporting progress. A separation
+  finishing also discards the warm session and can change the stem list under
+  an open mixer, which is the other half of the gate.
+- **"Preparing…" is indeterminate on purpose.** The first preview is the
+  117-second path and nothing in it reports progress, so the bar animates and
+  claims nothing. Do not replace it with a fraction; there is no fraction.
+- **The loop region is re-fetched only when `loop.start_s` or `loop.end_s`
+  changes**, because those are the only two things `GET /api/songs/{id}/loop`
+  takes. `bars`, `beats_per_bar` and the search window are config fields a
+  render honours and that endpoint cannot express, so the drawn region can
+  differ from what a render detects once those are changed. The endpoint also
+  still decodes the whole file and runs beat tracking on every call with no
+  caching (recorded during Plan 3b Task 2), and the mixer now calls it on
+  entering a song and on those two edits.
+- **Collapsed sections use `<details>`, so their open/closed state lives in the
+  DOM rather than in the model.** Nothing depends on it and Elm never sets
+  `open`, so the browser keeps whatever the user did; a screenshot of the model
+  will not tell you what is expanded.
+- **Field order within a section is alphabetical**, because `Schema.elm` decodes
+  into a `Dict` and JSON object order does not survive that. It reads oddly in
+  places (`lowpass_end_hz` above `lowpass_start_hz`). Preserving the server's
+  order would mean decoding to key-value pairs and threading order through.
+- **`previewReady` carries a JSON value, not `()`.** `audio.js` sends
+  `{ durationS }`, and a `()` port compiles to `Json.Decode.null`, which rejects
+  an object at runtime with a port error Elm cannot catch — the screen would sit
+  at "Preparing…" forever with audio playing underneath. The payload is decoded
+  leniently and shown as the length of the loop now playing.
+- Presets and the render screen are still not built; that is Plan 3c.
+- The parked defect from Plan 3a is untouched: reloading mid-separation shows an
+  enabled button reading "Separating…", because the disable comes from client
+  state and the label from the server's status. The mixer's own gate reads the
+  server status as well as the flag, so it does not inherit the bug.
 
 ## Plan 3a: what's built, and what it deliberately doesn't do yet
 
@@ -34,7 +106,13 @@ case. See `ui/README.md` for how to build, develop, and test this, and
 `docs/architecture.md`'s new frontend section for the design reasoning behind
 each of those choices.
 
-**What it deliberately does not do yet — all of it Plan 3b:**
+**What it deliberately does not do yet — all of it Plan 3b.** Kept as written
+rather than edited into the past tense, because the reasoning is the record of
+why the next plan was shaped the way it was. Plan 3b has since closed: audio
+playback, orphaned `running` rows, the loop region and its endpoint, the mixer,
+preview playback, and schema-driven controls. Still open from this list: the
+import-size warning, the two-point separation progress bar, the render screen,
+and presets.
 
 - **Nothing in the interface plays audio, and nothing says so.** This is the
   gap that actually bit during testing. `Page.Song` announces "separated" with

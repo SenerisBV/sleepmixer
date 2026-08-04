@@ -16,9 +16,11 @@ happen silently at runtime, and an agent is exactly the kind of author who
 won't reliably notice a blank div where a waveform should be.
 
 `ui/src/Main.elm` is a `port module` built with `Browser.element`. `Model`
-carries which screen is showing (derived from `selectedSongId`, not stored
-redundantly — see `routeFor`), the state of a library fetch, the song
-currently open, its peaks, and any in-flight separation job. `update` is a
+carries which screen is showing (derived from `selectedSongId` and `mixer`, not
+stored redundantly — see `routeFor`), the state of a library fetch, the song
+currently open, its peaks and loop region, the config schema, any in-flight
+separation job, and — while the mixer is open — the mixer's own state beside
+the preview state machine. `update` is a
 plain `Msg -> Model -> ( Model, Cmd Msg )`; every HTTP call sleepmix makes
 lives in one file, `ui/src/Request.elm`, so a change to the API surface is a
 change to one file and the compiler points at every caller when a signature
@@ -68,6 +70,39 @@ audio isn't something ports can carry incrementally, only handed off to
 wholesale. `ui/src/Preview.elm` decides *when* to ask for a preview — that's
 the part worth testing, and `elm-test` reaches it — while `audio.js` fetches
 `/api/preview`, decodes the response, and plays it, deciding nothing itself.
+
+### The mixer, and why it has almost no code of its own
+
+`ui/src/Page/Mixer.elm` is the screen the rest of this exists for, and nearly
+every control on it is generated rather than written. `GET /api/schema` is the
+server describing its own config — label, bounds, step, unit, choices, help
+text, per field — and `ui/src/Schema.elm` decodes that into a closed union.
+`Page.Mixer` turns each case of that union into a control by one rule
+(`min`/`max`/`step` → a slider, `choices` → a select, a bool → a checkbox,
+anything else → a typed box carrying whatever bounds the schema does state),
+and `ui/src/Config.elm` holds the values and puts them back into the nesting
+`MixConfig.from_dict` expects. **Nothing in either module names a single config
+parameter**, with three structural exceptions documented in `Config.elm`: the
+`stem` and `stem_decay` sections describe the elements of a list rather than
+global settings, and a stem's `name` identifies its row rather than being
+something you pick. Add a field to a dataclass in `sleepmix/config.py` and it
+appears in the mixer, editable and round-tripping, with no change here.
+
+That also means bounds are the schema's job, not the frontend's. `MixConfig.
+validate` rejects a negative seed; `seed` therefore carries `min: 0` in its
+metadata, and `Config.set` clamps every number to what the schema states. A
+control that can produce a value the config refuses turns a slider into a 400
+on a preview, which is a much worse way to find out.
+
+**Entering the mixer costs one long request and says so.** Building the session
+— slicing the loop out of every stem and time-stretching each one — was
+measured at 117 seconds cold against 73 milliseconds warm, all of it inside a
+per-song lock, and that first render is also what `preview.master_gain`
+calibrates from. So `Preview.warm` fires exactly one preview at progress 0,
+`Preview.isPlayable` holds every control inert until it returns, and the screen
+shows an *indeterminate* bar with an explanation. There is no progress to
+report from that call, so it does not draw a fraction; a bar that invents one
+would be a lie in the place this project cares most about not telling one.
 
 ### Strict decoders
 
@@ -159,7 +194,7 @@ cd /Users/moopius/projects/sleepmixer/ui
 elm-test
 ```
 
-`ui/tests/` has six suites:
+`ui/tests/` has ten suites:
 
 - `ApiTest.elm` — the `Api.elm` decoders, including that an unknown status
   fails rather than falling through.
@@ -178,9 +213,39 @@ elm-test
 - `SongTest.elm` — `Page.Song.needsForce` across all five `SeparationStatus`
   values and `buttonLabel` for the same, busy and idle.
 - `LibraryTest.elm` — `Page.Library`, including `summary`'s three states.
-- `WaveformTest.elm` — `Waveform.barFor`, the peak-to-pixel geometry.
+- `WaveformTest.elm` — `Waveform.barFor`, the peak-to-pixel geometry, and
+  `Waveform.regionBox`, the seconds-to-pixel geometry of the loop region.
+- `PreviewTest.elm` — the preview state machine, including the property the
+  whole thing exists for: twenty scrubber positions during a drag collapsing
+  into one request with the latest winning.
+- `SchemaTest.elm` — `/api/schema` decoded into the closed `Field` union.
+- `ConfigTest.elm` — the JSON a preview carries, asserted by decoding the
+  encoder's output back out along the paths `MixConfig.from_dict` walks. A
+  wrong config here is the worst bug this frontend can have: the preview plays,
+  and it is a preview of a mix nobody asked for.
+- `MixerTest.elm` — solo (what `stems` a preview carries, where "none" and
+  "all" are one empty list apart), and `Main`'s half of the preview lifecycle:
+  nothing sent before the session is warm, one request in flight at a time, and
+  every door out of the mixer stopping the audio.
+- `Fixtures.elm` — not a suite so much as a shared `Schema` for the two above,
+  copied out of a live `/api/schema` and trimmed; its one test asserts it still
+  decodes, so a fixture that has drifted fails loudly rather than leaving the
+  tests that use it running against an empty schema.
 
-No view is tested. `Main.routeFor` is still only exercised indirectly.
+No view is tested by `elm-test` — but one thing about the views is tested from
+the *Python* side, and it exists because of a real failure: see
+`tests/test_static_bundle.py::test_every_class_the_views_emit_has_a_rule_on_the_page`.
+`sleepmix/static/index.html` was written for the health-check page in Plan 3a's
+first task and never grew as later tasks added markup, so eleven of the
+fourteen classes the views emitted had no rule at all — including
+`.progress-fill`, an empty div with no height and no colour, which is to say
+the live progress bar that branch existed to deliver rendered as literally
+nothing, through six clean per-task reviews. The test scans `ui/src` for class
+literals and fails on any without a rule on the page, and a companion test
+refuses `classList` and `class (a ++ b)` so the scan cannot be bypassed. Nobody
+who writes this code can open a browser; that pair is the substitute for eyes.
+
+`Main.routeFor` is still only exercised indirectly.
 
 `elm-test` needs `elm-test-rs` or the Node-based `elm-test` runner on `PATH`.
 On this machine the two halves come from different places: the compiler is
