@@ -2,9 +2,9 @@
 
 This document covers the core render pipeline, the interactive layer built on
 top of it (separation → loop → stretch → decay → reverb → sum → sound bed →
-master, plus preview, sessions, and progress), and the server that will
-eventually expose all of that over HTTP. It does not cover the UI itself —
-that's Plan 3; see `docs/project-state.md`.
+master, plus preview, sessions, and progress), the server that exposes all of
+that over HTTP, and — as of Plan 3a — the frontend that talks to that server.
+See `docs/project-state.md` for what each plan actually shipped.
 
 ## The load-bearing property: decay is a pure function of progress
 
@@ -578,3 +578,80 @@ already respond while a beat-track call is warming numba in the background —
 and `is_warm()` is surfaced on `/api/health` so a caller can tell whether
 that's finished. It is silent and best-effort if librosa isn't installed at
 all, matching the rest of the codebase's graceful-degradation policy.
+
+## The frontend (Plan 3a)
+
+`sleepmix/static/index.html` now serves a compiled [Elm](https://elm-lang.org/)
+application (`ui/src/Main.elm`) instead of the placeholder page described
+above. See `ui/README.md` for how to build, develop, and test it; this section
+is about the design choices behind it.
+
+**Why Elm.** Most of this codebase, this frontend included, is written by an
+agent. Elm's compiler turns a whole class of mistake that would otherwise be
+a runtime problem — a renamed field, an unhandled case in a union type, a
+decoder that no longer matches what the server sends — into a build failure.
+The alternative failure mode, in a dynamically-typed frontend, is a screen
+that renders blank and says nothing, which is far harder for an agent (or
+anyone) to notice than a compiler error. `Main.elm`'s own module docstring
+states this plainly as the reason it exists.
+
+**Where Elm stops, and why.** `elm/http` has no server-sent-events support, so
+Elm cannot open an `EventSource` itself, and ports — the only channel in or
+out of an Elm program — are asynchronous and JSON-only: nothing but a decoded
+JSON value crosses that boundary, in either direction. `ui/ports/events.js`
+therefore owns the actual `EventSource` connection to
+`/api/jobs/{id}/events`; `Main.elm` sends a job id out over a `watchJob` port
+and receives already-parsed job events back over a `jobEvent` port, decoded
+immediately into `Api.Job` by `Decode.decodeValue Api.job`. A decode failure
+there surfaces as a `Result Decode.Error` for `update` to handle, not a crash.
+Elm never touches audio bytes, and the same shape is planned to repeat for
+Plan 3b's `ports/audio.js`: fetching `/api/preview`, decoding it with the Web
+Audio API, and looping playback are all JavaScript, with Elm only ever
+sending the parameters that produced a preview and receiving outcomes back.
+
+**Why decoders are strict.** `ui/src/Api.elm` is the seam between an untyped
+HTTP response and a typed Elm value, and its own docstring calls this out
+directly: decoding is deliberately strict rather than permissive. Both status
+enums it decodes — `separation_status` on a song, `status` on a job — read a
+string field and `Decode.andThen` into a closed union of known values; an
+unrecognised string hits `Decode.fail` with a message naming the unexpected
+value, rather than falling back to some default variant. Concretely, if the
+server started reporting a `separation_status` this build of the frontend
+doesn't know about (plausible if the Python and Elm halves of a change ship
+on different schedules), the song detail view shows a decode error instead of
+silently treating that song as, say, `NotSeparated` — wrong is loud rather
+than wrong and quiet. This trade only makes sense because the frontend and
+the server it talks to are versioned and shipped together out of one repo; it
+would be the wrong default for a public API serving clients it doesn't
+control.
+
+**Why the waveform is SVG, not canvas.** `ui/src/Waveform.elm`'s docstring
+gives the reasoning directly: a `<canvas>` would mean escaping Elm's virtual
+DOM entirely and managing pixels through a port — every draw call would need
+to cross the same JSON-only boundary described above, for data (a few hundred
+peak pairs) that doesn't need to. The interaction the waveform exists to
+support — loop-region drag handles, in Plan 3b — is just mouse events mapped
+to `Msg` values, which is precisely the state machine Elm's `Html.Events`
+models well without any port at all. SVG elements are ordinary Elm values
+diffed by the virtual DOM like any other node, and a few thousand `rect`
+elements (`peakBuckets = 200` today, so 200 of them, per `Main.elm`) is well
+within what a browser draws comfortably without needing canvas's raw pixel
+throughput.
+
+**The build and commit arrangement.** `sleepmix/static/app.js` is committed to
+the repository rather than built as part of `pip install sleepmix` — the
+package must install with nothing beyond its declared Python dependencies, so
+Node and Elm cannot be part of that path. `make ui` (`elm make --optimize`,
+from `ui/`) is the only thing that produces it, and it must be re-run and its
+output committed by hand whenever anything under `ui/` changes; nothing
+automates that step. `ui/hash_sources.py` hashes every `.elm` file under
+`ui/src`, `ui/elm.json`, and `ui/ports/events.js`, and the Makefile writes
+that hash to `sleepmix/static/app.js.sha256` next to the bundle;
+`tests/test_static_bundle.py` recomputes the same hash with the same script
+and fails the suite if it doesn't match what's committed. That test is the
+backstop for a forgotten rebuild, not a substitute for remembering to do
+one — it only runs, and only catches the drift, after the fact. The hash also
+orders its inputs by sorted path rather than, say, a fixed manifest order, so
+it is a drift detector rather than a reproducibility proof: a module rename
+that happened to change the sort order while every file's bytes stayed
+identical would not change the recorded hash.

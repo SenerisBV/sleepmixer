@@ -1,19 +1,91 @@
 # Project state
 
-Status as of the end of the `feat/interactive-server` branch (Plan 2b of the
-spec, all 8 tasks complete), on top of `feat/server-foundation` (Plan 2a, all
-7 tasks complete) and `feat/core-hooks` (Plan 1, all 10 tasks complete). Plan 1
-gave the pipeline the hooks a local web UI needs — session staging, cheap
-preview, structured progress, stable data paths, a config schema — without
-building the UI itself. Plan 2a put an HTTP server in front of that: a FastAPI
-app, a SQLite library store, and enough of a songs API to import a file and
-draw its waveform. Plan 2b is the rest of the API: preview, background jobs
-with live progress and cancellation, renders, and presets. **The server is now
-feature-complete for Plan 3** — everything the eventual Elm interface needs to
-call already exists and is tested; what's left is building that interface, not
-the API underneath it. Read `docs/architecture.md` first for how the pieces
-fit together; this document is about what's true right now, what was traded
-off to get here, and what's explicitly not done yet.
+Status as of the end of the `feat/elm-shell` branch (Plan 3a of the spec, all
+6 tasks complete), on top of `feat/interactive-server` (Plan 2b, all 8 tasks
+complete), `feat/server-foundation` (Plan 2a, all 7 tasks complete), and
+`feat/core-hooks` (Plan 1, all 10 tasks complete). Plan 1 gave the pipeline the
+hooks a local web UI needs — session staging, cheap preview, structured
+progress, stable data paths, a config schema — without building the UI itself.
+Plan 2a put an HTTP server in front of that: a FastAPI app, a SQLite library
+store, and enough of a songs API to import a file and draw its waveform.
+Plan 2b built the rest of the API: preview, background jobs with live progress
+and cancellation, renders, and presets. Plan 3a is the first real frontend —
+an Elm application replacing the placeholder `index.html` — and it is scoped
+to *browsing and separating*, not yet to mixing or rendering. Read
+`docs/architecture.md` first for how the pieces fit together; this document is
+about what's true right now, what was traded off to get here, and what's
+explicitly not done yet.
+
+## Plan 3a: what's built, and what it deliberately doesn't do yet
+
+`ui/src/Main.elm` is a compiled Elm application (`sleepmix/static/app.js`)
+served at `/` in place of the old placeholder page. It talks to the Plan
+2a/2b API exclusively over HTTP and one pair of ports
+(`ui/ports/events.js` for job progress via SSE) — nothing about the API
+changed to accommodate it, exactly as Plan 2b's own document predicted. What
+it does: shows the library (`Page.Library`), imports a song by filesystem
+path, opens a song (`Page.Song`) and shows its waveform as SVG
+(`Waveform.elm`, peaks fetched from `GET /api/songs/{id}/peaks`), starts stem
+separation and tracks its progress live over `GET /api/jobs/{id}/events`, and
+shows a separation failure or fallback reason in place rather than swallowing
+it. Decoders (`ui/src/Api.elm`) are strict: an unrecognised `separation_status`
+or job `status` fails the decode rather than being coerced into a default
+case. See `ui/README.md` for how to build, develop, and test this, and
+`docs/architecture.md`'s new frontend section for the design reasoning behind
+each of those choices.
+
+**What it deliberately does not do yet — all of it Plan 3b:**
+
+- **No mixer.** Nothing in this UI reads `/api/schema` or lets a user touch a
+  single decay/reverb/tempo parameter. Separation is the only action a song
+  screen offers.
+- **No preview playback.** `POST /api/preview` exists and is tested on the
+  server side, but nothing in this frontend calls it, and there is no
+  `ports/audio.js` yet — no `decodeAudioData`, no looped playback, no buffer
+  swap at a loop boundary.
+- **No render screen.** Starting, watching, cancelling, or downloading a full
+  render (`server/api/renders.py`, all built in Plan 2b) has no frontend at
+  all.
+- **No schema-driven controls.** `config.config_schema()` — bounds, labels,
+  and help text for every `MixConfig` field — is not consumed anywhere in
+  `ui/`.
+- **No presets.** `server/api/presets.py`'s CRUD has no corresponding screen.
+
+**A constraint carried forward from Plan 2b that shapes all of the above.**
+Plan 2b's own document (below, under "Jobs, progress, and sessions") measured
+that `POST /api/preview` serializes per song — including the cold path, where
+building a `RenderSession` from scratch (separation + loop detection +
+time-stretch) was measured at **117 s cold versus 73 ms warm**. Every request
+against a cold song's session queues behind whichever request got there
+first, and each queued request occupies one of FastAPI's AnyIO threadpool
+threads for the whole wait, not just its own render time. A scrubber that
+fires one `/api/preview` request per drag event — the naive implementation —
+would, against a cold song, queue dozens of requests behind that single 117 s
+render, each pinning a thread for the duration. **Plan 3b must coalesce or
+cancel superseded preview requests rather than firing one per drag event, and
+should not enable the scrubber at all until the song's session is warm** (the
+per-song equivalent of `/api/health`'s `is_warm()`, which currently only
+covers the process-wide librosa JIT warm-up, not per-song session state).
+This is a requirement on 3b's design, not an optimisation to consider later.
+
+**Two process lessons from this plan, carried forward because Plan 3b is
+where they'll bite hardest.** First: an implementer on this plan, satisfying
+a "see it in a browser" verification step, drove GUI automation against the
+operator's own desktop — real Safari tabs, an unrelated Terminal window, a
+Finder window with sensitive files open — and tripped a macOS TCC permission
+dialog the operator had to notice and dismiss by hand. Verification on this
+codebase goes through the API with `curl`, never a browser driver, an
+AppleScript `do JavaScript` call, a screenshot tool, or a browser-automation
+MCP. Plan 3b adds actual audio playback, which is a far more tempting thing
+to want to "just see (hear) working" than a waveform was — the instruction
+not to automate a browser matters more there, not less. Second: a server
+started for manual verification writes to the operator's real library
+(`~/Library/Application Support/sleepmix/library.db` on macOS) unless told
+otherwise — this happened once during this plan and was caught and cleaned
+up, but the instruction should not have allowed it to happen at all. Always
+verify against `SLEEPMIX_DATA_DIR=$(mktemp -d)`; the test suite already does
+the equivalent for automated runs via `tests/conftest.py`'s autouse
+`isolated_data_dir` fixture.
 
 ## Plan 2b: what's built
 
@@ -95,11 +167,11 @@ SSE progress stream, presets CRUD over the table Task 2 already created, or a
 machinery — is Plan 2b. Until it lands, this server can register a song and
 draw its waveform and nothing else; it cannot render or preview anything.
 
-`sleepmix/static/index.html` is a deliberate placeholder, not a preview of
-the finished UI. `app.py` serves it at `/` today only so there is something
-to load in a browser and confirm the server is up; Plan 3 replaces it
-outright with a compiled Elm application. Don't read anything about the
-eventual interface into its current contents.
+`sleepmix/static/index.html` was, at the end of Plan 2a, a deliberate
+placeholder rather than a preview of the finished UI — `app.py` served it at
+`/` only so there was something to load in a browser and confirm the server
+was up. Plan 3a has since replaced it outright with a compiled Elm
+application; see the Plan 3a section above and `ui/README.md`.
 
 ## Plan 1 (`feat/core-hooks`) recap
 
@@ -114,12 +186,13 @@ noted below. Nothing in that branch served HTTP; `cli.py` still only did
 and a UI would need without exposing any of them to a user who wasn't calling
 Python directly.
 
-What still sits beyond both plans so far: the Elm application itself
-(library view, song view, mixer, render screen, schema-driven controls
-consuming `config_schema()`, Web Audio buffer swapping at loop boundaries
-using `render_window`) is Plan 3. Segment selection and arrangement, output
-length as an arrangement property, and a bundled desktop app are noted in the
-spec as future work beyond any plan written so far.
+What still sat beyond both plans at that point: the Elm application itself.
+Plan 3a has since built the library view and song view; the mixer, render
+screen, schema-driven controls consuming `config_schema()`, and Web Audio
+buffer swapping at loop boundaries using `render_window` remain Plan 3b — see
+the Plan 3a section above. Segment selection and arrangement, output length as
+an arrangement property, and a bundled desktop app are noted in the spec as
+future work beyond any plan written so far.
 
 ## Accepted changes and caveats
 
@@ -192,7 +265,8 @@ can be deleted; nothing here depends on it existing.
 These were identified and left as-is; each has a reason it wasn't worth
 fixing in the branch that found it. Plan 1 (`feat/core-hooks`) items are
 listed first, followed by Plan 2a (`feat/server-foundation`) items, followed
-by Plan 2b (`feat/interactive-server`) items found during this plan's review.
+by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
+(`feat/elm-shell`) items found during this plan's review.
 
 - **Four things contribute to a render's final peak that `master_gain`'s
   calibration window never sees.** `preview.master_gain` measures one window,
@@ -496,3 +570,46 @@ by Plan 2b (`feat/interactive-server`) items found during this plan's review.
   seconds of audio is slow, but not reliably slower than 5 seconds on modern
   hardware. The test currently only proves warm-up doesn't make things worse,
   not that it does what it claims.
+
+- **`ui/hash_sources.py` orders its inputs by sorted path**, so a module
+  rename that happened to change the sort order while every file's total
+  content stayed byte-identical would not change the recorded hash. Fine for
+  what it's used for — noticing that `ui/` changed and `app.js` wasn't
+  rebuilt — but it is a drift detector, not a proof that the bundle is
+  reproducible from its sources.
+
+- **`Api.elm`'s `stems` decoder combines `Pipeline.optional` with a
+  nullable-then-`withDefault` inner decoder.** Correct — a missing or `null`
+  `stems` field both end up as `[]` — but redundant: `Pipeline.optional`
+  already handles the missing-field case, so the inner `Decode.nullable`
+  layered on top only ever does anything for an explicit JSON `null`, and the
+  server never sends one.
+
+- **No direct test exercises `SeparationFailed` on the song side.** `Api.elm`'s
+  `SeparationFailed` variant of `SeparationStatus` is only exercised
+  indirectly, via the job decoder's `Failed` variant on the job-status enum,
+  which is a different decoder over a different field.
+
+- **`Request.elm` interpolates song ids into URL paths with plain string
+  concatenation, not `Url.Builder`.** Not exploitable — ids are
+  server-generated opaque hex, never user input — but it's the kind of
+  pattern that stops being safe the moment something less controlled gets
+  concatenated the same way.
+
+- **Entering the same song twice in quick succession can show stale data.**
+  `Main.elm`'s `GotSongDetail`/`GotPeaks` handlers guard against a slow
+  response landing after the user has navigated to a *different* song
+  (`model.selectedSongId /= Just songId`), but a `A → B → A` sequence fast
+  enough that the first `A` request is still in flight when the user lands
+  back on `A` passes that same guard — `selectedSongId` reads `Just "A"`
+  both when the stale response and the fresh response arrive, and whichever
+  lands second wins even if it's the stale one. Outside the scenario the
+  guard was written for (leaving a song outright); same-song responses are
+  usually near-identical, which is likely why this hasn't been noticed in
+  practice.
+
+- **No test covers `Page.Song` or `Main`'s routing.** `ui/tests/` exercises
+  `Api`'s decoders, `Main.jobOutcome`, `Page.Library`, and `Waveform.barFor`
+  directly, but `Page.Song`'s view logic (button labels, the `needsForce`
+  rule, the progress bar) and `Main`'s `routeFor`/top-level `update` are only
+  exercised indirectly, through the pieces they're built from.

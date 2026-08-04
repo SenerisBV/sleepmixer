@@ -133,27 +133,36 @@ sleepmix render --input song.flac --duration 45 --speed 0.6 --soundbed
 sleepmix ui
 ```
 
-Starts a local server on `127.0.0.1:8765` and opens a browser tab. That tab
-still shows a placeholder page — the interactive interface (library, waveform,
-mixer) is a separate, later change (Plan 3, if you're following along in
-`docs/project-state.md`). What's already there, and works today, is everything
-underneath that interface: the whole workflow, driven by HTTP.
+Starts a local server on `127.0.0.1:8765`, opens a browser tab, and serves a
+small [Elm](https://elm-lang.org/) application — compiled and committed into
+the package, so running this needs nothing beyond the `ui` extra. It's a
+library browser and a song screen, not a mixer yet.
 
-Import a song by path and the server decodes it, registers it in a local
-SQLite library, and gives you back a waveform. Kick off stem separation
-(vocals/drums/bass/other, via Demucs, with a plain-mix fallback if you haven't
-installed it) as a background job and watch it progress over server-sent
-events. Ask for a preview — any single point in the decay arc, by a `progress`
-value from 0 to 1 — and get raw WAV bytes back in well under a second, no
-matter how far into a twenty-five-minute mix that point is; that's the same
-cheap-preview property described under "The disintegration model" above, now
-reachable over HTTP. Start a full render as another background job, watch it
-the same way, cancel it if you want to, and download the finished file once
-it's done. Save a set of decay settings as a named preset and reuse it. All of
-this already exists, is tested, and works from a shell with `curl` — there
-just isn't a page wrapping it in a mixer yet. That page is the entire content
-of the next piece of work; nothing about the API is expected to change to make
-room for it.
+What it does today: import a song by filesystem path, and the server decodes
+it, registers it in a local SQLite library, and hands back a waveform, drawn
+as SVG from the peaks the server computed. Open a song to see that waveform
+and its separation status. Kick off stem separation (vocals/drums/bass/other,
+via Demucs, with a plain-mix fallback if you haven't installed it) and watch
+it progress live over server-sent events, with the reason shown in place if
+it fell back or failed rather than just going quiet.
+
+What it doesn't do yet: there is no mixer — nothing here lets you touch a
+single decay, reverb, or tempo setting, or hear a preview of one. There is no
+render screen: starting, cancelling, or downloading a full render has no page
+at all yet, though the API underneath it (see below) already does all three.
+There are no presets. All of that already exists and is tested at the API
+level and reachable from a shell with `curl` — it's the frontend for it that
+doesn't exist yet, and building it is the entire content of the next piece of
+work. Nothing about the API is expected to change to make room for it.
+
+Ask the API directly for a preview — any single point in the decay arc, by a
+`progress` value from 0 to 1 — and get raw WAV bytes back in well under a
+second, no matter how far into a twenty-five-minute mix that point is; that's
+the same cheap-preview property described under "The disintegration model"
+above, now reachable over HTTP. Start a full render as a background job,
+watch it the same way as separation, cancel it if you want to, and download
+the finished file once it's done. Save a set of decay settings as a named
+preset and reuse it.
 
 **Keep it on localhost.** There is no authentication, and importing a song
 takes a filesystem path — so anything that can reach the port can ask the
