@@ -1,3 +1,4 @@
+import functools
 import time
 
 import numpy as np
@@ -5,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sleepmix.audio import AudioBuffer, save_audio
+from sleepmix.separation_process import run_separation
 from sleepmix.server.app import create_app
 
 
@@ -30,6 +32,35 @@ def _await_job(client, job_id, timeout=20.0):
             return body
         time.sleep(0.02)
     raise AssertionError("job never finished")
+
+
+def _a_running_separation(client, monkeypatch, song, force=False):
+    """Post a separation and wait until it genuinely holds status 'running'.
+
+    Uses the real subprocess worker path (``run_separation``), pointed at the
+    stub worker module instead of real Demucs, and told through
+    ``STUB_SLEEP_S`` to sit in its child process for a couple of seconds —
+    real subprocess supervision, no torch involved. The wait for 'running' is
+    a poll on the song's own status, not a sleep: that field is set at the
+    top of the job's work() closure before the subprocess is even spawned, so
+    polling for it is exact regardless of how long the child takes to start.
+    """
+    import sleepmix.server.api.songs as songs_api
+
+    monkeypatch.setenv("STUB_SLEEP_S", "2")
+    monkeypatch.setattr(
+        songs_api, "run_separation",
+        functools.partial(run_separation, worker_module="tests.stub_separation_worker"))
+
+    body = client.post(f"/api/songs/{song['id']}/separate",
+                       params={"force": "true"} if force else {}).json()
+
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if client.get(f"/api/songs/{song['id']}").json()["separation_status"] == "running":
+            return body
+        time.sleep(0.02)
+    raise AssertionError("separation never reached status 'running'")
 
 
 def _inline_separation(path, model, cache_dir, reporter=None, cancel=None):
@@ -220,3 +251,59 @@ def test_a_cancelled_force_does_not_destroy_the_cache(client, tmp_path, monkeypa
     assert deleted == [], "a cancelled force deleted the cache anyway"
     assert client.get(f"/api/songs/{song['id']}").json()[
         "separation_status"] == "pending"
+
+
+def test_submitting_separate_twice_reuses_the_in_flight_job(client, tmp_path, monkeypatch):
+    """A reload — or a second tab — has no memory of a separation already in
+    flight. Without this, clicking Separate again stacks a second job behind
+    the first instead of attaching to it, which is exactly the queue-stacking
+    this whole plan exists to prevent."""
+    song = _import_song(client, tmp_path)
+    first = _a_running_separation(client, monkeypatch, song)
+
+    second = client.post(f"/api/songs/{song['id']}/separate").json()
+    assert second["id"] == first["id"]
+
+    jobs = client.app.state.jobs
+    separate_jobs = [j for j in jobs.list()
+                     if j.kind == "separate" and j.song_id == song["id"]]
+    assert len(separate_jobs) == 1
+
+    _await_job(client, first["id"])
+
+
+def test_submitting_separate_twice_with_force_reuses_the_in_flight_job(client, tmp_path, monkeypatch):
+    """force=true must not bypass the guard: invalidating the cache underneath
+    a separation that is already reading from it is worse than making the
+    caller wait for, or cancel, the one already running."""
+    song = _import_song(client, tmp_path)
+    first = _a_running_separation(client, monkeypatch, song, force=True)
+
+    second = client.post(f"/api/songs/{song['id']}/separate",
+                         params={"force": "true"}).json()
+    assert second["id"] == first["id"]
+
+    jobs = client.app.state.jobs
+    separate_jobs = [j for j in jobs.list()
+                     if j.kind == "separate" and j.song_id == song["id"]]
+    assert len(separate_jobs) == 1
+
+    _await_job(client, first["id"])
+
+
+def test_submitting_separate_after_the_first_finished_makes_a_new_job(
+        client, tmp_path, monkeypatch):
+    """The guard must not wedge the song forever once its job is done."""
+    import sleepmix.separation as sep
+    import sleepmix.server.api.songs as songs_api
+
+    monkeypatch.setattr(sep, "_demucs_separate",
+                        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("no torch")))
+    monkeypatch.setattr(songs_api, "run_separation", _inline_separation)
+    song = _import_song(client, tmp_path)
+
+    first = client.post(f"/api/songs/{song['id']}/separate").json()
+    _await_job(client, first["id"])
+
+    second = client.post(f"/api/songs/{song['id']}/separate").json()
+    assert second["id"] != first["id"]

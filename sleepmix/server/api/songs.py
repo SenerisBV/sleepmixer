@@ -124,6 +124,21 @@ def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
             status_code=404,
             detail=f"Source file unavailable — it has moved or been deleted: {song['path']}")
 
+    # Idempotent for the case that matters: a page reload — or a second tab —
+    # has no client-side memory of a separation already in flight, so without
+    # this it would submit a second job behind the first rather than attach to
+    # it. Checked even when force=true: a forced re-separation invalidates the
+    # cache, and doing that underneath a separation that is already reading
+    # from it is worse than making the caller wait for, or explicitly cancel,
+    # the one already running.
+    existing = next(
+        (job for job in request.app.state.jobs.list()
+         if job.kind == "separate" and job.song_id == song_id
+         and job.status in ("queued", "running")),
+        None)
+    if existing is not None:
+        return existing.as_event()
+
     path = song["path"]
     model = request.app.state.separation_model
     sessions = request.app.state.sessions
