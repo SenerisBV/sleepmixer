@@ -5,13 +5,49 @@ and what the button says. Both are read straight off a `SeparationStatus`, and
 both are wrong in a way nobody would notice from a passing suite — a button
 offering "Separate" on a cached fallback does nothing visible when clicked.
 
-Views are not tested here; these are the pure functions the view reads from.
+Mostly pure functions, and then one thing that is not: the long-source warning
+beside the Separate button is asserted against the *rendered* screen. A
+`Warn.forSource` that is perfect and never called is a warning nobody sees, and
+this suite could not have told the difference.
 -}
 
 import Api
 import Expect
+import Main
 import Page.Song
 import Test exposing (Test, describe, test)
+import Test.Html.Query as Query
+import Test.Html.Selector as Selector
+
+
+song : Api.Song
+song =
+    { id = "song-1"
+    , path = "/tmp/a.wav"
+    , title = "A"
+    , durationS = 245.0
+    , sampleRate = 44100
+    , separationStatus = Api.NotSeparated
+    , stems = []
+    , addedAt = "2026-08-05"
+    }
+
+
+{-| The song screen as the application actually draws it.
+
+Through `Main.view` rather than `Page.Song.view` with a record written here, so
+that this says something about the screen a user reaches rather than about a
+function called in a test. No schema is needed: the song route does not use one.
+-}
+screen : Api.Song -> Query.Single Main.Msg
+screen s =
+    let
+        fresh =
+            Tuple.first (Main.init ())
+    in
+    { fresh | selectedSongId = Just s.id, currentSong = Just s }
+        |> Main.view
+        |> Query.fromHtml
 
 
 suite : Test
@@ -66,5 +102,26 @@ suite =
                     ]
                         |> List.map (\status -> Page.Song.buttonLabel status True)
                         |> Expect.equal (List.repeat 5 "Separating…")
+            ]
+        , describe "the long-source warning, as the screen renders it"
+            -- Separation goes onto the same one worker a render does, so this
+            -- is the same sentence out of the same module the mixer uses. What
+            -- these defend is that it is on the screen at all: deleting the
+            -- call leaves every `Warn` test green and the warning gone.
+            [ test "a seventy-minute file is warned about, in minutes" <|
+                \_ ->
+                    screen { song | durationS = 4188 }
+                        |> Query.find [ Selector.class "warn" ]
+                        |> Query.has [ Selector.text "roughly 70 minutes" ]
+            , test "and says why it matters, which is the one worker" <|
+                \_ ->
+                    screen { song | durationS = 4188 }
+                        |> Query.find [ Selector.class "warn" ]
+                        |> Query.has [ Selector.text "one worker" ]
+            , test "an ordinary track is not warned about" <|
+                \_ ->
+                    screen song
+                        |> Query.findAll [ Selector.class "warn" ]
+                        |> Query.count (Expect.equal 0)
             ]
         ]

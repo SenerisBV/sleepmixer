@@ -3,6 +3,7 @@ port module Main exposing
     , JobOutcome(..)
     , Model
     , Msg(..)
+    , PendingRender
     , SelectOutcome
     , Separation(..)
     , Settings(..)
@@ -11,10 +12,13 @@ port module Main exposing
     , isSeparating
     , jobOutcome
     , main
+    , mixerOpenFor
     , readEvent
+    , renderStartingFor
     , separationOnSelect
     , streamFailureFor
     , update
+    , view
     )
 
 {-| The sleepmix interface.
@@ -189,6 +193,32 @@ type Settings
     | SettingsUnavailable String
 
 
+{-| A render POST that has gone out and not yet been answered.
+
+Carries the song it was issued for as well as the request that will answer it,
+and the song half is not decoration — `Separation.Starting` carries one for
+exactly the same reason, thirty lines up. Without it a POST in flight is a fact
+about the *application* rather than about a song, and every consequence lands on
+whichever song is open when the answer arrives: `renderBlock` greys out that
+song's Render button under a sentence describing a different one, and the answer
+then closes that song's mixer and stops its preview on the way to the renders
+screen. With it, both questions — "is this button waiting?" and "should this
+answer move the screen?" — are asked about a named song and answered no for
+every other.
+
+One at a time, deliberately. Pressing Render on a second song while the first is
+in flight replaces this record, and the first answer is then dropped as
+superseded: the render itself is running on the server either way, so what is
+lost is the navigation, not the mix. A list would buy nothing — reaching the
+second song's mixer takes a song fetch and a schema-driven screen, which is
+orders of magnitude longer than the round trip this covers.
+-}
+type alias PendingRender =
+    { request : Int
+    , songId : String
+    }
+
+
 type alias Model =
     { health : Health
     , library : Library.State
@@ -215,13 +245,12 @@ type alias Model =
     , previewError : Maybe String
     , loopSeconds : Maybe Float
 
-    -- The render POST the mixer's button has in flight, by request id, and why
-    -- the last one failed. A `Maybe Int` rather than a `Bool` for the reason
-    -- `issue` gives: it is the id that says whether an arriving response is the
-    -- one this screen is waiting for. Nothing on the server deduplicates a
-    -- render the way `separate_song` deduplicates a separation, so two clicks
-    -- inside one round trip are two half-hour renders on a single worker.
-    , startingRender : Maybe Int
+    -- The render POST the mixer's button has in flight, and why the last one
+    -- failed. See `PendingRender` for why it carries a song as well as a
+    -- request id, and `renderError`'s two guards — `RenderStarted`'s write and
+    -- `leaveMixer`'s clear — for why the message cannot outlive the screen that
+    -- shows it.
+    , startingRender : Maybe PendingRender
     , renderError : Maybe String
     , separation : Separation
     , separateError : Maybe String
@@ -322,6 +351,34 @@ separationOnSelect songId separation =
 
     else
         { separation = Idle, stopWatching = watchedJobId separation }
+
+
+{-| Is a render POST in flight *for this song*, rather than for some other?
+
+What the mixer's Render button reads to decide whether it is waiting. Asked of a
+named song rather than of the model as a whole, because the answer differs
+between two songs and a `startingRender /= Nothing` cannot say so — it greyed
+out the button on every song a POST outlived.
+-}
+renderStartingFor : String -> Model -> Bool
+renderStartingFor songId model =
+    Maybe.map .songId model.startingRender == Just songId
+
+
+{-| Is the mixer open, and open on this song?
+
+Used to decide whether there is anybody to tell about a render that failed to
+start. `renderError` is rendered by the mixer and by nothing else, so writing it
+while no mixer is open — or while a *different* song's mixer is open — is not a
+lost message but a worse one: it sits in the model until the next mixer opens
+and then reports a failure that has nothing to do with the song on screen.
+Clearing it in `leaveMixer` is not enough on its own, because the write can
+happen after the leave; this is the half that makes it true rather than usually
+true.
+-}
+mixerOpenFor : String -> Model -> Bool
+mixerOpenFor songId model =
+    Maybe.map .songId model.mixer == Just songId
 
 
 {-| Which screen is showing.
@@ -880,6 +937,14 @@ update msg model =
                             , preview = preview
                             , previewError = Nothing
                             , loopSeconds = Nothing
+
+                            -- Belt and braces beside `renderAnswered`'s guard,
+                            -- which is what actually stops a failure being
+                            -- written where nobody can read it. This is the
+                            -- cheap half: a screen opening fresh should not
+                            -- inherit a sentence from a previous one whatever
+                            -- put it there.
+                            , renderError = Nothing
                           }
                         , sendPreview toSend
                         )
@@ -961,7 +1026,7 @@ update msg model =
                     ( model, Cmd.none )
 
                 Just state ->
-                    if model.startingRender /= Nothing || Mixer.everyStemDisabled state then
+                    if renderStartingFor state.songId model || Mixer.everyStemDisabled state then
                         -- Both halves of `Mixer.renderBlock`, because the model
                         -- does not rely on a button being disabled. The first
                         -- is the one that costs something: `POST /api/renders`
@@ -969,6 +1034,11 @@ update msg model =
                         -- which returns the job already in flight — so a second
                         -- click inside one round trip is a second half-hour
                         -- render queued behind the first on the one worker.
+                        --
+                        -- Asked of *this* song: a render in flight for another
+                        -- one is not a reason to refuse this one, and refusing
+                        -- it was how a POST on song A silently disabled song
+                        -- B's button.
                         ( model, Cmd.none )
 
                     else
@@ -976,7 +1046,11 @@ update msg model =
                             ( request, issued ) =
                                 issue model
                         in
-                        ( { issued | startingRender = Just request, renderError = Nothing }
+                        ( { issued
+                            | startingRender =
+                                Just { request = request, songId = state.songId }
+                            , renderError = Nothing
+                          }
                           -- `Mixer.renderConfig`, which is `Config.encode` and
                           -- nothing else — the same encoder every preview
                           -- carries, so the mix that comes out is the one you
@@ -989,40 +1063,19 @@ update msg model =
                         )
 
         RenderStarted request result ->
-            if model.startingRender /= Just request then
-                -- A POST we have since abandoned or already answered. Nothing
-                -- issues a second one while the first is in flight, so this is
-                -- belt and braces rather than a state anyone should reach.
-                ( model, Cmd.none )
+            case model.startingRender of
+                Nothing ->
+                    ( model, Cmd.none )
 
-            else
-                case result of
-                    Ok _ ->
-                        -- Straight to the renders screen, where the row and its
-                        -- job are already visible: `start_render` writes the
-                        -- render row before it returns, so the fetch this opens
-                        -- with cannot miss it.
-                        --
-                        -- The job in the response is not written into
-                        -- `renderJobs` here. `openRenders` re-fetches both
-                        -- lists in the order that keeps them consistent, and a
-                        -- job inserted beside that would be a second source for
-                        -- the same row.
-                        openRenders { model | startingRender = Nothing }
+                Just pending ->
+                    if pending.request /= request then
+                        -- A POST superseded by a later one, or already
+                        -- answered. Adopting it would move a screen on behalf
+                        -- of a press this model no longer remembers.
+                        ( model, Cmd.none )
 
-                    Err err ->
-                        -- Stays on the mixer, which is where the button was and
-                        -- where `renderError` is rendered. If the user has left
-                        -- it in the round trip this took, `leaveMixer` has
-                        -- already cleared the field and the message is lost —
-                        -- the alternative, keeping it, is a failure from a
-                        -- previous mixer session appearing under the next one.
-                        ( { model
-                            | startingRender = Nothing
-                            , renderError = Just (httpErrorToString err)
-                          }
-                        , Cmd.none
-                        )
+                    else
+                        renderAnswered pending result { model | startingRender = Nothing }
 
         OpenRenders ->
             openRenders model
@@ -1338,6 +1391,52 @@ unreadableEvent bad model =
                     , stopWatching model.watchedRender
                     ]
                 )
+
+
+{-| What `POST /api/renders` coming back means, for the song that asked.
+
+Both branches are conditional on that song still being the one on screen, and
+both conditions exist because the answer arrives at a model that has moved on
+from the one that sent it.
+
+**Success moves to the renders screen, but only if the render's own song is
+still open.** Leaving the mixer while a POST is in flight is not a reason to
+drop the navigation — the click asked for it, and closing the mixer is not
+closing the song — so this reads `selectedSongId` rather than the mixer. But
+opening a *different* song is: `openRenders` goes through `leaveMixer`, so a
+render started on song A would otherwise close song B's mixer and stop its
+preview, which is one song's action reaching into another's screen. Going back
+to the library counts as leaving too, and the render is on the renders screen
+whenever the user chooses to look.
+
+**A failure is written only where it can be read.** `renderError` is rendered by
+the mixer and by nothing else, so a write with no mixer open — or with a
+different song's mixer open — does not lose a message, it plants one: it sits in
+the model until the next mixer opens and then reports a failure about a song
+that is no longer on screen. `leaveMixer` clearing the field cannot prevent that
+on its own, because the write can land after the leave.
+
+The job in a successful response is deliberately not written into `renderJobs`
+here. `openRenders` re-fetches the renders and then the jobs, in that order and
+for that reason; a job inserted beside it would be a second source for the same
+row.
+-}
+renderAnswered : PendingRender -> Result Http.Error Api.Job -> Model -> ( Model, Cmd Msg )
+renderAnswered pending result model =
+    case result of
+        Ok _ ->
+            if model.selectedSongId == Just pending.songId then
+                openRenders model
+
+            else
+                ( model, Cmd.none )
+
+        Err err ->
+            if mixerOpenFor pending.songId model then
+                ( { model | renderError = Just (httpErrorToString err) }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
 
 
 {-| Open the renders screen, from the nav strip or from a render just started.
@@ -1903,7 +2002,7 @@ mixerView model state =
                     , preview = model.preview
                     , previewError = model.previewError
                     , loopSeconds = model.loopSeconds
-                    , startingRender = model.startingRender /= Nothing
+                    , startingRender = renderStartingFor song.id model
                     , renderError = model.renderError
                     , onBack = CloseMixer
                     , onProgress = ProgressChanged

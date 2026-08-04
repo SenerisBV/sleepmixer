@@ -21,8 +21,10 @@ carries which screen is showing (derived from `selectedSongId`, `mixer`,
 `renders = Nothing` and `queue = Nothing` *are* "that screen is closed", which
 is also what stops the queue's poll), the state of a library fetch, the song
 currently open, its peaks and loop region, the config schema, any in-flight
-separation job, any in-flight render POST (by request id, so a response that
-arrives after the button has been abandoned is recognised rather than adopted),
+separation job, any in-flight render POST (by request id *and song*, exactly as
+`Separation.Starting` carries both — the id so a superseded answer is recognised
+rather than adopted, the song so a render started on one does not grey out
+another's button or close another's mixer when it answers),
 and — while the mixer is open — the mixer's own state beside
 the preview state machine. `update` is a
 plain `Msg -> Model -> ( Model, Cmd Msg )`; every HTTP call sleepmix makes
@@ -271,7 +273,9 @@ elm-test
   assert the model half of `update` and leave the command half to the pure
   helpers above, which is what those helpers were extracted for.
 - `SongTest.elm` — `Page.Song.needsForce` across all five `SeparationStatus`
-  values and `buttonLabel` for the same, busy and idle.
+  values and `buttonLabel` for the same, busy and idle; plus the long-source
+  warning asserted against the rendered screen, since a `Warn.forSource` that is
+  perfect and never called is a warning nobody sees.
 - `LibraryTest.elm` — `Page.Library`, including `summary`'s three states.
 - `WaveformTest.elm` — `Waveform.barFor`, the peak-to-pixel geometry, and
   `Waveform.regionBox`, the seconds-to-pixel geometry of the loop region.
@@ -289,7 +293,11 @@ elm-test
   every door out of the mixer stopping the audio — and the Render button: what
   its pre-flight line says, when it refuses to be pressed, and that a second
   press inside one round trip issues nothing, since `POST /api/renders` submits
-  unconditionally where `separate_song` returns the job already in flight.
+  unconditionally where `separate_song` returns the job already in flight. It
+  also asserts that a render in flight belongs to the song that asked for it —
+  another song's button is not greyed out by it, and its answer neither closes
+  that song's mixer nor reports its failure there — and, in "the panel as it
+  renders", that the screen actually calls the functions above.
 - `WarnTest.elm` — `Warn.forSource`, the one sentence shown before a long job
   starts. Every case asserts the sentence carries *this* file's length and the
   single-worker constraint, so a fixed string would fail: the whole reason the
@@ -315,8 +323,24 @@ elm-test
   what it said until `RendersTest` and `QueueTest` were inserted between it and
   its referents.)
 
-No view is tested by `elm-test` — but one thing about the views is tested from
-the *Python* side, and it exists because of a real failure: see
+**Almost no view is tested by `elm-test`, and the render panel is the exception
+that establishes the pattern.** Everything else here tests functions that
+decide; nothing asserted they were *called*, and the gap is not hypothetical —
+deleting `longSourceWarning config.song.durationS` from either screen, or
+`disabled (blocked /= Nothing)` from the Render button, or rewiring `onRender`
+to some other `Msg`, each left the whole suite green with the behaviour gone.
+`MixerTest`'s "the panel as it renders" and `SongTest`'s "the long-source
+warning, as the screen renders it" close that for this task's surface, using
+`Test.Html.Query`, `Test.Html.Selector` and `Test.Html.Event` — all three ship
+with `elm-explorations/test`, which is already a declared dependency, so this
+adds no package. Both query `Main.view` rather than a page's `view` called with
+a record written in the test, because a hand-built config proves the markup and
+says nothing about whether `Main` wired the message to it — and any `Msg`
+compiles there. **The pattern now exists; later work should follow it rather
+than retrofitting everything at once.**
+
+One thing about the views is tested from the *Python* side as well, and it
+exists because of a real failure: see
 `tests/test_static_bundle.py::test_every_class_the_views_emit_has_a_rule_on_the_page`.
 `sleepmix/static/index.html` was written for the health-check page in Plan 3a's
 first task and never grew as later tasks added markup, so eleven of the

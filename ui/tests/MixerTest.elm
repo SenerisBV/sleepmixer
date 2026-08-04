@@ -26,6 +26,9 @@ import Page.Mixer as Mixer
 import Page.Renders as Renders
 import Preview
 import Test exposing (Test, describe, test)
+import Test.Html.Event as Event
+import Test.Html.Query as Query
+import Test.Html.Selector as Selector
 
 
 song : Api.Song
@@ -169,11 +172,62 @@ would make these tests depend on how many requests happened to precede them.
 answered : Result Http.Error Api.Job -> Main.Model -> Main.Model
 answered result model =
     case model.startingRender of
-        Just request ->
-            step (Main.RenderStarted request result) model
+        Just pending ->
+            step (Main.RenderStarted pending.request result) model
 
         Nothing ->
             model
+
+
+{-| A second song, to open in front of the first one's render.
+-}
+songB : Api.Song
+songB =
+    { song | id = "song-2", title = "B" }
+
+
+{-| A song, opened the way opening a song actually happens: select it, let its
+detail land, open the mixer on it.
+
+Driven through `update` rather than assembled by hand, because the bug these
+exist for is about state one screen leaves behind for the next and a
+hand-built model is exactly where that would be papered over.
+-}
+openSong : Api.Song -> Main.Model -> Main.Model
+openSong s model =
+    let
+        selected =
+            step (Main.SelectedSong s.id) model
+    in
+    selected
+        |> step (Main.GotSongDetail selected.songRequest (Ok s))
+        |> step Main.OpenMixer
+
+
+{-| The seventy-minute file, which is the one the warning exists for.
+-}
+longSong : Api.Song
+longSong =
+    { song | durationS = 4188 }
+
+
+longWarm : Main.Model
+longWarm =
+    onSong longSong
+        |> step Main.OpenMixer
+        |> step (Main.PreviewPlaying (Just 12.5))
+
+
+{-| The whole application as it would render, not a hand-built view config.
+
+Through `Main.view` deliberately. A `Page.Mixer.view` called directly with a
+record written here would prove the panel's markup and nothing about whether
+`Main` wires `onRender` to `RenderClicked` — and any other `Msg` compiles
+there.
+-}
+screen : Main.Model -> Query.Single Main.Msg
+screen model =
+    Query.fromHtml (Main.view model)
 
 
 suite : Test
@@ -789,6 +843,143 @@ suite =
                             |> step Main.CloseMixer
                             |> .renderError
                             |> Expect.equal Nothing
+                ]
+            , describe "a render in flight belongs to the song that asked for it"
+                -- Every one of these was reachable while `startingRender` was a
+                -- bare request id: a POST on song A was a fact about the
+                -- application rather than about A, so every consequence landed
+                -- on whichever song was open when the answer came back.
+                [ test "another song's Render button is not waiting on it" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> openSong songB
+                            |> Main.renderStartingFor songB.id
+                            |> Expect.equal False
+                , test "and the song that asked still is" <|
+                    \_ ->
+                        -- The control for the assertion above: same model, same
+                        -- question, a different song.
+                        warm
+                            |> step Main.RenderClicked
+                            |> openSong songB
+                            |> Main.renderStartingFor song.id
+                            |> Expect.equal True
+                , test "so that other song can start a render of its own" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> openSong songB
+                            |> step Main.RenderClicked
+                            |> .startingRender
+                            |> Maybe.map .songId
+                            |> Expect.equal (Just songB.id)
+                , test "the answer does not close a different song's mixer" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> openSong songB
+                            |> answered (Ok startedJob)
+                            |> Expect.all
+                                [ \m -> Expect.notEqual Nothing m.mixer
+                                , \m -> Expect.equal Nothing m.renders
+                                , \m -> Expect.equal "Warming" (phase m.preview)
+                                ]
+                , test "nor reports its failure on that mixer" <|
+                    \_ ->
+                        warm
+                            |> step Main.RenderClicked
+                            |> openSong songB
+                            |> answered (Err (Http.BadStatus 500))
+                            |> .renderError
+                            |> Expect.equal Nothing
+                , test "a failure with no mixer open is not written at all" <|
+                    \_ ->
+                        -- Asserted at the moment of the write rather than after
+                        -- the next screen opens, because `OpenMixer` also
+                        -- clears the field and would mask this. The guard at
+                        -- the write is what makes the message impossible to
+                        -- misplace; the clear on entry is only belt and braces.
+                        warm
+                            |> step Main.RenderClicked
+                            |> step Main.BackToLibrary
+                            |> answered (Err (Http.BadStatus 500))
+                            |> .renderError
+                            |> Expect.equal Nothing
+                , test "so no later mixer inherits it" <|
+                    \_ ->
+                        -- The reported bug, end to end: press Render, walk back
+                        -- to the library, let a 500 arrive, open a different
+                        -- song's mixer. It used to greet you with "the server
+                        -- answered 500" about a song you had left.
+                        warm
+                            |> step Main.RenderClicked
+                            |> step Main.BackToLibrary
+                            |> answered (Err (Http.BadStatus 500))
+                            |> openSong songB
+                            |> .renderError
+                            |> Expect.equal Nothing
+                , test "but leaving only the mixer still lands the success on renders" <|
+                    \_ ->
+                        -- The half that must survive the fix: closing the mixer
+                        -- is not leaving the song, and the click asked to go to
+                        -- the renders screen.
+                        warm
+                            |> step Main.RenderClicked
+                            |> step Main.CloseMixer
+                            |> answered (Ok startedJob)
+                            |> .renders
+                            |> Expect.equal (Just Renders.Loading)
+                ]
+            , describe "the panel as it renders"
+                -- Everything above tests functions that decide. These test that
+                -- the screen calls them: delete the call and the decision is
+                -- still perfect and still invisible, which is the shape of the
+                -- failure this project already shipped once with
+                -- `.progress-fill`.
+                [ test "the pre-flight line is on the screen" <|
+                    \_ ->
+                        warm
+                            |> screen
+                            |> Query.find [ Selector.class "render-start" ]
+                            |> Query.has [ Selector.text "20 min mix" ]
+                , test "a long source puts the warning on it" <|
+                    \_ ->
+                        longWarm
+                            |> screen
+                            |> Query.find [ Selector.class "warn" ]
+                            |> Query.has [ Selector.text "roughly 70 minutes" ]
+                , test "and an ordinary one does not" <|
+                    \_ ->
+                        warm
+                            |> screen
+                            |> Query.findAll [ Selector.class "warn" ]
+                            |> Query.count (Expect.equal 0)
+                , test "the button is live when there is something to render" <|
+                    \_ ->
+                        warm
+                            |> screen
+                            |> Query.find [ Selector.class "render-go" ]
+                            |> Query.has [ Selector.disabled False ]
+                , test "and disabled when there is not" <|
+                    \_ ->
+                        everyStemOff
+                            |> screen
+                            |> Query.find [ Selector.class "render-go" ]
+                            |> Query.has [ Selector.disabled True ]
+                , test "and says why, under it" <|
+                    \_ ->
+                        everyStemOff
+                            |> screen
+                            |> Query.find [ Selector.class "render-start" ]
+                            |> Query.has [ Selector.text "nothing to render" ]
+                , test "clicking it asks Main for a render" <|
+                    \_ ->
+                        warm
+                            |> screen
+                            |> Query.find [ Selector.class "render-go" ]
+                            |> Event.simulate Event.click
+                            |> Event.expect Main.RenderClicked
                 ]
             , describe "an answer nobody is waiting for"
                 [ test "does not open the renders screen" <|

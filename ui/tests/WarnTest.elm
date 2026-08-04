@@ -60,14 +60,16 @@ suite =
             -- magnitude, not a measurement, and a ceiling here would call a
             -- 15-minute-and-one-second file sixteen minutes.
             \_ -> messageFor 901 (contains "15")
-        , test "a track over the threshold warns" <|
+        , test "a track over the threshold warns, and names its length" <|
+            -- The real file. The plan's own version of this test also asserted
+            -- the message contained "one" or "1 ", which is vacuous: "one
+            -- worker" is in the fixed half of every sentence this can return,
+            -- so that half passed against any implementation at all. The
+            -- single-worker claim is checked properly below, against a
+            -- different length, where a stub would have to say it too.
             \_ ->
                 messageFor 4188
-                    (Expect.all
-                        [ \m -> Expect.equal True (String.contains "69" m || String.contains "70" m)
-                        , \m -> Expect.equal True (String.contains "one" m || String.contains "1 " m)
-                        ]
-                    )
+                    (\m -> Expect.equal True (String.contains "69" m || String.contains "70" m))
         , describe "what the sentence has to carry"
             -- Both halves, because a warning that says only "this is long" does
             -- not explain why it matters, and one that says only "there is one
