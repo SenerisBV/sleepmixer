@@ -194,28 +194,89 @@ fixing in the branch that found it. Plan 1 (`feat/core-hooks`) items are
 listed first, followed by Plan 2a (`feat/server-foundation`) items, followed
 by Plan 2b (`feat/interactive-server`) items found during this plan's review.
 
-- **A preview does not account for the sound bed, and it is the most
-  important gap left in the level-matching this plan otherwise fixed.**
-  `preview.master_gain` measures its one calibration window with
-  `preview.render_window(session, 0.0, reverb=True, master=False)`, which sums
-  only the configured stems — it never calls `soundbed.build_soundbed`. But
-  `pipeline.run_pipeline` adds the sound bed to the mix *before*
-  `normalize_peak` runs, so when `config.soundbed.enabled` is `True` the real
-  render's peak includes noise and binaural tones a preview's calibration
-  never saw. The real peak can then be higher than `master_gain` predicted, so
-  a preview would once again sit above the render it represents — the exact
-  defect `docs/architecture.md`'s "Matching a preview's loudness to the
-  render" describes fixing, reappearing for a different reason.
-  `SoundbedConfig.enabled` defaults to `False`, so this is latent rather than
-  live in the default configuration, but it is not fixed: enabling the sound
-  bed and previewing is enough to trigger it today.
+- **Four things contribute to a render's final peak that `master_gain`'s
+  calibration window never sees.** `preview.master_gain` measures one window,
+  `render_window(session, 0.0, reverb=<the flag>, master=False)`, and derives
+  a gain from its peak. `pipeline.run_pipeline` peak-normalizes something
+  rather different, and each difference moves a preview off the render's
+  level. Listed by measured magnitude, largest first. All four were measured
+  the same way: RMS of a mid-arc mastered preview over the corresponding
+  crossfade-free region of a real `run_pipeline` output, default config,
+  changing one thing at a time. The baseline — default reverb, `reverb=True`,
+  fades off — is **1.0003, +0.00 dB**, and is what `tests/test_preview.py`'s
+  `test_a_mastered_preview_sits_at_the_render_s_level` now asserts.
 
-- **`server/jobs.py`'s `_jobs` and `_subscribers` dictionaries are never
-  evicted.** Every job ever submitted — every separation, every render —
-  stays in `JobManager._jobs` for the life of the process, and every job id
-  gets a permanent (if eventually empty) entry in `_subscribers`. Fine for a
-  session-length local tool that gets restarted often; it becomes a slow
-  memory leak for a server left running for days.
+  1. **`_apply_fades` runs before `normalize_peak`, and `fade_in_s` defaults
+     to 8 s.** This is by far the largest of the four and was never recorded
+     until now. The fade attenuates precisely the region iteration 0
+     occupies — the window `master_gain` calibrates against — so the render's
+     own loudest moment is somewhere after the fade-in completes, not at the
+     start. Measured with the default fades: **0.8107, −1.82 dB**. That is
+     thirty-five times the sound bed's contribution, in the direction that
+     matters (a preview reading quieter than it should, so *more* decayed).
+     It also means **"the first iteration is the loudest" is an over-claim**:
+     true of `render_window`'s output, which has no fades, and false of the
+     render, which does.
+  2. **The inter-iteration `equal_power_crossfade` can sum above a single
+     iteration's peak.** Two consecutive decayed iterations overlap for
+     `cycle_crossfade_ms`, and their sum in that region can exceed either
+     one alone, so `normalize_peak` pulls the whole render slightly further
+     down than a one-window calibration predicts. Measured on the dry path
+     (`reverb.wet = 0.0`, `reverb=False`): **1.0431, +0.37 dB**, which drops
+     to 0.9995 with `cycle_crossfade_ms = 0.0` and nothing else changed —
+     so the residual is entirely this. With default reverb it is masked to
+     about 0.01 dB, because reverb smears the peak either way.
+  3. **`output.sample_rate` is absent from `RenderSession._master_key`,**
+     although `run_pipeline` resamples before normalizing. The magnitude is
+     small (~0.01 dB at 22050 → 44100 on the test signal), but the *cache*
+     consequence is unconditional: changing the output rate does not
+     invalidate the memoized gain at all, so a session keeps serving a factor
+     measured at the old rate until something else happens to clear it.
+  4. **The sound bed is never mixed into the calibration window.**
+     `render_window` sums only the configured stems and never calls
+     `soundbed.build_soundbed`, while `run_pipeline` adds the bed before
+     normalizing. This was previously recorded here as "the most important
+     gap left in the level-matching" — measurement says otherwise, and by a
+     wide margin. At the default `noise_gain_db = -34` it moves the ratio to
+     **1.0031, +0.03 dB**; even at `-6 dB` it only reaches **0.9947,
+     −0.05 dB**. The reason it stays inaudible is that `normalize_peak`
+     scales the stems down by very nearly the same factor the bed pushed the
+     peak up, so the two mostly cancel. `SoundbedConfig.enabled` defaults to
+     `False` in any case.
+
+  None of the four is fixed. They are recorded because the sizes are
+  counter-intuitive: the one that was written down was the smallest, and the
+  largest was not written down at all.
+
+- **Nothing is ever reclaimed, and the one that matters is on disk.** Ranked
+  by how much it actually costs:
+
+  **Render output files accumulate forever.** Every completed render writes a
+  WAV under the app-data directory and the row keeps pointing at it. There is
+  no `DELETE /api/renders/{id}`, no pruning, no size cap and no retention
+  policy — the only way to reclaim the space is to delete the files by hand
+  and leave the rows dangling (which then 404 on download, the same as a moved
+  source file). At the default 20-minute duration, 44.1 kHz stereo float32,
+  that is roughly **300 MB per render**. A UI whose whole purpose is to make
+  rendering easy to trigger will produce these in quantity; a handful of
+  afternoons of tuning is tens of gigabytes. This is the resource problem on
+  this branch, and it is several orders of magnitude larger than the two
+  below.
+
+  **`JobManager._jobs`, `_tokens` and `_subscribers` are never evicted.** Every
+  job ever submitted — every separation, every render — stays in `_jobs` for
+  the life of the process, keeps its `CancelToken` in `_tokens`, and holds a
+  permanent (if eventually empty) list in `_subscribers`. Kilobytes, not
+  megabytes: fine for a session-length local tool that gets restarted often, a
+  slow leak for a server left running for days. `_tokens` was omitted from
+  this entry when it was first written; it grows in exact lockstep with the
+  other two.
+
+  **`SessionRegistry._use_locks` is only cleared in `clear()`.** One `RLock`
+  per song id ever previewed, deliberately kept past eviction so a thread
+  holding one cannot have it swapped out from under it. A few dozen bytes
+  each, bounded by distinct songs previewed in a process — the smallest of the
+  three, and noted only so it is not mistaken for an oversight.
 
 - **A `BaseException` escaping a job leaves it stuck at `"running"` forever.**
   `JobManager._run` catches `Cancelled` and `Exception`, but a `SystemExit` or
@@ -223,9 +284,6 @@ by Plan 2b (`feat/interactive-server`) items found during this plan's review.
   and nothing in `_run` would ever set a terminal status — the job's row (and
   any render or song row it was updating) is left reporting `"running"`
   indefinitely, and the SSE stream watching it never closes.
-
-- **`server/jobs.py` imports `field` from `dataclasses` and never uses it.**
-  `Job`'s fields all take plain defaults; none needs `field(default_factory=…)`.
 
 - **No test exercises SSE client-disconnect cleanup, and the heartbeat branch
   is untested.** `server/api/jobs.py`'s `stream_job` unsubscribes in a
@@ -248,9 +306,11 @@ by Plan 2b (`feat/interactive-server`) items found during this plan's review.
   discards.** `create_preset` calls `MixConfig.from_dict(body.config)` purely
   so a bad config raises `ValueError` (turned into a 400) before anything is
   stored — the returned `MixConfig` is never used; the raw dict is what gets
-  saved. That makes the validation a side effect of a call that looks like
+  saved. That made the validation a side effect of a call that looked like
   dead code, one `# unused` cleanup away from being deleted along with the 400
-  path it provides. Separately: `start_render` *does* independently reconstruct
+  path it provides; it is now bound to `_validated` with a comment saying so,
+  which is a speed bump rather than a fix. Separately: `start_render` *does*
+  independently reconstruct
   and validate a `MixConfig` from whatever config it's given, preset or not, so
   a preset is never actually used unvalidated — but nothing prevents an
   invalid preset from being *saved* in the first place except that same
@@ -369,16 +429,41 @@ by Plan 2b (`feat/interactive-server`) items found during this plan's review.
   safe, and it does not exist** — `--allow-remote` is an informed-consent
   switch, not a mitigation.
 
-- **DNS rebinding is not mitigated, deliberately.** Binding loopback stops
-  other machines from connecting; it does not stop a web page the operator
-  visits from rebinding its own hostname to `127.0.0.1`, at which point the
-  page is same-origin with the API and can drive it — import a path, read the
-  waveform back. `TrustedHostMiddleware` with a `Host` allow-list is the cheap
-  mitigation, but it needs care rather than a one-liner: FastAPI's
-  `TestClient` sends `Host: testserver`, so a naive allow-list of
-  `127.0.0.1`/`localhost` fails every request in the suite at once. Deferred
-  for that reason, not overlooked. Whoever adds it must allow the test host
-  (or make the allow-list injectable) in the same change.
+- **DNS rebinding is now mitigated by a `Host` allow-list.** Binding loopback
+  stops other machines from connecting; it does not stop a web page the
+  operator visits from rebinding its own hostname to `127.0.0.1`, at which
+  point the page is same-origin with the API and can drive it. That mattered
+  more than the earlier note here suggested: it described the consequence as
+  "import a path, read the waveform back", which was written when the surface
+  was read-only. A rebound page can now also `POST /api/renders` — minutes of
+  CPU and a ~300 MB file per twenty-minute request, with no rate limit, no
+  quota and no `DELETE` endpoint to undo it.
+
+  `server/app.py`'s `_HostAllowList` rejects any request whose `Host` is not
+  on the list with a 400, before any route runs. Rebinding needs DNS, so such
+  a request always carries the attacker's *hostname*; that header is the one
+  thing that distinguishes it from a genuine local request. The list is a
+  `create_app(allowed_hosts=...)` parameter defaulting to `localhost`,
+  `127.0.0.1`, `::1` and `testserver` — the last being the `Host` FastAPI's
+  `TestClient` sends, which was the whole reason this was previously deferred.
+  `cli.py` appends the bound host, so `--allow-remote --host 192.168.1.5`
+  still answers to itself; a wildcard bind (`0.0.0.0`, `::`, `""`) passes
+  `["*"]`, because it cannot enumerate the names it is reachable by, and that
+  path is already explicit informed consent.
+
+  It is written here rather than using Starlette's `TrustedHostMiddleware`,
+  which was the obvious choice and does not work: that middleware extracts the
+  host as `header.split(":")[0]`, which yields `"["` for `[::1]:8765` and `""`
+  for a bare `::1`. An IPv6 literal therefore cannot be allow-listed there in
+  any spelling, and `sleepmix ui --host ::1` — supported, tested, and opening
+  `http://[::1]:8765/` in the browser — would have 400'd every request from
+  the operator's own machine. `_host_without_port` handles the bracketed form;
+  `tests/test_server_app.py` covers each shape.
+
+  This is host filtering, not authentication. It stops a rebound page; it does
+  nothing about anyone who can already reach the port and send a correct
+  `Host`. The path allow-list noted above is still the thing that would make a
+  non-loopback bind genuinely safe, and still does not exist.
 
 - **`cli.py`'s `ui` command only guards the `uvicorn` import.** The
   `try/except ImportError` around `import uvicorn` does not extend to the

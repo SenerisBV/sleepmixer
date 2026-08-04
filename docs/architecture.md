@@ -150,10 +150,13 @@ for why that trade was made deliberately.
   `LoopConfig` (set by a UI when a user drags loop handles on a waveform)
   short-circuits detection entirely.
 
-- **`cli.py`** — the `sleepmix render` / `sleepmix init-config` commands.
-  `render` wires a `ProgressReporter` through `progress.echo_sink` so the
-  terminal output is unchanged even though the pipeline now emits structured
-  events instead of plain strings.
+- **`cli.py`** — the `sleepmix render` / `sleepmix init-config` / `sleepmix ui`
+  commands. `render` wires a `ProgressReporter` through `progress.echo_sink` so
+  the terminal output is unchanged even though the pipeline now emits
+  structured events instead of plain strings. `ui` starts the local server: it
+  refuses a non-loopback `--host` without `--allow-remote`, imports `uvicorn`
+  and `server.app` lazily so the optional extra stays optional, and passes the
+  bound host into `create_app(allowed_hosts=...)`.
 
 ## Graceful degradation
 
@@ -295,18 +298,37 @@ uniformly to every window rather than normalizing each one on its own. It can,
 because decay only removes energy — spectral holes, dropouts, amplitude fade,
 and a rising noise floor all pull a stem's level down or leave it unchanged,
 never up — so the peak across the whole arc falls monotonically, and the
-loudest point is always iteration 0 (`progress=0.0`), where `apply_decay` is a
-pure passthrough that no decay setting can move. `master_gain` renders exactly
-that one window (`render_window(session, 0.0, reverb=True, master=False)`),
-measures its peak, and computes the ratio to `db_to_amp(config.output.peak_db)`
-— the same target `normalize_peak` aims for on a real render. That single
-factor, memoized on the session (`RenderSession.master_gain`), is what
+loudest window `render_window` can produce is always iteration 0
+(`progress=0.0`), where `apply_decay` is a pure passthrough that no decay
+setting can move. (Note the careful phrasing: iteration 0 is the loudest
+*window*, and it is **not** the render's loudest moment. `_apply_fades` runs
+before `normalize_peak` and `fade_in_s` defaults to 8 s, so the render's peak
+lands after the fade-in completes. See the four-part level-matching entry in
+`docs/project-state.md`; this is the largest of the remaining gaps, measured at
+−1.82 dB.) `master_gain` renders exactly that one window
+(`render_window(session, 0.0, reverb=<flag>, master=False)`), measures its
+peak, and computes the ratio to `db_to_amp(config.output.peak_db)` — the same
+target `normalize_peak` aims for on a real render. That single factor, memoized
+on the session (`RenderSession.master_gain`), is what
 `render_window(..., master=True)` (the default) applies to every subsequent
 preview regardless of where in the arc it sits. Applying one factor everywhere
 rather than normalizing per window is what preserves the arc: later windows
 end up quieter because they genuinely contain less energy, not because each
 one was independently pushed back up to full scale, which would flatten the
 whole point of the decay.
+
+**The factor is calibrated per signal path, so `RenderSession.master_gain` is a
+dict keyed by the `reverb` flag rather than a single float.** Reverb changes
+the peak the calibration window measures, and a factor measured wet then
+applied to a `reverb=False` window mis-levels it — measured at the default
+reverb config, a dry mastered preview sat at 0.6922, −3.20 dB. That is the same
+defect this section describes fixing, pointing the other way: quieter reads as
+*more* decayed, so a dry solo would look further through the arc than it is.
+`render_window` passes its own `reverb` argument into `master_gain`, and
+`update_config` clears the whole dict exactly as it previously cleared the
+single value. A `reverb=True` mastered window is the level `run_pipeline` would
+produce; a `reverb=False` one is a level-matched view of the dry path, not a
+simulation of any render, since every real render applies reverb.
 
 `RenderSession._master_key` decides when the memoized factor is stale.
 Deliberately excluded: every stem's `decay` settings, `soundbed`, and `seed` —
@@ -328,19 +350,24 @@ which is where an independently-run spectral match had already put it (4:55).
 Before the fix, the two methods disagreed by over four minutes on a
 twenty-five-minute mix; after it, they agree to within ten seconds.
 
-This does not close every gap of the same shape. `master_gain` is measured
-from `render_window`, which never mixes the sound bed in at all — but
-`run_pipeline` adds the sound bed to the mix *before* peak-normalizing. With
-`config.soundbed.enabled = True`, the real render's peak can be higher than
-what `master_gain` predicted from stems alone, so a preview would again sit
-above the render, for the identical underlying reason: something contributes
-to the render's final peak that the calibration window never saw. The sound
-bed defaults to off, so this is latent rather than live today; it is recorded,
-not fixed, in `docs/project-state.md`.
+This does not close every gap of the same shape. Four things still contribute
+to a render's final peak that the calibration window never sees, and they are
+recorded — with measured magnitudes, in order of size — in
+`docs/project-state.md`. Briefly: the fade-in, which attenuates exactly the
+region iteration 0 occupies (−1.82 dB at the defaults, and the reason the
+render's loudest moment is not iteration 0); the inter-iteration crossfade,
+whose overlap can sum above a single iteration's peak (+0.37 dB on the dry
+path); `output.sample_rate`'s absence from `_master_key`, small in level but
+unconditional as a cache bug; and the sound bed, which `render_window` never
+mixes in (+0.03 dB at the default level, −0.05 dB even at −6 dB — the stems get
+scaled down by very nearly the factor the bed pushed the peak up, so it
+mostly cancels). The sound bed was previously described here and in
+`project-state.md` as the most important of these; measurement says it is the
+least, by roughly thirty-five times.
 
 ## Jobs, progress, and sessions
 
-Four design choices in `sleepmix/server/jobs.py`, `sessions.py`, and
+Five design choices in `sleepmix/server/jobs.py`, `sessions.py`, and
 `api/preview.py` look arbitrary in isolation and are not.
 
 **One worker, deliberately.** `JobManager` defaults to
@@ -392,6 +419,43 @@ holds more than `max_sessions`, evicts from the *other* end
 (`popitem(last=False)`) — the least-recently-used song, never the one just
 requested. Two is enough to A/B two songs at once without the process's
 memory growing without bound as someone works through a library.
+
+**A warm session needs a second lock, because the registry's own protects only
+the dictionary.** `SessionRegistry._lock` makes insert, LRU reorder and
+eviction atomic, and guarantees two callers asking for one song id get one
+object. It guarantees nothing beyond that — and specifically it is not held
+across any expensive work: `RenderSession.__init__` does nothing, `stems()` is
+lazy, and the first `prepared_loop` call that actually separates runs long
+after `get` returned. (The class docstring claimed the opposite for a while —
+that `get` "builds a new session while holding `self._lock`, so two concurrent
+requests for different songs serialize." That was false, and false in the most
+expensive possible way: it is exactly what would convince a reader the
+concurrency question was already handled.)
+
+It matters because `POST /api/preview` is a sync `def` route, so FastAPI runs
+it in AnyIO's threadpool — several overlapping previews of one song really are
+several threads on one `RenderSession`, which is precisely what a scrubber
+drag produces. Meanwhile `get` calls `update_config` on every request, and
+that clears `_prepared`. The interleaving: thread A is inside `prepared_loop`,
+has found the stem present, and is about to index `_prepared`; thread B's
+`update_config` clears it; A raises `KeyError` and the preview 500s. The
+silent variant is worse — A reads `session.config` under one config and renders
+against another's stretched loop, producing a window built from two configs
+with no error at all.
+
+`SessionRegistry.session_for(...)` is the fix: a context manager that holds a
+per-song `RLock` across the *whole* use — resolving the session, reading its
+config, and rendering — not just the lookup. `/api/preview` uses it; `get()`
+remains for callers that only need the object, such as `sessions.discard`.
+The locks are keyed by song id and dropped only in `clear()`, never on
+eviction: a thread can be holding one while another evicts the session, and
+releasing it there would hand the next arrival a fresh lock and no mutual
+exclusion at all. That costs a few dozen bytes per song and avoids reference
+counting. `tests/test_sessions.py` drives six threads at `render_window` with
+five different tempos and asserts each returned window's frame count matches
+the tempo that thread asked for — the frame count being a fingerprint of which
+config a window was actually built from, which is what makes the silent
+failure visible rather than merely improbable.
 
 **A preview returns raw WAV bytes because nothing about it should touch
 disk, and Elm cannot carry the bytes anyway.** `POST /api/preview` calls
@@ -472,8 +536,10 @@ shows a raw `ImportError` traceback instead of the same hint.
 **The store's schema (`server/store.py`) is three flat tables** — `songs`,
 `presets`, `renders` — behind stdlib `sqlite3`, no ORM. `songs` carries
 `path`, `title`, `duration_s`, `sample_rate`, `separation_status` /
-`separation_reason` (columns this plan adds for a later plan to populate —
-nothing sets them yet; see `docs/project-state.md`), and `stems`. `presets`
+`separation_reason` (both written by `POST /api/songs/{id}/separate` — see
+"Jobs, progress, and sessions"; the status moves `pending → running →
+done`/`fallback`/`failed`, and back to `pending` on a cancel, so a cancelled
+run does not leave the row claiming to be broken), and `stems`. `presets`
 and `renders` each carry a `config` column that stores a whole `MixConfig` as
 a JSON blob rather than exploding it into one column per field. This is
 deliberate: `MixConfig` already round-trips through `dataclasses.asdict` and
@@ -494,9 +560,10 @@ already exists, so the failure surfaces on the *next* access instead —
 `GET /api/songs/{id}/peaks` checks `os.path.isfile` itself and returns a 404
 with an explicit "it has moved or been deleted" message rather than letting
 `load_audio` raise something opaque. Nothing re-links or repairs the entry;
-the row just keeps 404ing on peaks (and will keep 404ing on preview and
-render once Plan 2b adds them) until the operator re-imports it or fixes the
-path by hand.
+the row just keeps 404ing until the operator re-imports it or fixes the path by
+hand. `GET /peaks`, `POST /api/preview` and `POST /api/renders` all now make
+the same `os.path.isfile` check and return the same message, so the failure
+reads identically wherever it is first hit.
 
 **The warm-up (`server/warmup.py`) exists because librosa's first call in a
 process is slow and every later call is fast.** librosa leans on numba, which
