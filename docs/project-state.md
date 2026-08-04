@@ -196,6 +196,33 @@ and each was verified by mutation. (6) Two route tests asserted only that two
 responses differed, which a 422 satisfies as well as two mixes do; they now
 assert the status too.
 
+**Four residuals the re-review left open**, none of them blocking, all worth
+knowing before you touch this area:
+
+- **`_ui_body` is hand-written, not derived from `Config.encode`.** It is
+  shaped exactly as the Elm encoder emits one today, and it does prove
+  `MixConfig.from_dict` reads a `stems` list — but nothing mechanically ties
+  the two. Rename a key in `Config.elm` and both suites stay green while the
+  real request 422s. The seam that produced the empty-plan defect is narrowed,
+  not closed; closing it needs a fixture generated from one side and consumed
+  by the other.
+- **`NothingToRender` reaches the CLI as a traceback, not a message.**
+  `cli.py` catches nothing, so `sleepmix render` with every stem off exits 1
+  with a Python stack and the reason legible at the bottom. A negative seed
+  already behaves this way, and no wrong audio is produced, so it is polish
+  rather than a defect. Note also that `_plan_jobs` refuses *after* separation,
+  because stem names do not exist before it — a CLI render with everything off
+  still pays for Demucs before being told no.
+- **A soundbed-only mix is now inexpressible.** Every stem off plus the bed on
+  is refused. It never worked before either — it played the full default mix
+  *plus* the bed — so this is not a regression, but the door is now explicitly
+  shut rather than accidentally ajar.
+- **The blocked send does not touch `model.preview`.** If a request is already
+  `Queued` when the last stem is unticked, that queued request still goes out
+  when the in-flight one returns, so what you hear can be one config-step newer
+  than "what you can still hear is the last preview" implies. Harmless — it is
+  a mix the user asked for a moment earlier — but the copy is imprecise.
+
 ## Plan 3a: what's built, and what it deliberately doesn't do yet
 
 `ui/src/Main.elm` is a compiled Elm application (`sleepmix/static/app.js`)
