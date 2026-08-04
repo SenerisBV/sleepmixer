@@ -41,13 +41,34 @@ def preview_iteration_index(session: RenderSession, progress: float) -> tuple[in
     return int(round(p * (n_iter - 1))), n_iter
 
 
+def master_gain(session: RenderSession) -> float:
+    """The gain ``run_pipeline``'s mastering stage will apply to this mix.
+
+    A preview is one window of a stream that gets peak-normalized as a whole.
+    Without this correction a preview plays about 4 dB above the render it
+    represents — and louder reads as *less decayed*, which corrupts exactly the
+    judgement a preview exists to support. Found by listening; no test caught it,
+    because the bit-identity check compares pre-reverb and pre-master.
+
+    One window is enough: decay only removes energy, so the peak falls
+    monotonically across the arc and the first iteration is the loudest."""
+    if session.master_gain is None:
+        loudest = render_window(session, 0.0, reverb=True, master=False)
+        peak = float(np.abs(loudest.data).max())
+        target = db_to_amp(session.config.output.peak_db)
+        session.master_gain = float(target / peak) if peak > 1e-9 else 1.0
+    return session.master_gain
+
+
 def render_window(
     session: RenderSession,
     progress: float,
     stems: list[str] | None = None,
     reverb: bool = True,
+    master: bool = True,
 ) -> AudioBuffer:
-    """One loop iteration at ``progress``, summed over ``stems``.
+    """One loop iteration at ``progress``, summed over ``stems``, master-matched
+    to the render by default.
 
     ``stems`` defaults to every stem the batch renderer would process. Pass a
     subset to solo; names outside that set are ignored, because previewing a
@@ -56,7 +77,12 @@ def render_window(
     Each stem is decayed, reverbed with its own send, gained and channel-mapped
     in the same order as ``pipeline._process_stem`` — reverb is not linear
     across differing wet scales, so summing dry and reverbing once would not
-    match the render."""
+    match the render.
+
+    ``master=True`` (the default) applies the same single gain factor
+    ``run_pipeline`` would apply to the whole render, computed once via
+    ``master_gain`` and memoized on the session — see that function's
+    docstring for why a preview needs this at all."""
     cfg = session.config
     planned = plan_stem_configs(session.stem_names(), cfg)
     if stems is not None:
@@ -86,7 +112,12 @@ def render_window(
         sr = next(iter(available.values())).sr if available else cfg.output.sample_rate
         return silence(1, cfg.output.channels, sr)
 
-    return AudioBuffer(acc, sr)
+    out = AudioBuffer(acc, sr)
+    if master:
+        # One factor for every window, never per-window normalization: the arc
+        # survives only because later windows stay genuinely quieter.
+        out = AudioBuffer(out.data * master_gain(session), sr)
+    return out
 
 
 def _reverbed_window(

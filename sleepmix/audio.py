@@ -116,6 +116,22 @@ def normalize_peak(buf: AudioBuffer, peak_db: float = -1.0) -> AudioBuffer:
     return AudioBuffer(buf.data * (target / peak), buf.sr)
 
 
+def encode_wav(buf: AudioBuffer, subtype: str = "PCM_16") -> bytes:
+    """Encode ``buf`` as a WAV file in memory.
+
+    Previews are handed to the browser as bytes and never touch disk — writing
+    a temp file per slider drag would be both slower and a cleanup problem.
+    PCM_16 rather than PCM_24 because this is for listening, not archiving, and
+    it halves what crosses the wire."""
+    import io
+
+    import soundfile as sf
+
+    bio = io.BytesIO()
+    sf.write(bio, buf.data, buf.sr, subtype=subtype, format="WAV")
+    return bio.getvalue()
+
+
 def silence(n_frames: int, n_channels: int, sr: int) -> AudioBuffer:
     return AudioBuffer(np.zeros((n_frames, n_channels), dtype=np.float32), sr)
 

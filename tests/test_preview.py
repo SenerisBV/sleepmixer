@@ -35,7 +35,7 @@ def test_window_matches_decayed_iteration_pre_reverb(tmp_path, stub_separation):
     s.config.stems = [StemConfig(name=name)]
 
     progress = 0.7
-    out = render_window(s, progress, stems=[name], reverb=False)
+    out = render_window(s, progress, stems=[name], reverb=False, master=False)
     i, n = preview_iteration_index(s, progress)
     expected = decayed_iteration(
         s.prepared_loop(name), i, n, s.config.stems[0].decay, s.config.seed, name)
@@ -253,3 +253,78 @@ def test_reverb_send_is_applied_per_stem(tmp_path, stub_separation):
     s.config.stems[1].reverb_send = 0.0
     changed = render_window(s, 0.5, stems=names, reverb=True)
     assert not np.array_equal(base.data, changed.data)
+
+
+def test_a_mastered_preview_sits_at_the_render_s_level(tmp_path, stub_separation):
+    """Preview loudness must track the render's, not float above it.
+
+    This is the check that was missing. The bit-identity test compares
+    pre-master, so it passed while previews played ~4 dB hot — and because
+    louder reads as less decayed, tuning done in the UI was being done against
+    something that would never ship."""
+    from sleepmix.audio import load_audio
+    from sleepmix.disintegration import plan_iterations
+    from sleepmix.pipeline import run_pipeline
+
+    song = tmp_path / "s.wav"
+    _song(song)
+
+    cfg = MixConfig()
+    cfg.output.duration_min = 0.5
+    cfg.output.sample_rate = 22050      # match the source: no resample step
+    cfg.output.fade_in_s = 0.0
+    cfg.output.fade_out_s = 0.0
+    cfg.reverb.wet = 0.0                # compare the dry path only
+
+    out = tmp_path / "mix.wav"
+    run_pipeline(str(song), cfg, str(out))
+    rendered = load_audio(str(out))
+
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    name = session.stem_names()[0]
+    loop = session.prepared_loop(name)
+    target_frames = int(cfg.output.duration_min * 60 * loop.sr)
+    n_iter, xfade = plan_iterations(
+        loop.n_frames, target_frames, cfg.output.cycle_crossfade_ms, loop.sr)
+    stride = max(loop.n_frames - xfade, 1)
+
+    i = max(n_iter // 2, 1)
+    progress = i / max(n_iter - 1, 1)
+    lo, hi = i * stride + xfade, min((i + 1) * stride, target_frames)
+    assert hi > lo, "test setup produced no clean region"
+
+    window = render_window(session, progress, reverb=False)   # mastered
+    rendered_rms = float(np.sqrt(np.mean(rendered.data[lo:hi] ** 2)))
+    window_rms = float(np.sqrt(np.mean(window.data[xfade:xfade + (hi - lo)] ** 2)))
+
+    assert rendered_rms > 0
+    ratio = window_rms / rendered_rms
+    assert 0.85 < ratio < 1.15, f"preview is {20 * np.log10(ratio):+.1f} dB off the render"
+
+
+def test_master_gain_is_computed_once_per_config(tmp_path, stub_separation):
+    """It costs a window render, so it must not run on every preview."""
+    from sleepmix.preview import master_gain
+
+    s = _session(tmp_path, stub_separation)
+    first = master_gain(s)
+    assert s.master_gain == first
+    assert master_gain(s) is s.master_gain
+
+    changed = MixConfig()
+    changed.output.duration_min = 2.0
+    changed.tempo.speed = 0.5
+    s.update_config(changed)
+    assert s.master_gain is None, "a config change must invalidate the gain"
+
+
+def test_mastering_preserves_the_arc(tmp_path, stub_separation):
+    """One factor for all windows — not per-window normalization.
+
+    If each window were normalized to its own peak, every point in the decay
+    arc would come back equally loud and the whole effect would be inaudible in
+    preview."""
+    s = _session(tmp_path, stub_separation)
+    early = render_window(s, 0.0, reverb=False)
+    late = render_window(s, 1.0, reverb=False)
+    assert float(np.abs(late.data).max()) < float(np.abs(early.data).max())

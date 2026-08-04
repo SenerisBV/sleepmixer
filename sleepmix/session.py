@@ -63,6 +63,11 @@ class RenderSession:
         self._prepared: dict[str, AudioBuffer] = {}
         self._loop_key = self._key(config.loop)
         self._tempo_key = self._key(config.tempo)
+        # Filled in by preview.master_gain. It lives here rather than in
+        # preview.py because it is invalidated by exactly the config changes
+        # this class already tracks — and preview imports session, so session
+        # cannot import preview to own the computation itself.
+        self.master_gain: float | None = None
 
     # -- staged results -------------------------------------------------
     def stems(self) -> dict[str, AudioBuffer]:
@@ -93,6 +98,7 @@ class RenderSession:
     # -- invalidation ---------------------------------------------------
     def update_config(self, config: MixConfig) -> None:
         """Swap in a new config, discarding only the stages it invalidates."""
+        self.master_gain = None
         loop_key = self._key(config.loop)
         tempo_key = self._key(config.tempo)
         if loop_key != self._loop_key:

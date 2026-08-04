@@ -98,3 +98,17 @@ def test_plan_stem_configs_falls_back_only_when_nothing_matches():
     planned = plan_stem_configs(["mix"], MixConfig())
     assert [sc.name for sc in planned] == ["mix"]
     assert planned[0].enabled
+
+
+def test_from_dict_rejects_a_negative_seed():
+    """numpy's SeedSequence requires non-negative entropy; a negative seed
+    would raise deep inside the DSP with an unhelpful message."""
+    import pytest
+
+    with pytest.raises(ValueError, match="seed"):
+        MixConfig.from_dict({"seed": -1})
+
+
+def test_from_dict_accepts_zero_and_positive_seeds():
+    assert MixConfig.from_dict({"seed": 0}).seed == 0
+    assert MixConfig.from_dict({"seed": 7}).seed == 7

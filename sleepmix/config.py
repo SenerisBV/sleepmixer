@@ -198,7 +198,18 @@ class MixConfig:
     # -- (de)serialization ---------------------------------------------
     @classmethod
     def from_dict(cls, d: dict[str, Any] | None) -> "MixConfig":
-        return _build(cls, d or {})
+        config = _build(cls, d or {})
+        config.validate()
+        return config
+
+    def validate(self) -> None:
+        """Raise ``ValueError`` for values that would fail deep in the DSP.
+
+        ``seed`` feeds numpy's ``SeedSequence`` via ``util.iteration_rng``,
+        which requires non-negative entropy. Caught here because this is where
+        a config from a UI field first arrives."""
+        if int(self.seed) < 0:
+            raise ValueError(f"seed must be non-negative, got {self.seed}")
 
     @classmethod
     def from_yaml(cls, path: str) -> "MixConfig":
