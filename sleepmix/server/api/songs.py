@@ -129,6 +129,13 @@ def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
     sessions = request.app.state.sessions
 
     def work(reporter, cancel) -> dict:
+        # Set once the job actually starts, not before submitting it. A job
+        # cancelled while still queued never reaches this closure at all (the
+        # job manager stops it before calling in), so setting "running" here
+        # rather than in the route means a song whose separation was cancelled
+        # before it started is left exactly as it was — not stuck at
+        # "running" forever with nothing left to ever change it back.
+        store.update_song(song_id, separation_status="running", separation_reason=None)
         reporter.emit("separate", "Separating stems…", 0.0)
         try:
             # Before the invalidation, not after: a cancel that lands in this
@@ -161,6 +168,5 @@ def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
         reporter.emit("separate", "Done", 1.0)
         return {"status": status, "stems": sorted(result.stems)}
 
-    store.update_song(song_id, separation_status="running", separation_reason=None)
     job = request.app.state.jobs.submit("separate", work, song_id=song_id)
     return job.as_event()

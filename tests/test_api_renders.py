@@ -1,3 +1,5 @@
+import os
+import threading
 import time
 
 import numpy as np
@@ -34,6 +36,61 @@ def _await_job(client, job_id, timeout=60.0):
 
 _SHORT = {"output": {"duration_min": 0.05, "sample_rate": 22050,
                      "fade_in_s": 0.0, "fade_out_s": 0.0}}
+
+
+def _a_finished_render(client, tmp_path):
+    song = _import_song(client, tmp_path)
+    body = client.post("/api/renders",
+                       json={"song_id": song["id"], "config": _SHORT}).json()
+    job = _await_job(client, body["job"]["id"])
+    assert job["status"] == "done", job.get("error")
+    return client.get(f"/api/renders/{body['render']['id']}").json()
+
+
+def _a_running_render(client, tmp_path):
+    """Hold a render at status 'running' deterministically.
+
+    A real run_pipeline for even the shortest config still takes real wall
+    time, and waiting on that would make the test's outcome depend on how
+    fast this machine happens to be. Instead, patch run_pipeline to block on
+    an Event this helper controls, then poll the render's own status until it
+    actually reports 'running' — so the caller never has to guess a sleep
+    long enough to win the race.
+
+    The patch is bounded rather than held open forever: if nobody releases the
+    gate, it gives up after one second and, if by then the job's token has
+    been cancelled (as happens when the app's lifespan shuts the job manager
+    down at the end of the test), lets that cancellation through instead of
+    running the real pipeline after the test is already over.
+    """
+    import sleepmix.server.api.renders as renders_api
+
+    gate = threading.Event()
+    original = renders_api.run_pipeline
+
+    def blocked(*args, **kwargs):
+        if not gate.wait(timeout=1.0):
+            cancel = kwargs.get("cancel")
+            if cancel is not None and cancel.cancelled:
+                cancel.check()
+        return original(*args, **kwargs)
+
+    renders_api.run_pipeline = blocked
+    try:
+        song = _import_song(client, tmp_path)
+        body = client.post("/api/renders",
+                           json={"song_id": song["id"], "config": _SHORT}).json()
+        render_id = body["render"]["id"]
+
+        deadline = time.time() + 5.0
+        while time.time() < deadline:
+            render = client.get(f"/api/renders/{render_id}").json()
+            if render["status"] == "running":
+                return render
+            time.sleep(0.02)
+        raise AssertionError("render never reached status 'running'")
+    finally:
+        renders_api.run_pipeline = original
 
 
 def test_render_produces_a_downloadable_file(client, tmp_path):
@@ -157,3 +214,26 @@ def test_a_failure_after_cancellation_is_recorded_as_a_failure(client, tmp_path,
     render = client.get(f"/api/renders/{body['render']['id']}").json()
     assert finished["status"] == "failed"
     assert render["status"] == "failed", "the row must agree with the job"
+
+
+def test_deleting_a_render_removes_the_row_and_the_file(client, tmp_path):
+    render = _a_finished_render(client, tmp_path)
+    path = render["path"]
+    assert os.path.isfile(path)
+
+    assert client.delete(f"/api/renders/{render['id']}").status_code == 204
+    assert client.get(f"/api/renders/{render['id']}").status_code == 404
+    assert not os.path.exists(path)
+
+
+def test_deleting_an_unknown_render_is_a_404(client):
+    assert client.delete("/api/renders/nope").status_code == 404
+
+
+def test_a_render_that_is_still_running_cannot_be_deleted(client, tmp_path):
+    """Deleting the file out from under a running pipeline would leave the job
+    writing to a path nobody will look at, and the row it would update gone."""
+    render = _a_running_render(client, tmp_path)
+    response = client.delete(f"/api/renders/{render['id']}")
+    assert response.status_code == 409
+    assert "cancel" in response.json()["detail"].lower()

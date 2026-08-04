@@ -19,6 +19,7 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..progress import Cancelled, CancelToken, ProgressEvent, ProgressReporter
@@ -42,6 +43,7 @@ class Job:
     error: str | None = None
     result: dict | None = None
     song_id: str | None = None
+    created_at: str = ""
 
     def as_event(self) -> dict:
         return asdict(self)
@@ -51,7 +53,7 @@ class JobManager:
     """Runs jobs on a worker thread and fans progress out to subscribers."""
 
     def __init__(self, loop: asyncio.AbstractEventLoop | None = None,
-                 max_workers: int = 1) -> None:
+                 max_workers: int = 1, keep_terminal: int = 50) -> None:
         self._loop = loop
         self._pool = ThreadPoolExecutor(max_workers=max_workers,
                                         thread_name_prefix="sleepmix-job")
@@ -59,10 +61,12 @@ class JobManager:
         self._jobs: dict[str, Job] = {}
         self._tokens: dict[str, CancelToken] = {}
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
+        self._keep_terminal = keep_terminal
 
     # -- lifecycle ------------------------------------------------------
     def submit(self, kind: str, fn: JobFn, song_id: str | None = None) -> Job:
-        job = Job(id=uuid.uuid4().hex, kind=kind, song_id=song_id)
+        job = Job(id=uuid.uuid4().hex, kind=kind, song_id=song_id,
+                  created_at=datetime.now(timezone.utc).isoformat())
         token = CancelToken()
         with self._lock:
             self._jobs[job.id] = job
@@ -120,6 +124,13 @@ class JobManager:
 
     # -- internals ------------------------------------------------------
     def _run(self, job_id: str, fn: JobFn, token: CancelToken) -> None:
+        if token.cancelled:
+            # Cancelled while it was still sitting in the pool's queue. Without
+            # this it would start anyway and only stop at the work function's
+            # first check() — which for separation is the check that happens
+            # before Demucs, so the cancel was invisible.
+            self._update(job_id, status="cancelled", message="Cancelled")
+            return
         self._update(job_id, status="running")
         reporter = ProgressReporter(lambda event: self._on_event(job_id, event))
         try:
@@ -147,8 +158,25 @@ class JobManager:
                 setattr(job, key, value)
             snapshot = job.as_event()
             queues = list(self._subscribers.get(job_id, []))
+            if job.status in TERMINAL_STATUSES:
+                self._evict()
         for queue in queues:
             self._publish(queue, snapshot)
+
+    def _evict(self) -> None:
+        """Drop the oldest terminal jobs, keeping queued and running ones.
+
+        Called with the lock held. ``_jobs`` is insertion-ordered, and a job's
+        position never changes, so the oldest terminal job is the first one in
+        iteration order — no sorting needed. Live jobs are never dropped
+        however many there are: the queue screen's whole purpose is to say what
+        is about to happen, and a dropped queued job makes it lie."""
+        terminal = [jid for jid, j in self._jobs.items()
+                    if j.status in TERMINAL_STATUSES]
+        for jid in terminal[:max(0, len(terminal) - self._keep_terminal)]:
+            self._jobs.pop(jid, None)
+            self._tokens.pop(jid, None)
+            self._subscribers.pop(jid, None)
 
     def _publish(self, queue: asyncio.Queue, snapshot: dict) -> None:
         """Hand a snapshot to a queue owned by the event loop.

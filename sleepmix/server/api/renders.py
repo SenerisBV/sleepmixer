@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -131,3 +131,31 @@ def get_render_audio(render_id: str, request: Request) -> FileResponse:
             detail=f"No audio for this render (status: {render['status']})")
     return FileResponse(render["path"], media_type="audio/wav",
                         filename=f"{render_id}.wav")
+
+
+@router.delete("/{render_id}", status_code=204)
+def delete_render(render_id: str, request: Request) -> Response:
+    """Remove a render and its file.
+
+    Refused while the render is still being produced: the pipeline would go on
+    writing to a path nobody will look at, and the row it updates on completion
+    would be gone. Cancel the job first — that path already deletes the partial
+    file through ``_abandon``."""
+    store = request.app.state.store
+    render = store.get_render(render_id)
+    if render is None:
+        raise HTTPException(status_code=404, detail="No such render")
+    if render["status"] in ("queued", "running"):
+        raise HTTPException(
+            status_code=409,
+            detail="This render is still being produced — cancel it first.")
+    path = render["path"]
+    store.delete_render(render_id)
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        # The row is gone, which is what the caller asked for. A file we cannot
+        # remove is a disk problem, not a reason to resurrect the record.
+        pass
+    return Response(status_code=204)

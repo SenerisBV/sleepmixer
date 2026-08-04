@@ -1,10 +1,11 @@
 import asyncio
+import inspect
 import threading
 import time
 
 import pytest
 
-from sleepmix.server.jobs import JOB_STATUSES, JobManager
+from sleepmix.server.jobs import JOB_STATUSES, TERMINAL_STATUSES, JobManager
 
 
 @pytest.fixture
@@ -14,7 +15,25 @@ def manager():
     m.shutdown(wait=True)
 
 
-def _wait_for(manager, job_id, statuses, timeout=5.0):
+def _wait_for(predicate, timeout=5.0):
+    """Poll ``predicate`` every 20ms until true, or fail after ``timeout``.
+
+    The failure message names the predicate's own source rather than a generic
+    "timed out", so a hang reads as a diagnosis of what never happened rather
+    than just a timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return
+        time.sleep(0.02)
+    try:
+        desc = inspect.getsource(predicate).strip()
+    except (OSError, TypeError):
+        desc = repr(predicate)
+    raise AssertionError(f"condition never became true: {desc}")
+
+
+def _wait_for_status(manager, job_id, statuses, timeout=5.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         job = manager.get(job_id)
@@ -45,7 +64,7 @@ def test_a_submitted_job_runs_and_reports_its_result(manager):
     assert manager.get(job.id).status in ("queued", "running")
     release.set()
 
-    done = _wait_for(manager, job.id, ("done",))
+    done = _wait_for_status(manager, job.id, ("done",))
     assert done.result == {"answer": 42}
     assert done.fraction == 1.0
     assert done.error is None
@@ -67,7 +86,7 @@ def test_progress_events_update_the_job(manager):
     midway = _wait_for_fraction(manager, job.id, 0.5)
     assert midway.message == "half way"
     release.set()
-    done = _wait_for(manager, job.id, ("done",))
+    done = _wait_for_status(manager, job.id, ("done",))
     assert done.fraction == 1.0
 
 
@@ -76,7 +95,7 @@ def test_a_raising_job_is_failed_not_lost(manager):
         raise ValueError("boom")
 
     job = manager.submit("test", work)
-    failed = _wait_for(manager, job.id, ("failed",))
+    failed = _wait_for_status(manager, job.id, ("failed",))
     assert "boom" in failed.error
     assert failed.result is None
 
@@ -95,7 +114,7 @@ def test_cancelling_stops_the_work(manager):
     while not started:
         time.sleep(0.01)
     assert manager.cancel(job.id) is True
-    cancelled = _wait_for(manager, job.id, ("cancelled",))
+    cancelled = _wait_for_status(manager, job.id, ("cancelled",))
     assert cancelled.result is None
 
 
@@ -117,7 +136,7 @@ def test_jobs_run_one_at_a_time(manager):
 
     ids = [manager.submit("test", work).id for _ in range(3)]
     for job_id in ids:
-        _wait_for(manager, job_id, ("done",))
+        _wait_for_status(manager, job_id, ("done",))
     assert max(concurrent) == 1
 
 
@@ -184,3 +203,55 @@ def test_terminal_statuses_are_declared_and_partition_the_set():
 
     assert set(TERMINAL_STATUSES) <= set(JOB_STATUSES)
     assert set(JOB_STATUSES) - set(TERMINAL_STATUSES) == {"queued", "running"}
+
+
+def test_a_job_cancelled_before_it_starts_never_runs():
+    """It used to run anyway: _run flipped the status to 'running' and called
+    the work function without ever looking at the token."""
+    manager = JobManager(max_workers=1)
+    ran = []
+    gate = threading.Event()
+
+    def blocker(reporter, cancel):
+        gate.wait(timeout=5)
+        return {}
+
+    def second(reporter, cancel):
+        ran.append(True)
+        return {}
+
+    first = manager.submit("test", blocker)
+    queued = manager.submit("test", second)
+    assert manager.cancel(queued.id) is True
+    gate.set()
+    _wait_for(lambda: manager.get(queued.id).status in TERMINAL_STATUSES)
+
+    assert ran == [], "the work function ran for a job that was cancelled"
+    assert manager.get(queued.id).status == "cancelled"
+    manager.shutdown(wait=True)
+
+
+def test_terminal_jobs_are_evicted_but_live_ones_never_are():
+    manager = JobManager(max_workers=1, keep_terminal=3)
+    done = [manager.submit("test", lambda r, c: {}) for _ in range(6)]
+    for job in done:
+        # A job this old may already have finished *and* been evicted by the
+        # time we get here — these are near-instant no-ops on a single
+        # worker, so the pool can easily race ahead of this loop. Eviction
+        # only ever happens after a job goes terminal, so "gone" is as valid
+        # a wait-condition here as "terminal": either way it is no longer
+        # in flight.
+        _wait_for(lambda job=job: manager.get(job.id) is None
+                  or manager.get(job.id).status in TERMINAL_STATUSES)
+
+    remaining = [j.id for j in manager.list()]
+    assert len(remaining) == 3
+    assert remaining == [j.id for j in done[-3:]], "evicted the newest, not the oldest"
+    manager.shutdown(wait=True)
+
+
+def test_a_job_carries_when_it_was_created():
+    manager = JobManager(max_workers=1)
+    job = manager.submit("test", lambda r, c: {})
+    assert job.as_event()["created_at"]
+    manager.shutdown(wait=True)

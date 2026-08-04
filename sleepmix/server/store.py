@@ -240,6 +240,14 @@ class Store:
                 "SELECT * FROM renders ORDER BY created_at DESC, rowid DESC").fetchall()
             return [_render_from_row(r) for r in rows]
 
+    def delete_render(self, render_id: str) -> bool:
+        """True if there was a row to delete. The file is the caller's problem;
+        this object owns the database and nothing else."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM renders WHERE id = ?", (render_id,))
+            self._conn.commit()
+            return cur.rowcount > 0
+
     def update_render(self, render_id: str, **fields: Any) -> dict | None:
         with self._lock:
             unknown = set(fields) - _RENDER_COLUMNS

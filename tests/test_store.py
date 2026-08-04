@@ -232,3 +232,10 @@ def test_reconcile_resets_orphaned_separations(store):
 def test_reconcile_is_a_no_op_when_nothing_is_orphaned(store):
     store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
     assert store.reconcile_orphaned_separations() == 0
+
+
+def test_delete_render_reports_whether_there_was_one(store):
+    render = store.add_render(song_id="s", config={}, path="/tmp/x.wav", status="done")
+    assert store.delete_render(render["id"]) is True
+    assert store.get_render(render["id"]) is None
+    assert store.delete_render(render["id"]) is False
