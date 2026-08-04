@@ -9,6 +9,9 @@ into reverb-ghosts while the harmonic bed stays (almost) intact. That selective
 control is the whole point of doing it programmatically: you can't erode just the
 voice of a finished stereo master, but you can once it's been separated.
 
+*Not affiliated with, endorsed by, or connected to Sollos or any artist named
+here — they're cited as influences on the sound, nothing more.*
+
 ```
 song.flac ──► separate ──► loop ──► slow + pitch ──► disintegrate ──► reverb ──► sum ──► sound bed ──► master ──► sleepmix.wav
               (Demucs)    (beat-     (Rubber Band)   (per-stem decay)            (pink noise +
@@ -47,6 +50,13 @@ repetition, `progress` goes 0 → 1 and these are interpolated from their
 A `curve` (`linear` / `exp` ease-in / `log` ease-out) shapes how fast a stem
 gives way. Defaults: **vocals** dissolve on an ease-in curve while **bass** holds
 steady and **drums** are off — but it's all per-stem config (see below).
+
+## Music you didn't make
+
+sleepmix takes a recording you already have and produces a derivative of it.
+It is built for private listening — your own ears, your own library. Renders of
+music you don't hold the rights to aren't yours to publish, sell, or
+distribute, and nothing about this tool changes that.
 
 ## Install
 
@@ -200,8 +210,6 @@ See `sleepmix/config.example.yaml` for every field with comments.
   settings skips the slow ML step. Set `SLEEPMIX_DATA_DIR` to move it. Older
   versions cached into a `.sleepmix_cache/` beside wherever you happened to be
   standing; if you have one of those, it's orphaned and safe to delete.
-- For **copyrighted music**, keep renders personal — this is a tool for your own
-  listening, not redistribution.
 
 ## Development
 
