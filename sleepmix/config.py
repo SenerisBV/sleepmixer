@@ -269,9 +269,9 @@ class MixConfig:
 
     One of these has a control in the mixer, under "Mix": the seed, which fixes
     the random parts of the decay so the same settings give the same mix twice.
-    The other is the model the song is split into stems with — a fact about the
-    separation rather than about the mix, and set in a config file. Everything
-    else a mix is made of is in the sections below."""
+    The other is the model the song is split into stems with, which is a fact
+    about the separation rather than about the mix. Everything else a mix is
+    made of is in the sections below."""
 
     # ``min`` is not decoration: ``validate`` rejects a negative seed, and the
     # UI builds its controls from this metadata alone. Without a floor here the

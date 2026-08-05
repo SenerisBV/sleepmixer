@@ -11843,7 +11843,7 @@ var $author$project$Page$Mixer$sectionNote = function (name) {
 			case 'output':
 				return $elm$core$Maybe$Just('Duration decides how many repetitions the arc is spread over, so ' + ('it changes what any point in it sounds like. The fades apply ' + ('to the finished mix only, and so does the sample rate — a ' + 'preview always plays at the rate the stems were separated at.')));
 			case 'mix':
-				return $elm$core$Maybe$Just('The separation model is not here on purpose: changing it ' + ('separates the song again from scratch, which is minutes ' + ('of silence rather than a re-render. It belongs beside ' + 'the Separate button, which has a progress bar.')));
+				return $elm$core$Maybe$Just('The separation model has no control here, and none anywhere ' + ('else in this interface: the server fixes it when it ' + ('starts. Changing it would throw the separated stems away ' + ('and run Demucs again inside the preview lock — minutes of ' + 'silence rather than a re-render.'))));
 			default:
 				return $elm$core$Maybe$Nothing;
 		}

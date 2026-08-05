@@ -66,7 +66,7 @@ json : String
 json =
     """
 {
-  "description": "Everything that decides what a finished mix sounds like.\\n\\nOne of these has a control in the mixer, under Mix: the seed, which fixes the random parts of the decay. The other belongs to the separation rather than to the mix.",
+  "description": "Everything that decides what a finished mix sounds like.\\n\\nOne of these has a control in the mixer, under Mix: the seed, which fixes the random parts of the decay. The other is the model the song is split into stems with, which is a fact about the separation rather than about the mix.",
   "fields": {
     "seed": {"type": "int", "default": 0, "label": "Seed",
              "help": "Fixes the random parts of the decay.", "min": 0, "step": 1},

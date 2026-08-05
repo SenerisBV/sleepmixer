@@ -1431,8 +1431,10 @@ minutes later.
 Every other control on this screen is a cheap re-render, which is the mixer's
 whole contract; this one is not, and prose warning beside it is not a guard.
 Giving it `choices` in `config.py` would make it a select instead of a text
-box, which stops the typo and none of the rest. It belongs beside the Separate
-button, where separation already has a progress bar and a job to watch.
+box, which stops the typo and none of the rest. If it is ever offered anywhere
+it belongs beside the Separate button, where separation already has a progress
+bar and a job to watch — but nothing offers it today, and `sectionNote "mix"`
+says so rather than pointing at a control that does not exist.
 
 The *value* still goes with every preview — `Config` carries the schema's
 default and the server needs it to know which cached stems to use. Only the
@@ -1587,10 +1589,11 @@ sectionNote name =
 
                 "mix" ->
                     Just
-                        ("The separation model is not here on purpose: changing it "
-                            ++ "separates the song again from scratch, which is minutes "
-                            ++ "of silence rather than a re-render. It belongs beside "
-                            ++ "the Separate button, which has a progress bar."
+                        ("The separation model has no control here, and none anywhere "
+                            ++ "else in this interface: the server fixes it when it "
+                            ++ "starts. Changing it would throw the separated stems away "
+                            ++ "and run Demucs again inside the preview lock — minutes of "
+                            ++ "silence rather than a re-render."
                         )
 
                 _ ->
