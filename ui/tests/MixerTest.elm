@@ -1161,13 +1161,13 @@ presetSuite =
             [ test "takes the value the preset carries" <|
                 \_ ->
                     mixer
-                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> Mixer.applyPreset Fixtures.schema Nothing gentle
                         |> valueIn (Config.InSection "tempo" "speed")
                         |> Expect.equal (Just (Config.FloatValue 0.5))
             , test "and a per-stem one, matched by name" <|
                 \_ ->
                     mixer
-                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> Mixer.applyPreset Fixtures.schema Nothing gentle
                         |> valueIn (Config.InStem 1 "gain_db")
                         |> Expect.equal (Just (Config.FloatValue -6.0))
             , test "a field the preset does not carry goes back to its default" <|
@@ -1177,28 +1177,28 @@ presetSuite =
                     -- would be a control nothing on the screen accounts for.
                     mixer
                         |> Mixer.setField Fixtures.schema (Config.Top "seed") "42"
-                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> Mixer.applyPreset Fixtures.schema Nothing gentle
                         |> valueIn (Config.Top "seed")
                         |> Expect.equal (Just (Config.IntValue 0))
             , test "the loop region this song is set to is left alone" <|
                 \_ ->
                     mixer
                         |> Mixer.setField Fixtures.schema (Config.InSection "loop" "start_s") "12.5"
-                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> Mixer.applyPreset Fixtures.schema Nothing gentle
                         |> valueIn (Config.InSection "loop" "start_s")
                         |> Expect.equal (Just (Config.FloatValue 12.5))
             , test "both ends of it" <|
                 \_ ->
                     mixer
                         |> Mixer.setField Fixtures.schema (Config.InSection "loop" "end_s") "30"
-                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> Mixer.applyPreset Fixtures.schema Nothing gentle
                         |> valueIn (Config.InSection "loop" "end_s")
                         |> Expect.equal (Just (Config.FloatValue 30))
             , test "even when the preset carries a region of its own" <|
                 \_ ->
                     mixer
                         |> Mixer.setField Fixtures.schema (Config.InSection "loop" "start_s") "12.5"
-                        |> Mixer.applyPreset Fixtures.schema withARegion
+                        |> Mixer.applyPreset Fixtures.schema Nothing withARegion
                         |> valueIn (Config.InSection "loop" "start_s")
                         |> Expect.equal (Just (Config.FloatValue 12.5))
             , test "and a mixer detecting its loop goes on detecting it" <|
@@ -1208,23 +1208,39 @@ presetSuite =
                     -- different audio; taking them would move this song's
                     -- region to a place chosen for another one.
                     mixer
-                        |> Mixer.applyPreset Fixtures.schema withARegion
+                        |> Mixer.applyPreset Fixtures.schema Nothing withARegion
                         |> valueIn (Config.InSection "loop" "start_s")
                         |> Expect.equal Nothing
             , test "the portable half of the loop section is still taken" <|
                 \_ ->
                     mixer
                         |> Mixer.applyPreset Fixtures.schema
+                            Nothing
                             { gentle | config = value """{"loop": {"bars": 16}}""" }
                         |> valueIn (Config.InSection "loop" "bars")
                         |> Expect.equal (Just (Config.IntValue 16))
             , test "and the preset applied becomes the one selected" <|
                 \_ ->
                     mixer
-                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> Mixer.applyPreset Fixtures.schema Nothing gentle
                         |> Mixer.selection presets
                         |> Maybe.map .name
                         |> Expect.equal (Just "Gentle")
+            , test "a stem the preset does not name keeps the published default, not the schema's" <|
+                \_ ->
+                    -- `gentle` names only `drums`. `onDefaults` opened with
+                    -- `serverDefaults`, which curates `drums.enabled = false` —
+                    -- the one fact `Config.fromSchema` cannot state on its own.
+                    -- Applying a preset must build its base the same way
+                    -- `Mixer.init` did, or every stem the preset is silent
+                    -- about falls back to the schema's uniform default instead
+                    -- of the one the server actually publishes.
+                    onDefaults.mixer
+                        |> Maybe.andThen
+                            (Mixer.applyPreset Fixtures.schema (Just serverDefaults) gentle
+                                >> valueIn (Config.InStem 1 "enabled")
+                            )
+                        |> Expect.equal (Just (Config.BoolValue False))
             ]
         , describe "applying one through `update`"
             [ test "fires exactly one preview, through the state machine" <|

@@ -90,16 +90,47 @@ type Pending
     | Delete
 
 
-{-| Open the mixer, over the server's own default config when there is one.
+{-| The starting point for a config: the schema's defaults, laid over with the
+server's published config when there is one.
 
 `Config.fromSchema` alone is a *different starting point* from the one
 `sleepmix render` uses, and the difference is on every stem: the schema
 describes each field of one stem and has no way to describe a list, so it
 gives every stem the same values, while `MixConfig` curates four — drums off,
-bass decay off, vocals on an `exp` curve to 2200 Hz, other to 2400 Hz. Laying
-`GET /api/config/default` over the schema's defaults is what closes that, and
-it is laid over rather than used raw because the schema is still the authority
-on which keys may exist and what bounds they are held to (`Config.overlay`).
+bass decay off, vocals on an `exp` curve to 2200 Hz, other on `linear` to
+2400 Hz. Laying `GET /api/config/default` over the schema's defaults is what
+closes that, and it is laid over rather than used raw because the schema is
+still the authority on which keys may exist and what bounds they are held to
+(`Config.overlay`).
+
+`Nothing` is the fallback, not the absence of a decision.
+
+**`init` and `applyPreset` share this rather than each building their own base
+from `Config.fromSchema`.** They used to agree only by coincidence — every
+scalar leaf's schema default already equals the dataclass default, so the two
+bases matched everywhere except the one place `MixConfig` curates a list the
+schema cannot describe: the stems. A preset that does not name a stem, or a
+song whose stem set does not match the one a preset was saved from, used to
+fall all the way back to the schema's uniform values instead of the curated
+ones — silently, because `defaultsNote` had no way to know a *different*
+default had just been reintroduced. Sharing one function is what keeps that
+from opening back up the next time either caller changes.
+-}
+baseConfig : Schema.Schema -> List String -> Maybe Decode.Value -> Config.Config
+baseConfig schema stemNames defaults =
+    let
+        base =
+            Config.fromSchema schema stemNames
+    in
+    case defaults of
+        Just published ->
+            Config.overlay schema published base
+
+        Nothing ->
+            base
+
+
+{-| Open the mixer, over the server's own default config when there is one.
 
 `Nothing` is the fallback, not the absence of a decision: the mixer opens
 anyway, because a screen that will not open because one fetch failed is worse
@@ -108,20 +139,10 @@ than one that opens at a starting point it can name — and it names it, in
 -}
 init : String -> Schema.Schema -> List String -> Maybe Decode.Value -> State
 init songId schema stemNames defaults =
-    let
-        base =
-            Config.fromSchema schema stemNames
-    in
     { songId = songId
     , progress = 0
     , solo = Nothing
-    , config =
-        case defaults of
-            Just published ->
-                Config.overlay schema published base
-
-            Nothing ->
-                base
+    , config = baseConfig schema stemNames defaults
     , selectedPreset = Nothing
     , presetName = ""
     , pending = Nothing
@@ -391,10 +412,15 @@ presetSaved preset state =
 {-| Make the mixer look like this preset — and leave this song's loop region
 where it is.
 
-Built over `Config.fromSchema` rather than over the config on screen, because
-apply means *make it look like this* and not *merge this in*: a field the
-preset does not carry goes back to its default rather than keeping a value from
-the recipe the operator believes they have just replaced.
+Built over `baseConfig` — the same base `init` opens on, not the config on
+screen and not a bare `Config.fromSchema` — because apply means *make it look
+like this* and not *merge this in*: a field the preset does not carry goes back
+to its default rather than keeping a value from the recipe the operator
+believes they have just replaced. And "its default" has to mean the same thing
+here as it did when the mixer opened: a preset that is silent about a stem, or
+a song whose stems do not match the ones the preset was saved from, must land
+that stem on the server's curated default and not the schema's flatter one —
+see `baseConfig`.
 
 **The loop region is the exception, and it is carried explicitly because
 nothing else would carry it.** `loop.start_s` and `loop.end_s` have a `null`
@@ -409,11 +435,11 @@ Carried in both directions: a preset written by an older build could carry
 seconds measured on different audio, and a mixer that is auto-detecting its
 loop must go on auto-detecting it rather than adopt them.
 -}
-applyPreset : Schema.Schema -> Api.Preset -> State -> State
-applyPreset schema preset state =
+applyPreset : Schema.Schema -> Maybe Decode.Value -> Api.Preset -> State -> State
+applyPreset schema defaults preset state =
     let
         applied =
-            Config.fromSchema schema (List.map .name state.config.stems)
+            baseConfig schema (List.map .name state.config.stems) defaults
                 |> Config.overlay schema preset.config
     in
     { state

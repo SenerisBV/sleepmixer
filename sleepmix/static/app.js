@@ -6323,7 +6323,7 @@ var $author$project$Schema$TextField = function (a) {
 var $elm$json$Json$Decode$andThen = _Json_andThen;
 var $author$project$Schema$BoolSpec = F3(
 	function (label, help, _default) {
-		return {av: _default, z: help, A: label};
+		return {aw: _default, z: help, A: label};
 	});
 var $elm$json$Json$Decode$bool = _Json_decodeBool;
 var $elm$json$Json$Decode$map3 = _Json_map3;
@@ -6348,7 +6348,7 @@ var $author$project$Schema$boolSpec = A4(
 	A2($elm$json$Json$Decode$field, 'default', $elm$json$Json$Decode$bool));
 var $author$project$Schema$ChoiceSpec = F4(
 	function (label, help, _default, choices) {
-		return {bA: choices, av: _default, z: help, A: label};
+		return {bA: choices, aw: _default, z: help, A: label};
 	});
 var $elm$json$Json$Decode$map4 = _Json_map4;
 var $author$project$Schema$choiceSpec = function (value) {
@@ -6381,7 +6381,7 @@ var $elm$json$Json$Decode$maybe = function (decoder) {
 };
 var $author$project$Schema$NumberSpec = F7(
 	function (label, help, _default, min, max, step, unit) {
-		return {av: _default, z: help, A: label, bT: max, bU: min, cl: step, aW: unit};
+		return {aw: _default, z: help, A: label, bT: max, bU: min, cl: step, aW: unit};
 	});
 var $elm$json$Json$Decode$float = _Json_decodeFloat;
 var $elm$json$Json$Decode$map7 = _Json_map7;
@@ -6411,7 +6411,7 @@ var $elm$core$Tuple$pair = F2(
 	});
 var $author$project$Schema$TextSpec = F3(
 	function (label, help, _default) {
-		return {av: _default, z: help, A: label};
+		return {aw: _default, z: help, A: label};
 	});
 var $author$project$Schema$textSpec = A4(
 	$elm$json$Json$Decode$map3,
@@ -6667,7 +6667,7 @@ var $author$project$Request$songs = function (toMsg) {
 };
 var $author$project$Main$init = function (_v0) {
 	return _Utils_Tuple2(
-		{X: $elm$core$Maybe$Nothing, aw: $author$project$Main$DefaultsLoading, P: $elm$core$Maybe$Nothing, aK: $author$project$Main$Checking, aL: $elm$core$Maybe$Nothing, Z: false, am: $author$project$Page$Library$Loading, _: $elm$core$Maybe$Nothing, an: $elm$core$Maybe$Nothing, aN: 0, aa: $elm$core$Maybe$Nothing, g: $elm$core$Maybe$Nothing, aP: 1, ac: '', ad: _List_Nil, az: $elm$core$Maybe$Nothing, a1: 0, l: $elm$core$Maybe$Nothing, af: _List_Nil, q: $author$project$Preview$Cold, R: $elm$core$Maybe$Nothing, J: $elm$core$Maybe$Nothing, E: $elm$core$Maybe$Nothing, a2: 0, ag: $elm$core$Maybe$Nothing, S: _List_Nil, T: $elm$core$Maybe$Nothing, r: $elm$core$Maybe$Nothing, K: $elm$core$Maybe$Nothing, aC: $elm$core$Maybe$Nothing, c: $author$project$Main$Idle, U: $author$project$Main$SettingsLoading, ar: $elm$core$Maybe$Nothing, aR: 0, as: $elm$core$Maybe$Nothing, m: $elm$core$Maybe$Nothing},
+		{X: $elm$core$Maybe$Nothing, aj: $author$project$Main$DefaultsLoading, P: $elm$core$Maybe$Nothing, aK: $author$project$Main$Checking, aL: $elm$core$Maybe$Nothing, Z: false, an: $author$project$Page$Library$Loading, _: $elm$core$Maybe$Nothing, ao: $elm$core$Maybe$Nothing, aN: 0, aa: $elm$core$Maybe$Nothing, g: $elm$core$Maybe$Nothing, aP: 1, ac: '', ad: _List_Nil, az: $elm$core$Maybe$Nothing, a1: 0, l: $elm$core$Maybe$Nothing, af: _List_Nil, q: $author$project$Preview$Cold, R: $elm$core$Maybe$Nothing, J: $elm$core$Maybe$Nothing, E: $elm$core$Maybe$Nothing, a2: 0, ag: $elm$core$Maybe$Nothing, S: _List_Nil, T: $elm$core$Maybe$Nothing, r: $elm$core$Maybe$Nothing, K: $elm$core$Maybe$Nothing, aC: $elm$core$Maybe$Nothing, c: $author$project$Main$Idle, U: $author$project$Main$SettingsLoading, as: $elm$core$Maybe$Nothing, aR: 0, at: $elm$core$Maybe$Nothing, m: $elm$core$Maybe$Nothing},
 		$elm$core$Platform$Cmd$batch(
 			_List_fromArray(
 				[
@@ -7077,100 +7077,6 @@ var $author$project$Main$andThen = F2(
 				_List_fromArray(
 					[cmd, more])));
 	});
-var $author$project$Config$InSection = F2(
-	function (a, b) {
-		return {$: 1, a: a, b: b};
-	});
-var $elm$core$Maybe$map = F2(
-	function (f, maybe) {
-		if (!maybe.$) {
-			var value = maybe.a;
-			return $elm$core$Maybe$Just(
-				f(value));
-		} else {
-			return $elm$core$Maybe$Nothing;
-		}
-	});
-var $author$project$Config$updateStem = F2(
-	function (index, f) {
-		return $elm$core$List$indexedMap(
-			F2(
-				function (i, stem) {
-					return _Utils_eq(i, index) ? f(stem) : stem;
-				}));
-	});
-var $author$project$Config$alter = F3(
-	function (target, f, config) {
-		switch (target.$) {
-			case 0:
-				return _Utils_update(
-					config,
-					{
-						N: f(config.N)
-					});
-			case 1:
-				var name = target.a;
-				return _Utils_update(
-					config,
-					{
-						B: A3(
-							$elm$core$Dict$update,
-							name,
-							$elm$core$Maybe$map(f),
-							config.B)
-					});
-			case 2:
-				var index = target.a;
-				return _Utils_update(
-					config,
-					{
-						dT: A3(
-							$author$project$Config$updateStem,
-							index,
-							function (s) {
-								return _Utils_update(
-									s,
-									{
-										y: f(s.y)
-									});
-							},
-							config.dT)
-					});
-			default:
-				var index = target.a;
-				return _Utils_update(
-					config,
-					{
-						dT: A3(
-							$author$project$Config$updateStem,
-							index,
-							function (s) {
-								return _Utils_update(
-									s,
-									{
-										Y: f(s.Y)
-									});
-							},
-							config.dT)
-					});
-		}
-	});
-var $author$project$Config$keyOf = function (target) {
-	switch (target.$) {
-		case 0:
-			var key = target.a;
-			return key;
-		case 1:
-			var key = target.b;
-			return key;
-		case 2:
-			var key = target.b;
-			return key;
-		default:
-			var key = target.b;
-			return key;
-	}
-};
 var $author$project$Config$BoolValue = function (a) {
 	return {$: 2, a: a};
 };
@@ -7183,332 +7089,41 @@ var $author$project$Config$IntValue = function (a) {
 var $author$project$Config$StringValue = function (a) {
 	return {$: 3, a: a};
 };
-var $elm$core$Maybe$andThen = F2(
-	function (callback, maybeValue) {
-		if (!maybeValue.$) {
-			var value = maybeValue.a;
-			return callback(value);
+var $elm$core$Maybe$map = F2(
+	function (f, maybe) {
+		if (!maybe.$) {
+			var value = maybe.a;
+			return $elm$core$Maybe$Just(
+				f(value));
 		} else {
 			return $elm$core$Maybe$Nothing;
 		}
 	});
-var $elm$core$Basics$min = F2(
-	function (x, y) {
-		return (_Utils_cmp(x, y) < 0) ? x : y;
-	});
-var $author$project$Config$clampTo = F3(
-	function (low, high, value) {
-		var floored = function () {
-			if (!low.$) {
-				var lo = low.a;
-				return A2($elm$core$Basics$max, lo, value);
-			} else {
-				return value;
-			}
-		}();
-		if (!high.$) {
-			var hi = high.a;
-			return A2($elm$core$Basics$min, hi, floored);
-		} else {
-			return floored;
-		}
-	});
-var $elm$core$List$any = F2(
-	function (isOkay, list) {
-		any:
-		while (true) {
-			if (!list.b) {
-				return false;
-			} else {
-				var x = list.a;
-				var xs = list.b;
-				if (isOkay(x)) {
-					return true;
-				} else {
-					var $temp$isOkay = isOkay,
-						$temp$list = xs;
-					isOkay = $temp$isOkay;
-					list = $temp$list;
-					continue any;
-				}
-			}
-		}
-	});
-var $elm$core$List$member = F2(
-	function (x, xs) {
-		return A2(
-			$elm$core$List$any,
-			function (a) {
-				return _Utils_eq(a, x);
-			},
-			xs);
-	});
-var $author$project$Config$memberOf = F2(
-	function (choices, candidate) {
-		return A2($elm$core$List$member, candidate, choices) ? $elm$core$Maybe$Just(candidate) : $elm$core$Maybe$Nothing;
-	});
 var $elm$core$Basics$round = _Basics_round;
-var $elm$core$String$toFloat = _String_toFloat;
-var $elm$core$String$toLower = _String_toLower;
-var $elm$core$String$trim = _String_trim;
-var $author$project$Config$parse = F2(
-	function (aField, raw) {
-		var trimmed = $elm$core$String$trim(raw);
-		switch (aField.$) {
-			case 0:
-				var spec = aField.a;
-				return A2(
-					$elm$core$Maybe$map,
-					A2(
-						$elm$core$Basics$composeR,
-						A2($author$project$Config$clampTo, spec.bU, spec.bT),
-						$author$project$Config$FloatValue),
-					$elm$core$String$toFloat(trimmed));
-			case 1:
-				var spec = aField.a;
-				return A2(
-					$elm$core$Maybe$map,
-					A2(
-						$elm$core$Basics$composeR,
-						A2($author$project$Config$clampTo, spec.bU, spec.bT),
-						A2($elm$core$Basics$composeR, $elm$core$Basics$round, $author$project$Config$IntValue)),
-					$elm$core$String$toFloat(trimmed));
-			case 2:
-				var _v1 = $elm$core$String$toLower(trimmed);
-				switch (_v1) {
-					case 'true':
-						return $elm$core$Maybe$Just(
-							$author$project$Config$BoolValue(true));
-					case 'false':
-						return $elm$core$Maybe$Just(
-							$author$project$Config$BoolValue(false));
-					default:
-						return $elm$core$Maybe$Nothing;
-				}
-			case 3:
-				return $elm$core$String$isEmpty(trimmed) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just(
-					$author$project$Config$StringValue(raw));
-			case 4:
-				var spec = aField.a;
-				return A2(
-					$elm$core$Maybe$map,
-					$author$project$Config$IntValue,
-					A2(
-						$elm$core$Maybe$andThen,
-						$author$project$Config$memberOf(spec.bA),
-						$elm$core$String$toInt(trimmed)));
-			default:
-				var spec = aField.a;
-				return A2(
-					$elm$core$Maybe$map,
-					$author$project$Config$StringValue,
-					A2($author$project$Config$memberOf, spec.bA, trimmed));
-		}
-	});
-var $author$project$Config$sectionFields = F2(
-	function (name, schema) {
-		return A2(
-			$elm$core$Maybe$withDefault,
-			$elm$core$Dict$empty,
-			A2(
-				$elm$core$Maybe$map,
-				function ($) {
-					return $.y;
-				},
-				A2($elm$core$Dict$get, name, schema.B)));
-	});
-var $author$project$Config$specAt = F2(
-	function (schema, target) {
-		switch (target.$) {
-			case 0:
-				var key = target.a;
-				return A2($elm$core$Dict$get, key, schema.y);
-			case 1:
-				var name = target.a;
-				var key = target.b;
-				return A2(
-					$elm$core$Dict$get,
-					key,
-					A2($author$project$Config$sectionFields, name, schema));
-			case 2:
-				var key = target.b;
-				return A2(
-					$elm$core$Dict$get,
-					key,
-					A2($author$project$Config$sectionFields, 'stem', schema));
-			default:
-				var key = target.b;
-				return A2(
-					$elm$core$Dict$get,
-					key,
-					A2($author$project$Config$sectionFields, 'stem_decay', schema));
-		}
-	});
-var $author$project$Config$set = F4(
-	function (schema, target, raw, config) {
-		var _v0 = A2($author$project$Config$specAt, schema, target);
-		if (_v0.$ === 1) {
-			return config;
-		} else {
-			var aField = _v0.a;
-			var _v1 = A2($author$project$Config$parse, aField, raw);
-			if (!_v1.$) {
-				var value = _v1.a;
-				return A3(
-					$author$project$Config$alter,
-					target,
-					A2(
-						$elm$core$Dict$insert,
-						$author$project$Config$keyOf(target),
-						value),
-					config);
-			} else {
-				return A3(
-					$author$project$Config$alter,
-					target,
-					$elm$core$Dict$remove(
-						$author$project$Config$keyOf(target)),
-					config);
-			}
-		}
-	});
-var $elm$core$List$drop = F2(
-	function (n, list) {
-		drop:
-		while (true) {
-			if (n <= 0) {
-				return list;
-			} else {
-				if (!list.b) {
-					return list;
-				} else {
-					var x = list.a;
-					var xs = list.b;
-					var $temp$n = n - 1,
-						$temp$list = xs;
-					n = $temp$n;
-					list = $temp$list;
-					continue drop;
-				}
-			}
-		}
-	});
-var $author$project$Config$stemAt = F2(
-	function (index, config) {
-		return $elm$core$List$head(
-			A2($elm$core$List$drop, index, config.dT));
-	});
-var $author$project$Config$valuesAt = F2(
-	function (target, config) {
-		switch (target.$) {
-			case 0:
-				return config.N;
-			case 1:
-				var name = target.a;
-				return A2(
-					$elm$core$Maybe$withDefault,
-					$elm$core$Dict$empty,
-					A2($elm$core$Dict$get, name, config.B));
-			case 2:
-				var index = target.a;
-				return A2(
-					$elm$core$Maybe$withDefault,
-					$elm$core$Dict$empty,
-					A2(
-						$elm$core$Maybe$map,
-						function ($) {
-							return $.y;
-						},
-						A2($author$project$Config$stemAt, index, config)));
-			default:
-				var index = target.a;
-				return A2(
-					$elm$core$Maybe$withDefault,
-					$elm$core$Dict$empty,
-					A2(
-						$elm$core$Maybe$map,
-						function ($) {
-							return $.Y;
-						},
-						A2($author$project$Config$stemAt, index, config)));
-		}
-	});
-var $author$project$Config$valueAt = F2(
-	function (target, config) {
-		return A2(
-			$elm$core$Dict$get,
-			$author$project$Config$keyOf(target),
-			A2($author$project$Config$valuesAt, target, config));
-	});
-var $elm$core$String$fromFloat = _String_fromNumber;
-var $author$project$Config$valueString = function (value) {
-	switch (value.$) {
-		case 0:
-			var f = value.a;
-			return $elm$core$String$fromFloat(f);
-		case 1:
-			var i = value.a;
-			return $elm$core$String$fromInt(i);
-		case 2:
-			if (value.a) {
-				return 'true';
-			} else {
-				return 'false';
-			}
-		default:
-			var s = value.a;
-			return s;
-	}
-};
-var $author$project$Page$Mixer$carryLoopKey = F4(
-	function (schema, from, key, into) {
-		var target = A2($author$project$Config$InSection, 'loop', key);
-		return A4(
-			$author$project$Config$set,
-			schema,
-			target,
-			A2(
-				$elm$core$Maybe$withDefault,
-				'',
-				A2(
-					$elm$core$Maybe$map,
-					$author$project$Config$valueString,
-					A2($author$project$Config$valueAt, target, from))),
-			into);
-	});
-var $author$project$Page$Mixer$carryLoopRegion = F3(
-	function (schema, from, into) {
-		return A3(
-			$elm$core$List$foldl,
-			A2($author$project$Page$Mixer$carryLoopKey, schema, from),
-			into,
-			_List_fromArray(
-				['start_s', 'end_s']));
-	});
 var $author$project$Config$defaultOf = function (aField) {
 	switch (aField.$) {
 		case 0:
 			var spec = aField.a;
-			return A2($elm$core$Maybe$map, $author$project$Config$FloatValue, spec.av);
+			return A2($elm$core$Maybe$map, $author$project$Config$FloatValue, spec.aw);
 		case 1:
 			var spec = aField.a;
 			return A2(
 				$elm$core$Maybe$map,
 				A2($elm$core$Basics$composeR, $elm$core$Basics$round, $author$project$Config$IntValue),
-				spec.av);
+				spec.aw);
 		case 2:
 			var spec = aField.a;
 			return $elm$core$Maybe$Just(
-				$author$project$Config$BoolValue(spec.av));
+				$author$project$Config$BoolValue(spec.aw));
 		case 3:
 			var spec = aField.a;
-			return A2($elm$core$Maybe$map, $author$project$Config$StringValue, spec.av);
+			return A2($elm$core$Maybe$map, $author$project$Config$StringValue, spec.aw);
 		case 4:
 			var spec = aField.a;
-			return A2($elm$core$Maybe$map, $author$project$Config$IntValue, spec.av);
+			return A2($elm$core$Maybe$map, $author$project$Config$IntValue, spec.aw);
 		default:
 			var spec = aField.a;
-			return A2($elm$core$Maybe$map, $author$project$Config$StringValue, spec.av);
+			return A2($elm$core$Maybe$map, $author$project$Config$StringValue, spec.aw);
 	}
 };
 var $elm$core$Dict$foldl = F3(
@@ -7582,8 +7197,50 @@ var $elm$core$Dict$map = F2(
 				A2($elm$core$Dict$map, func, right));
 		}
 	});
+var $elm$core$List$any = F2(
+	function (isOkay, list) {
+		any:
+		while (true) {
+			if (!list.b) {
+				return false;
+			} else {
+				var x = list.a;
+				var xs = list.b;
+				if (isOkay(x)) {
+					return true;
+				} else {
+					var $temp$isOkay = isOkay,
+						$temp$list = xs;
+					isOkay = $temp$isOkay;
+					list = $temp$list;
+					continue any;
+				}
+			}
+		}
+	});
+var $elm$core$List$member = F2(
+	function (x, xs) {
+		return A2(
+			$elm$core$List$any,
+			function (a) {
+				return _Utils_eq(a, x);
+			},
+			xs);
+	});
 var $author$project$Config$perStemSections = _List_fromArray(
 	['stem', 'stem_decay']);
+var $author$project$Config$sectionFields = F2(
+	function (name, schema) {
+		return A2(
+			$elm$core$Maybe$withDefault,
+			$elm$core$Dict$empty,
+			A2(
+				$elm$core$Maybe$map,
+				function ($) {
+					return $.y;
+				},
+				A2($elm$core$Dict$get, name, schema.B)));
+	});
 var $author$project$Config$stemFor = F2(
 	function (schema, name) {
 		return {
@@ -7620,6 +7277,10 @@ var $author$project$Config$fromSchema = F2(
 			N: $author$project$Config$defaults(schema.y)
 		};
 	});
+var $author$project$Config$InSection = F2(
+	function (a, b) {
+		return {$: 1, a: a, b: b};
+	});
 var $author$project$Config$Top = function (a) {
 	return {$: 0, a: a};
 };
@@ -7648,6 +7309,98 @@ var $author$project$Config$InStem = F2(
 var $author$project$Config$InStemDecay = F2(
 	function (a, b) {
 		return {$: 3, a: a, b: b};
+	});
+var $elm$core$Maybe$andThen = F2(
+	function (callback, maybeValue) {
+		if (!maybeValue.$) {
+			var value = maybeValue.a;
+			return callback(value);
+		} else {
+			return $elm$core$Maybe$Nothing;
+		}
+	});
+var $elm$core$String$fromFloat = _String_fromNumber;
+var $elm$core$Basics$min = F2(
+	function (x, y) {
+		return (_Utils_cmp(x, y) < 0) ? x : y;
+	});
+var $author$project$Config$clampTo = F3(
+	function (low, high, value) {
+		var floored = function () {
+			if (!low.$) {
+				var lo = low.a;
+				return A2($elm$core$Basics$max, lo, value);
+			} else {
+				return value;
+			}
+		}();
+		if (!high.$) {
+			var hi = high.a;
+			return A2($elm$core$Basics$min, hi, floored);
+		} else {
+			return floored;
+		}
+	});
+var $author$project$Config$memberOf = F2(
+	function (choices, candidate) {
+		return A2($elm$core$List$member, candidate, choices) ? $elm$core$Maybe$Just(candidate) : $elm$core$Maybe$Nothing;
+	});
+var $elm$core$String$toFloat = _String_toFloat;
+var $elm$core$String$toLower = _String_toLower;
+var $elm$core$String$trim = _String_trim;
+var $author$project$Config$parse = F2(
+	function (aField, raw) {
+		var trimmed = $elm$core$String$trim(raw);
+		switch (aField.$) {
+			case 0:
+				var spec = aField.a;
+				return A2(
+					$elm$core$Maybe$map,
+					A2(
+						$elm$core$Basics$composeR,
+						A2($author$project$Config$clampTo, spec.bU, spec.bT),
+						$author$project$Config$FloatValue),
+					$elm$core$String$toFloat(trimmed));
+			case 1:
+				var spec = aField.a;
+				return A2(
+					$elm$core$Maybe$map,
+					A2(
+						$elm$core$Basics$composeR,
+						A2($author$project$Config$clampTo, spec.bU, spec.bT),
+						A2($elm$core$Basics$composeR, $elm$core$Basics$round, $author$project$Config$IntValue)),
+					$elm$core$String$toFloat(trimmed));
+			case 2:
+				var _v1 = $elm$core$String$toLower(trimmed);
+				switch (_v1) {
+					case 'true':
+						return $elm$core$Maybe$Just(
+							$author$project$Config$BoolValue(true));
+					case 'false':
+						return $elm$core$Maybe$Just(
+							$author$project$Config$BoolValue(false));
+					default:
+						return $elm$core$Maybe$Nothing;
+				}
+			case 3:
+				return $elm$core$String$isEmpty(trimmed) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just(
+					$author$project$Config$StringValue(raw));
+			case 4:
+				var spec = aField.a;
+				return A2(
+					$elm$core$Maybe$map,
+					$author$project$Config$IntValue,
+					A2(
+						$elm$core$Maybe$andThen,
+						$author$project$Config$memberOf(spec.bA),
+						$elm$core$String$toInt(trimmed)));
+			default:
+				var spec = aField.a;
+				return A2(
+					$elm$core$Maybe$map,
+					$author$project$Config$StringValue,
+					A2($author$project$Config$memberOf, spec.bA, trimmed));
+		}
 	});
 var $author$project$Config$fromJson = F2(
 	function (spec, raw) {
@@ -7688,6 +7441,33 @@ var $author$project$Config$fromJson = F2(
 						return text($elm$json$Json$Decode$string);
 				}
 			}());
+	});
+var $author$project$Config$specAt = F2(
+	function (schema, target) {
+		switch (target.$) {
+			case 0:
+				var key = target.a;
+				return A2($elm$core$Dict$get, key, schema.y);
+			case 1:
+				var name = target.a;
+				var key = target.b;
+				return A2(
+					$elm$core$Dict$get,
+					key,
+					A2($author$project$Config$sectionFields, name, schema));
+			case 2:
+				var key = target.b;
+				return A2(
+					$elm$core$Dict$get,
+					key,
+					A2($author$project$Config$sectionFields, 'stem', schema));
+			default:
+				var key = target.b;
+				return A2(
+					$elm$core$Dict$get,
+					key,
+					A2($author$project$Config$sectionFields, 'stem_decay', schema));
+		}
 	});
 var $author$project$Config$overlayValues = F4(
 	function (schema, toTarget, incoming, existing) {
@@ -7809,26 +7589,257 @@ var $author$project$Config$overlay = F3(
 			N: A4($author$project$Config$overlayValues, schema, $author$project$Config$Top, incoming, base.N)
 		};
 	});
-var $author$project$Page$Mixer$applyPreset = F3(
-	function (schema, preset, state) {
+var $author$project$Page$Mixer$baseConfig = F3(
+	function (schema, stemNames, defaults) {
+		var base = A2($author$project$Config$fromSchema, schema, stemNames);
+		if (!defaults.$) {
+			var published = defaults.a;
+			return A3($author$project$Config$overlay, schema, published, base);
+		} else {
+			return base;
+		}
+	});
+var $author$project$Config$updateStem = F2(
+	function (index, f) {
+		return $elm$core$List$indexedMap(
+			F2(
+				function (i, stem) {
+					return _Utils_eq(i, index) ? f(stem) : stem;
+				}));
+	});
+var $author$project$Config$alter = F3(
+	function (target, f, config) {
+		switch (target.$) {
+			case 0:
+				return _Utils_update(
+					config,
+					{
+						N: f(config.N)
+					});
+			case 1:
+				var name = target.a;
+				return _Utils_update(
+					config,
+					{
+						B: A3(
+							$elm$core$Dict$update,
+							name,
+							$elm$core$Maybe$map(f),
+							config.B)
+					});
+			case 2:
+				var index = target.a;
+				return _Utils_update(
+					config,
+					{
+						dT: A3(
+							$author$project$Config$updateStem,
+							index,
+							function (s) {
+								return _Utils_update(
+									s,
+									{
+										y: f(s.y)
+									});
+							},
+							config.dT)
+					});
+			default:
+				var index = target.a;
+				return _Utils_update(
+					config,
+					{
+						dT: A3(
+							$author$project$Config$updateStem,
+							index,
+							function (s) {
+								return _Utils_update(
+									s,
+									{
+										Y: f(s.Y)
+									});
+							},
+							config.dT)
+					});
+		}
+	});
+var $author$project$Config$keyOf = function (target) {
+	switch (target.$) {
+		case 0:
+			var key = target.a;
+			return key;
+		case 1:
+			var key = target.b;
+			return key;
+		case 2:
+			var key = target.b;
+			return key;
+		default:
+			var key = target.b;
+			return key;
+	}
+};
+var $author$project$Config$set = F4(
+	function (schema, target, raw, config) {
+		var _v0 = A2($author$project$Config$specAt, schema, target);
+		if (_v0.$ === 1) {
+			return config;
+		} else {
+			var aField = _v0.a;
+			var _v1 = A2($author$project$Config$parse, aField, raw);
+			if (!_v1.$) {
+				var value = _v1.a;
+				return A3(
+					$author$project$Config$alter,
+					target,
+					A2(
+						$elm$core$Dict$insert,
+						$author$project$Config$keyOf(target),
+						value),
+					config);
+			} else {
+				return A3(
+					$author$project$Config$alter,
+					target,
+					$elm$core$Dict$remove(
+						$author$project$Config$keyOf(target)),
+					config);
+			}
+		}
+	});
+var $elm$core$List$drop = F2(
+	function (n, list) {
+		drop:
+		while (true) {
+			if (n <= 0) {
+				return list;
+			} else {
+				if (!list.b) {
+					return list;
+				} else {
+					var x = list.a;
+					var xs = list.b;
+					var $temp$n = n - 1,
+						$temp$list = xs;
+					n = $temp$n;
+					list = $temp$list;
+					continue drop;
+				}
+			}
+		}
+	});
+var $author$project$Config$stemAt = F2(
+	function (index, config) {
+		return $elm$core$List$head(
+			A2($elm$core$List$drop, index, config.dT));
+	});
+var $author$project$Config$valuesAt = F2(
+	function (target, config) {
+		switch (target.$) {
+			case 0:
+				return config.N;
+			case 1:
+				var name = target.a;
+				return A2(
+					$elm$core$Maybe$withDefault,
+					$elm$core$Dict$empty,
+					A2($elm$core$Dict$get, name, config.B));
+			case 2:
+				var index = target.a;
+				return A2(
+					$elm$core$Maybe$withDefault,
+					$elm$core$Dict$empty,
+					A2(
+						$elm$core$Maybe$map,
+						function ($) {
+							return $.y;
+						},
+						A2($author$project$Config$stemAt, index, config)));
+			default:
+				var index = target.a;
+				return A2(
+					$elm$core$Maybe$withDefault,
+					$elm$core$Dict$empty,
+					A2(
+						$elm$core$Maybe$map,
+						function ($) {
+							return $.Y;
+						},
+						A2($author$project$Config$stemAt, index, config)));
+		}
+	});
+var $author$project$Config$valueAt = F2(
+	function (target, config) {
+		return A2(
+			$elm$core$Dict$get,
+			$author$project$Config$keyOf(target),
+			A2($author$project$Config$valuesAt, target, config));
+	});
+var $author$project$Config$valueString = function (value) {
+	switch (value.$) {
+		case 0:
+			var f = value.a;
+			return $elm$core$String$fromFloat(f);
+		case 1:
+			var i = value.a;
+			return $elm$core$String$fromInt(i);
+		case 2:
+			if (value.a) {
+				return 'true';
+			} else {
+				return 'false';
+			}
+		default:
+			var s = value.a;
+			return s;
+	}
+};
+var $author$project$Page$Mixer$carryLoopKey = F4(
+	function (schema, from, key, into) {
+		var target = A2($author$project$Config$InSection, 'loop', key);
+		return A4(
+			$author$project$Config$set,
+			schema,
+			target,
+			A2(
+				$elm$core$Maybe$withDefault,
+				'',
+				A2(
+					$elm$core$Maybe$map,
+					$author$project$Config$valueString,
+					A2($author$project$Config$valueAt, target, from))),
+			into);
+	});
+var $author$project$Page$Mixer$carryLoopRegion = F3(
+	function (schema, from, into) {
+		return A3(
+			$elm$core$List$foldl,
+			A2($author$project$Page$Mixer$carryLoopKey, schema, from),
+			into,
+			_List_fromArray(
+				['start_s', 'end_s']));
+	});
+var $author$project$Page$Mixer$applyPreset = F4(
+	function (schema, defaults, preset, state) {
 		var applied = A3(
 			$author$project$Config$overlay,
 			schema,
 			preset.bB,
-			A2(
-				$author$project$Config$fromSchema,
+			A3(
+				$author$project$Page$Mixer$baseConfig,
 				schema,
 				A2(
 					$elm$core$List$map,
 					function ($) {
 						return $.c7;
 					},
-					state.bB.dT)));
+					state.bB.dT),
+				defaults));
 		return _Utils_update(
 			state,
 			{
 				bB: A3($author$project$Page$Mixer$carryLoopRegion, schema, state.bB, applied),
-				ap: $elm$core$Maybe$Nothing,
+				aq: $elm$core$Maybe$Nothing,
 				aB: $elm$core$Maybe$Just(preset.aZ)
 			});
 	});
@@ -7836,7 +7847,7 @@ var $author$project$Page$Mixer$armConfirm = F2(
 	function (pending, state) {
 		return _Utils_update(
 			state,
-			{ap: pending});
+			{aq: pending});
 	});
 var $author$project$Preview$Idle = {$: 2};
 var $author$project$Preview$InFlight = function (a) {
@@ -8191,16 +8202,8 @@ var $author$project$Request$importSong = F2(
 	});
 var $author$project$Page$Mixer$init = F4(
 	function (songId, schema, stemNames, defaults) {
-		var base = A2($author$project$Config$fromSchema, schema, stemNames);
 		return {
-			bB: function () {
-				if (!defaults.$) {
-					var published = defaults.a;
-					return A3($author$project$Config$overlay, schema, published, base);
-				} else {
-					return base;
-				}
-			}(),
+			bB: A3($author$project$Page$Mixer$baseConfig, schema, stemNames, defaults),
 			bm: function () {
 				if (!defaults.$) {
 					return false;
@@ -8208,7 +8211,7 @@ var $author$project$Page$Mixer$init = F4(
 					return true;
 				}
 			}(),
-			ap: $elm$core$Maybe$Nothing,
+			aq: $elm$core$Maybe$Nothing,
 			aA: '',
 			dD: 0,
 			aB: $elm$core$Maybe$Nothing,
@@ -8536,7 +8539,7 @@ var $author$project$Page$Mixer$presetSaved = F2(
 		return _Utils_update(
 			state,
 			{
-				ap: $elm$core$Maybe$Nothing,
+				aq: $elm$core$Maybe$Nothing,
 				aA: '',
 				aB: $elm$core$Maybe$Just(preset.aZ)
 			});
@@ -8766,7 +8769,7 @@ var $author$project$Main$renderStartingFor = F2(
 				function ($) {
 					return $.ci;
 				},
-				model.as),
+				model.at),
 			$elm$core$Maybe$Just(songId));
 	});
 var $author$project$Preview$Queued = function (a) {
@@ -8852,7 +8855,7 @@ var $author$project$Page$Mixer$selectPreset = F2(
 		return _Utils_update(
 			state,
 			{
-				ap: $elm$core$Maybe$Nothing,
+				aq: $elm$core$Maybe$Nothing,
 				aB: $elm$core$String$isEmpty(raw) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just(raw)
 			});
 	});
@@ -9221,7 +9224,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								am: $author$project$Page$Library$Loaded(songs)
+								an: $author$project$Page$Library$Loaded(songs)
 							}),
 						$elm$core$Platform$Cmd$none);
 				} else {
@@ -9230,7 +9233,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								am: $author$project$Page$Library$Failed(
+								an: $author$project$Page$Library$Failed(
 									$author$project$Main$httpErrorToString(err))
 							}),
 						$elm$core$Platform$Cmd$none);
@@ -9310,7 +9313,7 @@ var $author$project$Main$update = F2(
 							X: $elm$core$Maybe$Nothing,
 							P: $elm$core$Maybe$Nothing,
 							_: $elm$core$Maybe$Nothing,
-							an: $elm$core$Maybe$Nothing,
+							ao: $elm$core$Maybe$Nothing,
 							aN: loopRequest,
 							ad: _List_Nil,
 							az: $elm$core$Maybe$Nothing,
@@ -9318,7 +9321,7 @@ var $author$project$Main$update = F2(
 							K: $elm$core$Maybe$Just(songId),
 							aC: $elm$core$Maybe$Nothing,
 							c: outcome.c,
-							ar: $elm$core$Maybe$Nothing,
+							as: $elm$core$Maybe$Nothing,
 							aR: songRequest
 						}),
 					$elm$core$Platform$Cmd$batch(
@@ -9363,7 +9366,7 @@ var $author$project$Main$update = F2(
 								model,
 								{
 									X: $elm$core$Maybe$Just(song),
-									ar: $elm$core$Maybe$Nothing
+									as: $elm$core$Maybe$Nothing
 								}),
 							$elm$core$Platform$Cmd$none);
 					} else {
@@ -9372,7 +9375,7 @@ var $author$project$Main$update = F2(
 							_Utils_update(
 								model,
 								{
-									ar: $elm$core$Maybe$Just(
+									as: $elm$core$Maybe$Just(
 										$author$project$Main$httpErrorToString(err))
 								}),
 							$elm$core$Platform$Cmd$none);
@@ -9416,7 +9419,7 @@ var $author$project$Main$update = F2(
 								model,
 								{
 									_: $elm$core$Maybe$Just(region),
-									an: $elm$core$Maybe$Nothing
+									ao: $elm$core$Maybe$Nothing
 								}),
 							$elm$core$Platform$Cmd$none);
 					} else {
@@ -9425,7 +9428,7 @@ var $author$project$Main$update = F2(
 							_Utils_update(
 								model,
 								{
-									an: $elm$core$Maybe$Just(
+									ao: $elm$core$Maybe$Just(
 										$author$project$Main$httpErrorToString(err))
 								}),
 							$elm$core$Platform$Cmd$none);
@@ -9567,7 +9570,7 @@ var $author$project$Main$update = F2(
 							song.aZ,
 							schema,
 							song.dT,
-							$author$project$Main$publishedDefaults(model.aw));
+							$author$project$Main$publishedDefaults(model.aj));
 						var _v17 = A2(
 							$author$project$Preview$warm,
 							$author$project$Page$Mixer$params(state),
@@ -9693,7 +9696,7 @@ var $author$project$Main$update = F2(
 								issued,
 								{
 									ag: $elm$core$Maybe$Nothing,
-									as: $elm$core$Maybe$Just(
+									at: $elm$core$Maybe$Just(
 										{aQ: request, ci: state.ci})
 								}),
 							A3(
@@ -9706,7 +9709,7 @@ var $author$project$Main$update = F2(
 			case 25:
 				var request = msg.a;
 				var result = msg.b;
-				var _v25 = model.as;
+				var _v25 = model.at;
 				if (_v25.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -9717,7 +9720,7 @@ var $author$project$Main$update = F2(
 						result,
 						_Utils_update(
 							model,
-							{as: $elm$core$Maybe$Nothing}));
+							{at: $elm$core$Maybe$Nothing}));
 				}
 			case 26:
 				return $author$project$Main$openRenders(model);
@@ -9965,7 +9968,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								aw: $author$project$Main$DefaultsReady(published)
+								aj: $author$project$Main$DefaultsReady(published)
 							}),
 						$elm$core$Platform$Cmd$none);
 				} else {
@@ -9974,7 +9977,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								aw: $author$project$Main$DefaultsUnavailable(
+								aj: $author$project$Main$DefaultsUnavailable(
 									$author$project$Main$httpErrorToString(err))
 							}),
 						$elm$core$Platform$Cmd$none);
@@ -10020,7 +10023,11 @@ var $author$project$Main$update = F2(
 							A2($author$project$Main$rememberPreset, state.ci, preset.aZ),
 							A2(
 								$author$project$Main$withMixer,
-								A2($author$project$Page$Mixer$applyPreset, schema, preset),
+								A3(
+									$author$project$Page$Mixer$applyPreset,
+									schema,
+									$author$project$Main$publishedDefaults(model.aj),
+									preset),
 								_Utils_update(
 									model,
 									{l: $elm$core$Maybe$Nothing})));
@@ -10545,7 +10552,7 @@ var $author$project$Main$libraryView = function (model) {
 							]))
 					])),
 				$author$project$Page$Library$view(
-				{Z: model.Z, di: $author$project$Main$ImportClicked, dk: $author$project$Main$PathChanged, dv: $author$project$Main$SelectedSong, ac: model.ac, a6: model.am}),
+				{Z: model.Z, di: $author$project$Main$ImportClicked, dk: $author$project$Main$PathChanged, dv: $author$project$Main$SelectedSong, ac: model.ac, a6: model.an}),
 				A2(
 				$author$project$Main$errorLine,
 				function (reason) {
@@ -10931,7 +10938,7 @@ var $author$project$Page$Mixer$confirmRow = F4(
 	});
 var $author$project$Page$Mixer$confirmLine = F2(
 	function (config, chosen) {
-		var _v0 = _Utils_Tuple2(config.a6.ap, chosen);
+		var _v0 = _Utils_Tuple2(config.a6.aq, chosen);
 		_v0$2:
 		while (true) {
 			if (!_v0.a.$) {
@@ -11319,7 +11326,7 @@ var $author$project$Page$Mixer$renderBlock = F2(
 		return starting ? $elm$core$Maybe$Just('Starting it — this moves to the renders screen as soon as the ' + 'server has taken it.') : ($author$project$Page$Mixer$everyStemDisabled(state) ? $elm$core$Maybe$Just('Every stem is switched off, so there is nothing to render — the ' + 'server refuses a mix of nothing, and it would be right to.') : $elm$core$Maybe$Nothing);
 	});
 var $author$project$Page$Mixer$renderPanel = function (config) {
-	var blocked = A2($author$project$Page$Mixer$renderBlock, config.as, config.a6);
+	var blocked = A2($author$project$Page$Mixer$renderBlock, config.at, config.a6);
 	return A2(
 		$elm$html$Html$div,
 		_List_fromArray(
@@ -11415,7 +11422,7 @@ var $author$project$Page$Mixer$checkbox = F4(
 	function (wiring, state, target, spec) {
 		var on = A2(
 			$elm$core$Maybe$withDefault,
-			spec.av,
+			spec.aw,
 			A2(
 				$elm$core$Maybe$andThen,
 				$author$project$Config$asBool,
@@ -11437,7 +11444,7 @@ var $author$project$Page$Mixer$checkbox = F4(
 							$elm$html$Html$Attributes$checked(on),
 							$elm$html$Html$Events$onCheck(
 							wiring.dy(target)),
-							$elm$html$Html$Attributes$disabled(!wiring.aj)
+							$elm$html$Html$Attributes$disabled(!wiring.ak)
 						]),
 					_List_Nil),
 					A2(
@@ -11491,7 +11498,7 @@ var $author$project$Page$Mixer$chooser = F5(
 							$elm$html$Html$Attributes$class('field-select'),
 							$elm$html$Html$Events$onInput(
 							wiring.dh(target)),
-							$elm$html$Html$Attributes$disabled(!wiring.aj)
+							$elm$html$Html$Attributes$disabled(!wiring.ak)
 						]),
 					A2(
 						$elm$core$List$map,
@@ -11568,7 +11575,7 @@ var $author$project$Page$Mixer$typedBox = F6(
 										wiring.dh(target)),
 									A2(
 										$elm$core$List$cons,
-										$elm$html$Html$Attributes$disabled(!wiring.aj),
+										$elm$html$Html$Attributes$disabled(!wiring.ak),
 										bounds))))),
 					_List_Nil)
 				]));
@@ -11632,7 +11639,7 @@ var $author$project$Page$Mixer$number = F4(
 											wiring.dh(target)),
 										A2(
 											$elm$core$List$cons,
-											$elm$html$Html$Attributes$disabled(!wiring.aj),
+											$elm$html$Html$Attributes$disabled(!wiring.ak),
 											bounds))))),
 						_List_Nil),
 						A2(
@@ -11907,7 +11914,7 @@ var $author$project$Page$Mixer$stemRow = F6(
 									$author$project$Page$Mixer$soloClass(soloed),
 									$elm$html$Html$Events$onClick(
 									onSolo(stem.c7)),
-									$elm$html$Html$Attributes$disabled((!wiring.aj) || (!enabled))
+									$elm$html$Html$Attributes$disabled((!wiring.ak) || (!enabled))
 								]),
 							_List_fromArray(
 								[
@@ -12114,7 +12121,7 @@ var $author$project$Waveform$view = function (config) {
 };
 var $author$project$Page$Mixer$view = function (config) {
 	var wiring = {
-		aj: $author$project$Preview$isPlayable(config.q),
+		ak: $author$project$Preview$isPlayable(config.q),
 		dh: config.dh,
 		dy: config.dy
 	};
@@ -12202,7 +12209,7 @@ var $author$project$Main$mixerView = F2(
 							ag: model.ag,
 							dM: schema,
 							ch: song,
-							as: A2($author$project$Main$renderStartingFor, song.aZ, model),
+							at: A2($author$project$Main$renderStartingFor, song.aZ, model),
 							a6: state
 						}),
 						A2(
@@ -12210,8 +12217,8 @@ var $author$project$Main$mixerView = F2(
 						function (reason) {
 							return 'Could not find the loop — ' + reason;
 						},
-						model.an),
-						$author$project$Main$defaultsProblem(model.aw)
+						model.ao),
+						$author$project$Main$defaultsProblem(model.aj)
 					]));
 		} else {
 			return A2(
@@ -12695,7 +12702,7 @@ var $author$project$Main$queueView = F2(
 				b$: $author$project$Main$CancelJobClicked,
 				b3: model.E,
 				cj: function () {
-					var _v0 = model.am;
+					var _v0 = model.an;
 					if (_v0.$ === 1) {
 						var songs = _v0.a;
 						return songs;
@@ -13110,7 +13117,7 @@ var $author$project$Page$Renders$range = F2(
 	});
 var $author$project$Page$Renders$StemEntry = F4(
 	function (name, enabled, decaying, lowpassEnd) {
-		return {bE: decaying, aj: enabled, bS: lowpassEnd, c7: name};
+		return {bE: decaying, ak: enabled, bS: lowpassEnd, c7: name};
 	});
 var $author$project$Page$Renders$withDefault = F2(
 	function (fallback, decoder) {
@@ -13162,7 +13169,7 @@ var $author$project$Page$Renders$decaySummary = function (config) {
 		var decaying = A2(
 			$elm$core$List$filter,
 			function (entry) {
-				return entry.aj && entry.bE;
+				return entry.ak && entry.bE;
 			},
 			entries);
 		var ends = A2(
@@ -13217,7 +13224,7 @@ var $author$project$Page$Renders$stemSummary = function (config) {
 			A2(
 				$elm$core$List$filter,
 				function ($) {
-					return $.aj;
+					return $.ak;
 				},
 				entries));
 		if (!_v1.b) {
@@ -13448,7 +13455,7 @@ var $author$project$Main$rendersView = F2(
 				dg: $author$project$Main$DeleteRenderClicked,
 				b3: model.r,
 				cj: function () {
-					var _v0 = model.am;
+					var _v0 = model.an;
 					if (_v0.$ === 1) {
 						var songs = _v0.a;
 						return songs;
@@ -13830,7 +13837,7 @@ var $author$project$Main$songView = F2(
 					function () {
 					var _v0 = model.X;
 					if (_v0.$ === 1) {
-						return _Utils_eq(model.ar, $elm$core$Maybe$Nothing) ? A2(
+						return _Utils_eq(model.as, $elm$core$Maybe$Nothing) ? A2(
 							$elm$html$Html$p,
 							_List_fromArray(
 								[
@@ -13879,7 +13886,7 @@ var $author$project$Main$songView = F2(
 					function (reason) {
 						return 'Could not load that song — ' + reason;
 					},
-					model.ar),
+					model.as),
 					A2(
 					$author$project$Main$errorLine,
 					function (reason) {
@@ -13891,7 +13898,7 @@ var $author$project$Main$songView = F2(
 					function (reason) {
 						return 'Could not find the loop — ' + reason;
 					},
-					model.an),
+					model.ao),
 					A2(
 					$author$project$Main$errorLine,
 					function (reason) {

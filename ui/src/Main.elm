@@ -1461,7 +1461,7 @@ update msg model =
                             -- whatever that decides to send. Nothing here
                             -- touches the audio port, and an apply is exactly
                             -- one control change — a large one.
-                            withMixer (Mixer.applyPreset schema preset)
+                            withMixer (Mixer.applyPreset schema (publishedDefaults model.defaults) preset)
                                 { model | presetProblem = Nothing }
                                 |> andThen (rememberPreset state.songId preset.id)
 
