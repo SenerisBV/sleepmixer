@@ -1249,7 +1249,7 @@ alongside them and is closed.
      peak-of-window. Dividing the recorded fades-on figure by the recorded
      baseline therefore recovers the peak ratio directly:
      0.8107466 ÷ 1.0003181 = 0.8104888, against 0.896959 ÷ 1.106689 =
-     0.8104888 measured — agreeing to nine significant figures because they
+     0.8104888 measured — agreeing to every digit shown because they
      are one quantity expressed twice, and in dB because −1.8251 + 0.0028 =
      −1.8223, the recorded figure exactly. **This confirms the arithmetic,
      not the hypothesis.** What it rules out is a transcription or
