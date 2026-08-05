@@ -296,9 +296,14 @@ landed before any write started, so there was nothing to sweep.
 
 `separation._write_cache` builds the fallback marker (if any) and every stem
 into a sibling staging directory (`tempfile.mkdtemp(prefix=f".{key}.",
-dir=cache_dir)`) and renames the whole thing into place — `os.replace` twice,
-old cache to a doomed name and staging to the real one — only once everything
-is on disk. An interrupted write, from any cause, leaves either the previous
+dir=cache_dir)`) and renames the whole thing into place — `os.replace`, **up to twice**: first, only if a cache already
+exists there (`replaced = os.path.isdir(final)`), the old cache is moved
+aside to a doomed name; then staging is always renamed onto the real cache
+path, which by then is guaranteed empty either way. A song's first-ever
+separation — what this task's own verification exercised — has nothing to
+move aside, so it takes the one rename; only a re-separation of an
+already-cached song takes two. An interrupted write, from any cause, leaves
+either the previous
 complete cache or no cache at all; it can never leave a subset of stems, and
 it can never leave a marker with no stems behind it either, because the marker
 and the stems are written into the same staging directory and renamed

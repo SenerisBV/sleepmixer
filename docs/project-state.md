@@ -180,11 +180,14 @@ move, not attempted here because this task writes no application code.
   before Demucs was installed would silently read as properly separated the
   next time its cache was loaded, with per-stem controls implying a separation
   that never happened.
-- **No `update`-level test covers the renders fetch flow** —
-  `GotRenders`, `GotRenderJobs`, `OpenRenders` and `refreshRenders` appear
-  nowhere in `ui/tests`, so the fetch-ordering fix described above (and the
-  stale-jobs handling around it) is verified by reading the code, not by a
-  test that would fail if it regressed. Relatedly, `keepStreamed` pins the
+- **No `update`-level test covers the renders fetch flow.**
+  `GotRenders`, `GotRenderJobs` and `refreshRenders` appear nowhere in
+  `ui/tests`, so the fetch-ordering fix described above (and the stale-jobs
+  handling around it) is verified by reading the code, not by a test that
+  would fail if it regressed. `OpenRenders` itself does appear —
+  `UpdateTest.elm:439,442` drives it, but only incidentally, to assert the
+  queue and renders screens are never both open at once; nothing there
+  exercises the fetch it triggers. Relatedly, `keepStreamed` pins the
   held copy of a streamed job unconditionally, so a poll can never correct it
   once it's set — safe today only because every server-side update publishes
   to every subscriber, so the held copy and a poll's copy never actually
@@ -196,10 +199,12 @@ move, not attempted here because this task writes no application code.
   screen has the song title sitting right next to the Download link. A
   deliberate UX call parked rather than a defect: fixing it is a `Content-
   Disposition` filename away, not attempted here.
-- **`.queue-head` overflows horizontally below roughly 400px.** `.queue-kind`
-  carries an unshrinkable `flex: 0 0 5.5rem` and the status and timestamp are
-  `nowrap`. Cosmetic on a desktop-only local tool — `.renders` already has the
-  same class of thing — and not fixed here.
+- **`.queue-head` overflows horizontally below an estimated 400px.**
+  `.queue-kind` carries an unshrinkable `flex: 0 0 5.5rem` and the status and
+  timestamp are `nowrap` — a real bug class, but "roughly 400px" is a figure
+  read off the CSS rule, not a measurement taken in a browser; nobody in this
+  project's review loop can open one. Cosmetic on a desktop-only local tool —
+  `.renders` already has the same class of thing — and not fixed here.
 - **`JobManager.cancel`'s docstring used to claim only two orderings were
   possible** between a cancel and the worker starting the same job — this one
   wins and `_run` short-circuits into its own cancelled update, or `_run` wins
@@ -213,6 +218,26 @@ move, not attempted here because this task writes no application code.
   previous job to finish inside that same handful of microseconds, so no
   permanent inconsistency results. The docstring is corrected to not claim an
   exhaustiveness it doesn't have; the behaviour itself is unchanged.
+- **A render against an unseparated song still separates in-process, where
+  the cancel token cannot reach Demucs.** Separation is killable for the
+  standalone Separate action, and for renders started from the mixer, which
+  requires prior separation before it will even open. But `POST
+  /api/renders` does not require that — it is reachable directly, bypassing
+  the UI's own gate — and `start_render`'s work function calls
+  `run_pipeline`, which calls `separation.separate()` directly rather than
+  the subprocess-wrapped `separation_process.run_separation`. That predates
+  this branch and is out of scope to change here, and nothing in this
+  document or `docs/architecture.md` claims otherwise — but it is a real
+  residual, the same shape as the seven above it: a render submitted this way
+  against a song with no cached stems is cancellable only at `run_pipeline`'s
+  own checkpoints (`docs/architecture.md`'s "Progress and cancellation
+  contract"), all of which come *after* separation returns, so the one
+  worker is committed to a full, uninterruptible Demucs run before the first
+  checkpoint is even reached. A maintainer closing this would route that call
+  through `run_separation` instead of `separate`, threading through the
+  `reporter` and `cancel` that `run_pipeline` already has in scope — the same
+  two arguments `separate_song`'s own `work` function already passes to
+  `run_separation` today.
 
 ## Plan 3b: the mixer
 
