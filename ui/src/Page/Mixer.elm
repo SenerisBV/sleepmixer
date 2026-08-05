@@ -1513,9 +1513,9 @@ descriptionBlock about =
 {-| Text with something in it, or nothing at all.
 
 Every string on this screen that comes from the schema is optional in practice
-— `help` is `null` on sixteen fields, and a description the server did not send
-decodes to `""` — and an empty paragraph is worse than no paragraph: it is a
-gap in a column with nothing to read in it.
+— `help` is `null` wherever a label already says what a control does, and a
+description the server did not send decodes to `""` — and an empty paragraph is
+worse than no paragraph: it is a gap in a column with nothing to read in it.
 -}
 nonBlank : String -> Maybe String
 nonBlank words =
@@ -1536,14 +1536,22 @@ titleOf name =
             name
 
 
-{-| What the server does with a section that the schema has no way to say.
+{-| What a change in a section will cost, or what a preview will not show of
+it — two things the schema has no way to say.
 
-Three of these are about cost — a loop or tempo change throws away every
-stretched loop, and a different separation model throws away the stems as
-well — and one is about a section the preview does not render at all. Both
-kinds are the sort of thing you otherwise learn by changing a slider, hearing
-nothing, and concluding the mixer is broken. Sections not named here get no
-note, which is what makes this safe to leave alone as the config grows.
+Three are about cost: a loop or tempo change throws away every stretched loop,
+and a different separation model throws away the separated stems as well.
+`output`'s is about the gap between a preview and a render — duration respreads
+the whole arc, and the fades and the sample rate reach the finished file only.
+Both kinds are what you otherwise learn by moving a slider, waiting two
+minutes, and concluding the mixer is broken.
+
+It is deliberately *not* a second place to describe a section. Each section
+already carries the server's own description of what it is for, rendered
+directly above this, and a note that repeats it costs a reader the same
+sentence twice — which is how `soundbed`'s note came to be deleted rather than
+kept. Sections not named here get no note, which is what makes this safe to
+leave alone as the config grows.
 -}
 sectionNote : String -> Html msg
 sectionNote name =
@@ -1564,9 +1572,11 @@ sectionNote name =
                             ++ "preview takes as long as the first did."
                         )
 
-                "soundbed" ->
-                    Just "The sound bed is mixed in when you render. Previews never include it."
-
+                -- No `soundbed` here any more. It said the bed is mixed in
+                -- when you render and never appears in a preview, which is
+                -- exactly what `SoundbedConfig`'s own description now says
+                -- immediately above it — the one note that was never about
+                -- cost, and the section that carries it best.
                 "output" ->
                     Just
                         ("Duration decides how many repetitions the arc is spread over, so "
@@ -1623,12 +1633,13 @@ controlsFor wiring state toTarget fields =
 
 This was an `Attr.title` — a tooltip, which is invisible on a touchscreen,
 unreachable from the keyboard, and invisible to anyone not hovering the exact
-element it hangs off. The eleven fields that carried help were, in practice,
-explained to nobody.
+element it hangs off. Every field that carried help was, in practice, explained
+to nobody.
 
-Sixteen field names carry none and want none: `Gain`, `Fade in`, `Room size`
-and the rest of them are labels that already say what they do, so `Nothing` is
-an ordinary answer here rather than a gap somebody should go and fill.
+A good many carry none and want none: `Gain`, `Fade in` and `Room size` are
+labels that already say what they do, and the schema states help where a name
+gives a mechanism rather than an outcome. So `Nothing` is an ordinary answer
+here rather than a gap somebody should go and fill.
 -}
 fieldHelp : Schema.Field -> Maybe String
 fieldHelp spec =

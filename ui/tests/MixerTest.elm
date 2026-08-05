@@ -1219,8 +1219,15 @@ legibilitySuite =
                         |> Query.count (Expect.equal 1)
             , test "including the detail under the summary line" <|
                 \_ ->
+                    -- Anchored to the block it must be inside, not asserted
+                    -- page-wide: unanchored, this passes on the text turning up
+                    -- anywhere at all, including somewhere it does not belong.
                     warm
                         |> screen
+                        |> Query.find
+                            [ Selector.class "section-description"
+                            , Selector.containing [ Selector.text "Which fragment of the song gets repeated" ]
+                            ]
                         |> Query.has [ Selector.text "set them and that region is used exactly" ]
             , test "as a paragraph of its own, the way it was written" <|
                 \_ ->

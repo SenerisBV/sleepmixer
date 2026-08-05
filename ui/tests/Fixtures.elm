@@ -66,7 +66,7 @@ json : String
 json =
     """
 {
-  "description": "Everything that decides what a finished mix sounds like.\\n\\nThe mixer groups these two under Mix: a seed that fixes the random parts of the decay, and the name of the model used to split the song into stems.",
+  "description": "Everything that decides what a finished mix sounds like.\\n\\nOne of these has a control in the mixer, under Mix: the seed, which fixes the random parts of the decay. The other belongs to the separation rather than to the mix.",
   "fields": {
     "seed": {"type": "int", "default": 0, "label": "Seed",
              "help": "Fixes the random parts of the decay.", "min": 0, "step": 1},
@@ -127,7 +127,7 @@ json =
       "reverb_send": {"type": "float", "default": 1.0, "label": "Reverb send",
                       "help": null, "min": 0.0, "max": 2.0, "step": 0.01}
     }},
-    "stem_decay": {"description": "How one stem falls apart across the length of the mix.\\n\\nEvery value here has a start and an end, and curve decides how it moves between them.",
+    "stem_decay": {"description": "How one stem falls apart across the length of the mix.\\n\\nEvery value here has a start and an end. A mix is one loop played over and over, so the loop erodes a little more every time round.",
                     "fields": {
       "enabled": {"type": "bool", "default": true, "label": "Enabled", "help": null},
       "curve": {"type": "str", "default": "linear", "label": "Curve",

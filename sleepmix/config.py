@@ -20,10 +20,11 @@ from typing import Any
 class StemDecayConfig:
     """How one stem falls apart across the length of the mix.
 
-    Every value here has a start and an end. As the mix plays, each one moves
-    from its start toward its end, and curve decides how: evenly the whole
-    way, holding close to the start until a late rush, or rushing away early
-    and lingering near the end.
+    Every value here has a start and an end. A mix is one loop played over and
+    over, and as it plays each of these moves from its start toward its end, so
+    the loop erodes a little more every time round. Curve decides how that move
+    is paced: evenly the whole way, holding close to the start until a late
+    rush, or rushing away early and lingering near the end.
 
     Five things happen to a stem, in this order: treble is filtered away,
     notches are punched out of what is left, brief gaps are dropped in, the
@@ -266,9 +267,11 @@ class OutputConfig:
 class MixConfig:
     """Everything that decides what a finished mix sounds like.
 
-    The mixer groups these two under "Mix": a seed that fixes the random parts
-    of the decay so the same settings give the same mix twice, and the name of
-    the model used to split the song into stems."""
+    One of these has a control in the mixer, under "Mix": the seed, which fixes
+    the random parts of the decay so the same settings give the same mix twice.
+    The other is the model the song is split into stems with — a fact about the
+    separation rather than about the mix, and set in a config file. Everything
+    else a mix is made of is in the sections below."""
 
     # ``min`` is not decoration: ``validate`` rejects a negative seed, and the
     # UI builds its controls from this metadata alone. Without a floor here the

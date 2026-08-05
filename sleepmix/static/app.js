@@ -11840,8 +11840,6 @@ var $author$project$Page$Mixer$sectionNote = function (name) {
 				return $elm$core$Maybe$Just('Changing where the loop is means finding and stretching it ' + ('again, so the next preview takes as long as the first did. ' + ('The region drawn above follows an explicit start and end; ' + 'the rest of these apply when the loop is detected for you.')));
 			case 'tempo':
 				return $elm$core$Maybe$Just('Every stem is stretched again after a change here, so the next ' + 'preview takes as long as the first did.');
-			case 'soundbed':
-				return $elm$core$Maybe$Just('The sound bed is mixed in when you render. Previews never include it.');
 			case 'output':
 				return $elm$core$Maybe$Just('Duration decides how many repetitions the arc is spread over, so ' + ('it changes what any point in it sounds like. The fades apply ' + ('to the finished mix only, and so does the sample rate — a ' + 'preview always plays at the rate the stems were separated at.')));
 			case 'mix':
