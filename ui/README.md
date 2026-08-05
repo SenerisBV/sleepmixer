@@ -178,6 +178,51 @@ would be read as one. On success the screen moves to the renders
 screen, which stops the preview: every door into that screen goes through
 `leaveMixer`, because a preview loops until told otherwise.
 
+### The mixer opens at the server's own defaults, and the preset bar reuses the same function that does it
+
+A fresh mixer used to start every stem at one identical setting, because
+`Config.fromSchema` is built from `/api/schema`, which has no way to describe
+a *list* — it can state every bound `StemConfig` has, but not that
+`MixConfig`'s own shipped default turns `drums` off and shapes `vocals` and
+`other` differently from each other. `GET /api/config/default`
+(`server/api/config.py`) is the server publishing those values directly,
+`dataclasses.asdict(MixConfig())`, and `Page.Mixer.init` lays them over
+`fromSchema`'s output with `Config.overlay` before the screen is ever shown —
+see its own docstring, and `Config.elm`'s `fromSchema` docstring, for the
+mechanics and why a `null`-default field like `loop.start_s` needed `overlay`
+itself to change before this could work at all (`docs/architecture.md`'s new
+section has the full reasoning). If that fetch fails, the mixer opens anyway,
+at `fromSchema`'s bare schema defaults, and says so in place — a screen that
+refuses to open because one request failed is worse than one that opens
+somewhere it can name.
+
+**Applying a preset is the same operation, and that is deliberate rather than
+convenient.** `Page.Mixer.applyPreset` calls the identical `Config.overlay`,
+over the identical `fromSchema` base, with a preset's config standing in for
+the server's defaults. One function doing both is what keeps them from
+silently disagreeing about which keys a config may hold or how a value gets
+parsed and bounded — two call paths for "replace the config with this one"
+would be two places for that agreement to drift apart. The one place preset
+application diverges from opening at the defaults is the loop region:
+`Config.forPreset` strips `loop.start_s`/`end_s` before a preset is ever saved
+(they are seconds into one recording, not a setting to carry to another), so
+`applyPreset` carries the *song's own* current loop region across explicitly
+rather than letting it revert to auto-detection the way every other
+unmentioned field does.
+
+**The preset bar itself is a row above the controls, not a screen of its
+own.** Select a preset, Apply it, type a name and Save it as new, Save over
+whichever preset is selected, or Delete it — all against the mixer that is
+already open, because a preset is applied *to* a config on screen, not looked
+at in isolation. `songs.last_preset_id` adds one more line: which preset (if
+any) this song had applied last, shown with its own Apply button and never
+applied on its own — see `docs/architecture.md` and `docs/project-state.md`
+for why automatic re-application was considered and rejected. The id is
+resolved against whatever preset list `Main` currently holds
+(`Mixer.presetById`/`lastUsed`), so a preset deleted out from under a song
+does not error; the line naming it just stops appearing next time the list is
+fetched.
+
 ### Strict decoders
 
 `ui/src/Api.elm` is the seam where an untyped HTTP response becomes a typed
@@ -298,7 +343,14 @@ elm-test
 - `ConfigTest.elm` — the JSON a preview carries, asserted by decoding the
   encoder's output back out along the paths `MixConfig.from_dict` walks. A
   wrong config here is the worst bug this frontend can have: the preview plays,
-  and it is a preview of a mix nobody asked for.
+  and it is a preview of a mix nobody asked for. Also `Config.overlay` — that a
+  key the incoming JSON carries but the base config lacks (`loop.start_s`,
+  whose `null` schema default leaves it absent from `fromSchema`'s output
+  entirely) is still inserted, that a key the schema does not describe is
+  dropped regardless of which side has it, and that values are bounded and
+  parsed through the same `parse` every typed control uses — and
+  `Config.forPreset`, which strips the loop region and `separation_model`
+  before a config is saved as a preset.
 - `MixerTest.elm` — solo (what `stems` a preview carries, where "none" and
   "all" are one empty list apart), `Main`'s half of the preview lifecycle:
   nothing sent before the session is warm, one request in flight at a time, and
@@ -309,7 +361,14 @@ elm-test
   also asserts that a render in flight belongs to the song that asked for it —
   another song's button is not greyed out by it, and its answer neither closes
   that song's mixer nor reports its failure there — and, in "the panel as it
-  renders", that the screen actually calls the functions above.
+  renders", that the screen actually calls the functions above. The `"presets"`
+  describe block is the preset bar's own suite: `presetById`/`lastUsed`
+  resolving (and failing to resolve) an id against the current preset list,
+  `applyPreset` carrying a song's loop region across while every other field
+  reverts to its default, the 409/400/network-error branches of saving a
+  preset each reading as a different sentence, and — in "the panel as it
+  renders" — every one of the bar's buttons and messages queried directly out
+  of `Main.view`, the same pattern the render panel established.
 - `WarnTest.elm` — `Warn.forSource`, the one sentence shown before a long job
   starts. Every case asserts the sentence carries *this* file's length and the
   single-worker constraint, so a fixed string would fail: the whole reason the

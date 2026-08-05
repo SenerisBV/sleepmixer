@@ -769,6 +769,91 @@ and `is_warm()` is surfaced on `/api/health` so a caller can tell whether
 that's finished. It is silent and best-effort if librosa isn't installed at
 all, matching the rest of the codebase's graceful-degradation policy.
 
+## Presets, and the server's own defaults
+
+**`GET /api/config/default` publishes values; `GET /api/schema` publishes
+shape.** The two look like they could be one route and cannot be, because of
+one thing the schema is structurally unable to say: `config_schema()` walks
+`MixConfig`'s fields and describes each one's type, bounds, and default —
+label, min, max, step, choices, help — but it has no way to describe a
+*list*, and `MixConfig.stems` is a list of four differently-configured
+entries (`drums` disabled, `bass`'s decay disabled, `vocals` dissolving on an
+`exp` curve to 2200 Hz, `other` to 2400 Hz — see `config.py`'s note on
+`plan_stem_configs` and `ui/src/Config.elm`'s `fromSchema` docstring for the
+full list). A schema can tell a mixer that a stem has an `enabled` field and
+what its bounds are; it cannot tell it that the shipped default has `drums`
+off and the other three on, because that's a value belonging to a specific
+element of a list the schema doesn't know exists. `GET /api/config/default`
+sidesteps the whole problem by not describing anything — it is
+`dataclasses.asdict(MixConfig())`, the same values `sleepmix render` starts
+from, serialized whole. `ui/src/Config.elm`'s `overlay` (below) is what turns
+those values into a config the mixer can hold and edit; the schema still
+governs which keys may land and how each is parsed, so the two routes work
+together rather than one making the other redundant.
+
+**`Config.overlay` takes the schema as the authority on which keys may exist,
+not the base config being overlaid — and that split is what makes the loop
+region special enough to need its own handling.** The obvious
+implementation folds over the base's own keys and updates the ones the
+incoming JSON also has; that cannot introduce a key the base never had, and
+`Config.fromSchema`'s output has no key at all for a field whose schema
+default is `null` (`loop.start_s`, `loop.end_s` — see `ui/src/Config.elm`).
+`overlay` instead folds over the *incoming* JSON and asks the schema, not the
+base, whether each key is describable; a key the schema owns is inserted
+whether or not the base already had it, and a key the schema doesn't know
+about is dropped either way. That is what lets a preset — or the server's own
+default config — actually set `loop.start_s`, which a base-authoritative
+merge could never do. It is also why applying a preset in the mixer has to
+carry the song's current loop region across *explicitly*
+(`Page.Mixer.applyPreset`'s `carryLoopRegion`) rather than getting it for
+free from `overlay`: a preset never carries those two fields at all (see
+below), so overlaying one over `fromSchema`'s output leaves them absent, and
+absent means "auto-detect" — silently moving a song's loop back to wherever
+detection lands unless something explicitly re-inserts the region the
+operator had chosen for *this* audio.
+
+**A preset deliberately does not carry everything on screen, and each
+omission has its own reason.** `Config.forPreset` (`ui/src/Config.elm`)
+strips two things before a config is saved:
+
+- `loop.start_s` / `loop.end_s` — seconds into one particular recording.
+  Saved into a preset, they would carry one song's loop region into whatever
+  other song the preset is later applied to, silently relocating the loop to
+  a point chosen for different audio with nothing on screen explaining why
+  the mix suddenly sounds different.
+- `separation_model` — not a mix setting. Changing it nulls the session's
+  cached stems, so the next preview re-runs Demucs, in-process, inside the
+  per-song preview lock: minutes with no progress reporting, on a screen that
+  already believes itself playable. `Page.Mixer` withholds a *control* for
+  this field for the same reason; a preset must not smuggle one in through a
+  door the mixer otherwise keeps shut.
+
+**`songs.last_preset_id` is a hint with an Apply button, and is never applied
+on its own.** Reopening a song's mixer starts from `GET /api/config/default`
+(via `Config.fromSchema`) every time — it does not remember what was last
+applied to *this* song. Auto-applying a remembered preset was considered and
+rejected: a preset is a named, editable, shared recipe, and if opening a song
+silently re-applied one, editing that preset later would silently change the
+sound of every song that had ever been pointed at it, including ones tuned
+weeks earlier and long since considered finished. `PUT
+/api/songs/{id}/last-preset` only ever records an id for the mixer to show
+as "last used here" beside an Apply button; nothing reads it except that one
+line of UI, and nothing calls it except the save flow that just used a
+preset.
+
+**That id is intentionally not a foreign key, and deleting the preset it
+names is a normal, unremarkable event.** `PUT .../last-preset`'s own
+docstring says so directly: enforcing referential integrity here would need
+a migration and a constraint to protect a hint, not a fact anything depends
+on. Delete the preset a song points at and the row keeps the id anyway — the
+column does not know the preset is gone, and nothing asks the presets table
+before returning it. `Page.Mixer.lastUsed` is where the dangling id is
+actually resolved: it looks the id up in the presets list `Main` already
+holds, and a miss is simply `Nothing` — the "last used here" line quietly
+stops appearing, with no error and no 500 anywhere in the path. See
+`docs/project-state.md` for this recorded as a known, deliberate gap rather
+than a bug to close.
+
 ## The frontend (Plan 3a)
 
 `sleepmix/static/index.html` now serves a compiled [Elm](https://elm-lang.org/)

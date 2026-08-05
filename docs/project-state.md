@@ -1,9 +1,10 @@
 # Project state
 
-Status as of the end of the `feat/render-queue` branch (Plan 3c of the spec,
-all 9 tasks complete), on top of `feat/mixer` (Plan 3b, all 7 tasks complete),
-on top of `feat/elm-shell` (Plan 3a of the spec, all 6 tasks complete), on top
-of `feat/interactive-server` (Plan 2b, all 8 tasks complete),
+Status as of the end of the `feat/presets` branch (Plan 3d of the spec, all
+6 tasks complete), on top of `feat/render-queue` (Plan 3c, all 9 tasks
+complete), on top of `feat/mixer` (Plan 3b, all 7 tasks complete), on top of
+`feat/elm-shell` (Plan 3a of the spec, all 6 tasks complete), on top of
+`feat/interactive-server` (Plan 2b, all 8 tasks complete),
 `feat/server-foundation` (Plan 2a, all 7 tasks complete), and `feat/core-hooks`
 (Plan 1, all 10 tasks complete). Plan 1 gave the pipeline the hooks a local web
 UI needs — session staging, cheap preview, structured progress, stable data
@@ -15,15 +16,130 @@ presets. Plan 3a is the first real frontend — an Elm application replacing the
 placeholder `index.html` — and it is scoped to *browsing and separating*, not
 yet to mixing or rendering. Plan 3b adds the mixer: controls generated from the
 config schema, a scrubber over the decay arc, and audio that plays while you
-shape it. Plan 3c is the subject of this section: it makes a running
-separation genuinely stoppable (previously only a render could be cancelled
-mid-flight; Demucs's own call was a single opaque block nothing could
-interrupt), and it gives the interface the three things Plan 3b's own closing
-section named as still missing — a render screen, a queue screen, and a
-warning before a job large enough to block everything behind it. Read
-`docs/architecture.md` first for how the pieces fit together; this document is
-about what's true right now, what was traded off to get here, and what's
-explicitly not done yet.
+shape it. Plan 3c makes a running separation genuinely stoppable (previously
+only a render could be cancelled mid-flight; Demucs's own call was a single
+opaque block nothing could interrupt), and it gives the interface the three
+things Plan 3b's own closing section named as still missing — a render
+screen, a queue screen, and a warning before a job large enough to block
+everything behind it. Plan 3d is the subject of this section: it gives
+presets a screen — `server/api/presets.py`'s CRUD had been reachable only with
+`curl` since Plan 2b — adds `PUT /api/presets/{id}` so one can be renamed or
+saved over instead of only ever created fresh, and closes a gap this document
+used to carry as open by adding `GET /api/config/default`, the route that lets
+a freshly opened mixer start from the same curated per-stem values
+`sleepmix render` does rather than from the schema's one identical setting for
+every stem. Read `docs/architecture.md` first for how the pieces fit
+together; this document is about what's true right now, what was traded off
+to get here, and what's explicitly not done yet.
+
+## Plan 3d: presets, and the server's own defaults
+
+Two gaps closed together, because the same mechanism closes both: a preset is
+a named config snapshot, and the server's own defaults are values with
+nowhere to live *as* a config until the mixer already knows how to accept
+one.
+
+**The mixer used to start every stem identical, which was a real audible
+difference from what `sleepmix render` produces by default — closed by this
+plan's `GET /api/config/default`.** A fresh mixer built `Config.fromSchema`
+from `/api/schema` alone, and the schema has no way to describe a list, so it
+could describe every stem's bounds but not that the shipped default has
+`drums` off, `bass`'s decay off, `vocals` dissolving on an `exp` curve to
+2200 Hz, and `other` to 2400 Hz — the curated shape `MixConfig`'s own
+dataclass defaults carry. This document used to record that divergence in
+detail, stem by stem, as an open gap under Plan 3b, with a note that closing
+it properly needed the server to publish its own default config rather than
+a copy of that list written out in Elm. `GET /api/config/default`
+(`dataclasses.asdict(MixConfig())`, see `docs/architecture.md`'s new section
+on it) is exactly that: a mixer now opens with the same starting point a
+render does, and `Config.overlay` — the same function that lays a preset
+over a config — is what turns those published values into one, so applying a
+preset and loading the server's own defaults are one code path rather than
+two that could drift apart.
+
+**Presets can now be renamed or saved over, and a preset saved under its own
+existing name is not treated as though it collided with itself.**
+`PUT /api/presets/{id}` (`server/api/presets.py`) validates exactly as
+`POST` does — a config that could never render is refused with a 400 before
+it is stored, not discovered later at render time with the connection to the
+bad value already lost — and checks the name collision explicitly rather than
+catching the database's own `UNIQUE` violation, because the unique index
+cannot tell "this name is taken by someone else" from "this name is taken by
+the row being updated," and the second is the ordinary case of saving a
+preset over itself. See `docs/architecture.md`'s new section for what a
+preset deliberately still does not carry (the song's own loop region,
+`separation_model`) and why.
+
+**The mixer's preset bar (`ui/src/Page/Mixer.elm`)** is a row above the
+controls, not a screen: choose a preset from a select, Apply it against the
+song currently open, type a name and Save as a new one, Save over the
+selected preset, or Delete it. Applying a preset means *make it look like
+this*, not merge it in — a field the preset doesn't mention goes back to its
+schema default, not to whatever the operator had it at a moment ago — except
+the song's current loop region, which is carried across explicitly because a
+preset never carries loop seconds belonging to a different piece of audio
+(`Page.Mixer.applyPreset`, `docs/architecture.md`).
+
+**`songs.last_preset_id` remembers which preset was last applied to a song,
+as a hint and nothing more — deliberately never applied automatically.**
+Reopening a song's mixer always starts from the server's own defaults; any
+preset that had been applied to it has to be chosen again, from a line
+reading "last used here" beside an Apply button. Auto-applying it was
+considered and rejected: a preset is a shared, editable recipe, and a mixer
+that silently re-applied one on open would mean that editing a preset later
+silently changes the sound of every song ever pointed at it — including one
+tuned and considered finished weeks earlier. `PUT
+/api/songs/{id}/last-preset` records the id and nothing more; nothing reads
+it except that one line of UI.
+
+That id is deliberately not a foreign key, and deleting a preset a song
+points at is an ordinary, unremarkable thing to do — verified directly this
+task: deleting a preset a song's `last_preset_id` still names leaves the
+song row holding the now-dangling id, `GET`s it back with no error, and the
+mixer's own lookup against the (now shorter) presets list simply stops
+finding it, so the "last used here" line quietly stops appearing. No
+migration, no constraint, and no 500 anywhere in that path.
+
+**Four small things this plan's own reviews found and left, none of them
+blocking:**
+
+- **A check-then-act race survives in `_migrate_last_preset_id`** (added to
+  `Store.__init__` to add `songs.last_preset_id` to a database that predates
+  it). Two processes opening the same pre-migration database in the same
+  instant could both see the column missing and both try to add it; the
+  loser raises `sqlite3.OperationalError: duplicate column name` at startup.
+  `Store` is a per-app singleton and this is a single-user desktop tool, so
+  the failure mode is the loser crashing once and self-healing on the very
+  next retry (the column exists by then) rather than any lasting
+  inconsistency — ruled not worth a lock for.
+- **`test_update_preset_keeping_its_own_name_is_not_a_collision` does not
+  prove what its own docstring claims.** It was written to show that the
+  explicit `AND id != preset_id` pre-check (`Store.update_preset`) is what
+  lets a preset be saved over itself under its own name; a version that
+  instead saved first and caught the database's `IntegrityError` passes the
+  same test, because SQLite's `UNIQUE` constraint never fires on a
+  self-rename regardless of which style wrote the check. The test does have
+  real value, verified by mutation — it does catch forgetting the `AND id !=
+  preset_id` clause itself — the docstring's claim about *why* is simply
+  broader than what the test can tell apart.
+- **`ui/tests/ApiTest.elm`'s pre-existing unknown-status test omits
+  `last_preset_id` from its fixture entirely and still passes** — only
+  because the decode fails earlier, on the deliberately-bad
+  `separation_status` the test exists to exercise. Harmless, and untouched by
+  this plan, but nobody should read the omission as evidence the field is
+  optional; `Api.Song`'s decoder requires it.
+- **No `RequestTest.elm` exists**, so this plan's new `Request` functions —
+  their paths, verbs, and JSON encoding — are exercised only by reading, the
+  same as every other function in that module. Pre-existing convention, not a
+  gap this plan introduced.
+
+**What this plan does not cover, named up front rather than discovered
+later:** a presets screen (list, browse, delete from outside the mixer),
+preset import or export or sharing between installations, and migrating
+`last_preset_id` to an enforced foreign key. Segment selection and
+arrangement, a path allow-list for `import_song`, streaming peak
+computation, and authentication are carried forward unchanged from earlier
+plans — see "Known weaknesses, deferred deliberately" below.
 
 ## Plan 3c: jobs you can watch and stop
 
@@ -322,20 +438,6 @@ control could produce a config the server refuses, and it would surface as a
 
 What it does not do yet, and what to know before changing it:
 
-- **The mixer starts from the schema's stem defaults, not `MixConfig`'s curated
-  ones — and that is a difference on every stem, not just drums.** A fresh
-  mixer gives all four stems one identical setting (`StemConfig` +
-  `StemDecayConfig` defaults). `MixConfig`'s list is four different ones, and
-  they differ as follows: `drums` enabled here / disabled there; `bass` decay
-  enabled here / disabled there; `vocals` `linear` here against `exp` there
-  plus lowpass 1600 → 2200 Hz, amplitude -9 → -16 dB and spectral holes
-  0.3 → 0.45; `other` lowpass 1600 → 2400 Hz and amplitude -9 → -4 dB. The
-  CLI's per-stem shaping is simply absent until someone moves a slider, so a
-  mix built in the UI and a mix built by `sleepmix render` from defaults are
-  audibly different things. The schema deliberately does not describe
-  list-typed fields, so there is nothing to read the curated list from, and
-  hard-coding it in Elm is exactly the drift the schema exists to prevent. A
-  `GET /api/config/default` is the right fix and is parked for a later plan.
 - **The sound bed is not in previews.** `preview.render_window` does not add it;
   `pipeline.run_pipeline` does. The section says so in place, because otherwise
   you turn on binaural beats, hear nothing, and conclude the mixer is broken.
@@ -442,12 +544,14 @@ What it does not do yet, and what to know before changing it:
 - This plan's own closing section named four things out of scope: **the
   render screen (start, watch, cancel, download), the presets UI, queue
   visibility, and a warning before importing a file large enough to block
-  everything behind it.** Plan 3c has since closed three of the four — the
-  render screen, queue visibility, and the warning, plus, not asked for by
-  this list but the same shape of gap, the ability to cancel a *separation*
-  once it has started. Presets are the one that remains; see the Plan 3c
-  section above and Plan 3d, not yet started, which is presets and per-song
-  config memory.
+  everything behind it.** Plan 3c closed three of the four — the render
+  screen, queue visibility, and the warning, plus, not asked for by this list
+  but the same shape of gap, the ability to cancel a *separation* once it has
+  started. Plan 3d has since closed the last one — the mixer's preset bar;
+  see that section above. Per-song config memory, named in the same breath as
+  presets when this was written, turned out to be a different thing than a
+  missing screen: Plan 3d considered it and rejected it deliberately (see that
+  section), rather than building it.
 - The parked defect from Plan 3a is untouched: reloading mid-separation shows an
   enabled button reading "Separating…", because the disable comes from client
   state and the label from the server's status. The mixer's own gate reads the
@@ -664,8 +768,13 @@ presets — those stay in the present tense because they still are.
   had no frontend at all. `Page/Renders.elm` is that screen now; see the Plan
   3c section above for what it does and the pairing bug its own review found
   and fixed.
-- **No presets.** `server/api/presets.py`'s CRUD still has no corresponding
-  screen. Open — Plan 3d, along with per-song config memory.
+- **No presets — closed by Plan 3d.** `server/api/presets.py`'s CRUD had no
+  corresponding screen; `ui/src/Page/Mixer.elm`'s preset bar is that screen
+  now, and `PUT /api/presets/{id}` (added the same plan) is what lets one be
+  renamed or saved over rather than only ever created fresh. See the Plan 3d
+  section above. Per-song config memory — remembering, and re-applying, a
+  preset for a specific song — was considered in the same plan and rejected
+  rather than built; that section explains why.
 
 **What the final whole-branch review changed.** Six things, all of which had
 shipped looking finished. (1) `sleepmix/static/index.html`'s stylesheet was

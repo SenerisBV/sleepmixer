@@ -123,12 +123,20 @@ from what `sleepmix render` would do on every one of them:
   - `other` — lowpass 1600 → 2400 Hz, amplitude -9 → -4 dB.
 
 So it is not "drums start on". It is that the CLI's per-stem shaping — vocals
-dissolving late and far, other staying present — is absent, and every stem
-erodes identically until someone moves a slider. The mixer is honest: it shows
-exactly what it will render. It just does not start where the CLI starts, and
-anyone comparing a mix made here against one made there should know that is
-why they differ. Closing this properly needs the server to publish its default
-config, not a copy of that list written out in Elm.
+dissolving late and far, other staying present — is simply not something this
+function alone can produce: the schema it reads cannot describe a list, so
+its own output is always one identical setting for every stem, and always
+will be. That used to be where a fresh mixer was left standing.
+
+It no longer is, and this function is not what changed. `GET
+/api/config/default` (`server/api/config.py`) now publishes exactly the values
+above as `MixConfig()`'s own dict, and `Page.Mixer.init` lays them over this
+function's output with `Config.overlay` before the mixer is ever shown — see
+its docstring. `fromSchema` remains the base that overlay writes into, on
+purpose: it is still the only thing that knows which stems a *particular* song
+has, which the server's defaults cannot, and the schema is still what bounds
+and parses every value either side supplies. What is written above is why that
+route had to exist, not a gap still waiting on one.
 -}
 fromSchema : Schema.Schema -> List String -> Config
 fromSchema schema stemNames =

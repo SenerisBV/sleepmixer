@@ -190,10 +190,23 @@ That screen is the answer to the incident that started this: a seventy-minute
 file imported by accident, with nothing to do about it short of killing the
 server by hand.
 
-What it still doesn't do: there are no presets yet — `server/api/presets.py`'s
-CRUD has no screen, though it's reachable the same way with `curl` in the
-meantime — and there is no *estimate* of how long a render or separation will
-take, only the warning above that names the source file's length.
+A preset bar sits above the mixer's controls: choose one from a list, Apply it
+to the song you have open, name and save your own, save over an existing one,
+or delete it. Applying a preset means the controls come to look like the
+preset, not that it's merged into whatever you already had — a field the
+preset doesn't mention goes back to its default, except the loop region you've
+set for this particular song, which stays put, because a preset holds seconds
+of some other recording, not this one. A song remembers which preset it last
+had applied, and shows it as a line with an Apply button next to it — never
+applied by itself. Opening a song's mixer always starts from the same values
+`sleepmix render` would use, whether or not a preset was ever involved; editing
+a preset that several songs have used should not be able to silently reach
+into any of them.
+
+What it still doesn't do: there is no screen for browsing or managing presets
+outside the mixer that's currently open, no import/export or sharing a preset
+between installations, and no *estimate* of how long a render or separation
+will take, only the warning above that names the source file's length.
 
 That last one is a choice rather than an absence now. One render has been
 measured end to end: a 246.6 s source at the default 20-minute output, with its
@@ -208,9 +221,6 @@ not to tell. So it still says what's queued and lets you watch it rather than
 promising a time. `docs/architecture.md` has the figures and why the gap
 between them and the cold-preview number is not a coincidence.
 
-Nothing about the API is expected to change to make room for presets when they
-arrive.
-
 Ask the API directly for a preview — any single point in the decay arc, by a
 `progress` value from 0 to 1 and an optional list of stems to solo — and get
 raw WAV bytes back in well under a second once a song's session is warm, no
@@ -222,7 +232,10 @@ from nothing was measured at well over a minute, which is why the mixer
 gates its controls behind that one request instead of pretending everything
 is instant.) Start a full render as a background job, watch it the same way
 as separation, cancel it if you want to, and download the finished file once
-it's done. Save a set of decay settings as a named preset and reuse it.
+it's done. Save a set of decay settings as a named preset, rename one or save
+over it in place, and fetch the server's own defaults as plain values (`GET
+/api/config/default`) rather than the field-by-field shapes `/api/schema`
+describes.
 
 **Keep it on localhost.** There is no authentication, and importing a song
 takes a filesystem path — so anything that can reach the port can ask the
