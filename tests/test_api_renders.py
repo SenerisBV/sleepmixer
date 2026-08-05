@@ -378,6 +378,72 @@ def test_a_failure_after_cancellation_is_recorded_as_a_failure(client, tmp_path,
     assert render["status"] == "failed", "the row must agree with the job"
 
 
+def _render_that_writes_then(client, tmp_path, monkeypatch, explode):
+    """Start a render whose pipeline writes bytes to ``output_path`` and then dies.
+
+    The written bytes are the point. ``run_pipeline`` calls ``save_audio``
+    exactly once, at the very end, so a genuinely cancelled render leaves no
+    file at all — which means an assertion that no file exists afterwards
+    passes just as happily against an ``abandon_render`` that deletes nothing.
+    Deleting its ``os.remove`` block left the whole module green, while
+    ``ui/tests/RendersTest.elm`` asserts the exact sentence "the partial file
+    was removed with it" to the operator. Something has to actually put a
+    partial file on disk for the removal to be observable, and nothing in the
+    real pipeline does today — but the promise is made to the operator anyway,
+    for every future shape of the pipeline that writes incrementally.
+    """
+    import sleepmix.server.api.renders as renders_api
+
+    def writes_a_partial(input_path, config, output_path, reporter=None, cancel=None):
+        with open(output_path, "wb") as fh:
+            fh.write(b"RIFF" + b"\0" * 4096)
+        explode(cancel)
+
+    monkeypatch.setattr(renders_api, "run_pipeline", writes_a_partial)
+    song = _import_song(client, tmp_path)
+    body = client.post("/api/renders",
+                       json={"song_id": song["id"], "config": _SHORT}).json()
+    finished = _await_job(client, body["job"]["id"])
+    render = client.get(f"/api/renders/{body['render']['id']}").json()
+    return finished, render
+
+
+def test_a_cancelled_render_leaves_no_partial_file_behind(client, tmp_path, monkeypatch):
+    """A half-written mix must not survive the render that abandoned it.
+
+    `GET /api/renders/{id}/audio` refuses anything not at "done" before it ever
+    looks at the file, so the bytes are unreachable through the API — but they
+    are in the renders directory, they are as large as a finished mix, and the
+    renders screen tells the operator in so many words that they are gone.
+    """
+    from sleepmix.progress import Cancelled
+
+    def cancelled(_cancel):
+        raise Cancelled()
+
+    finished, render = _render_that_writes_then(client, tmp_path, monkeypatch, cancelled)
+    assert finished["status"] == "cancelled"
+    assert render["status"] == "cancelled"
+    assert not os.path.exists(render["path"]), (
+        "the pipeline left bytes at this path and abandon_render did not "
+        "remove them — the renders screen promises it did")
+
+
+def test_a_failed_render_leaves_no_partial_file_behind(client, tmp_path, monkeypatch):
+    """The same promise through the other exit, which is the worse one.
+
+    A cancelled render is one the operator asked to stop; a failed one they
+    did not, so a file left behind is one they have no reason to go looking
+    for."""
+    def explodes(_cancel):
+        raise RuntimeError("pipeline exploded")
+
+    finished, render = _render_that_writes_then(client, tmp_path, monkeypatch, explodes)
+    assert finished["status"] == "failed"
+    assert render["status"] == "failed"
+    assert not os.path.exists(render["path"])
+
+
 def test_deleting_a_render_removes_the_row_and_the_file(client, tmp_path):
     render = _a_finished_render(client, tmp_path)
     path = render["path"]

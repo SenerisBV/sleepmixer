@@ -58,6 +58,37 @@ def test_a_cache_hit_never_spawns_anything(song, tmp_path, monkeypatch):
     assert sorted(result.stems) == ["vocals"]
 
 
+def test_a_cached_fallback_still_reports_itself_as_a_fallback(song, tmp_path, monkeypatch):
+    """A warm fallback must not read as a proper separation.
+
+    The warm path returns `SeparationResult(_load_cache(...),
+    _load_fallback_reason(...))` directly rather than going through
+    `separate_detailed`, which is deliberate — it exists so four
+    multi-hundred-megabyte stems are not decoded twice on every reopen — but it
+    is a second place that has to remember to carry the reason, and nothing
+    proved it did.
+
+    What the forgetting looks like: a song separated before the `separation`
+    extra was installed has one `mix` stem and a marker saying so. Drop the
+    reason here and it comes back as `Separated` with a single stem, the song
+    screen stops offering "Retry with Demucs", and the mixer builds one row out
+    of the whole track while the operator configures a decay per instrument
+    that does not exist.
+    """
+    stems = {"mix": AudioBuffer(np.zeros((10, 2), dtype=np.float32), 44100)}
+    _write_cache(str(tmp_path), _cache_key(song, "m"), stems,
+                 "Demucs separation unavailable (no torch)")
+
+    def forbidden(*a, **k):
+        raise AssertionError("spawned a worker for a cache hit")
+
+    monkeypatch.setattr("subprocess.Popen", forbidden)
+    result = run_separation(song, "m", str(tmp_path), worker_module=STUB)
+    assert sorted(result.stems) == ["mix"]
+    assert result.fallback_reason is not None
+    assert "unavailable" in result.fallback_reason
+
+
 def test_phases_reach_the_reporter(song, tmp_path):
     events = []
     result = run_separation(song, "m", str(tmp_path),
