@@ -193,12 +193,23 @@ server by hand.
 What it still doesn't do: there are no presets yet — `server/api/presets.py`'s
 CRUD has no screen, though it's reachable the same way with `curl` in the
 meantime — and there is no *estimate* of how long a render or separation will
-take, only the warning above that names the source file's length. Nothing in
-this project measures the ratio between a track's length and how long
-rendering or separating it takes closely enough to state a number rather than
-invent one, so the interface says what's queued and lets you watch it rather
-than promising a time. Nothing about the API is expected to change to make
-room for presets when they arrive.
+take, only the warning above that names the source file's length.
+
+That last one is a choice rather than an absence now. One render has been
+measured end to end: a 246.6 s source at the default 20-minute output, with its
+stems already separated and cached, finished in **13.6 s** wall-clock,
+corroborated by a second run at 11.0 s. So rendering from warm stems is cheap,
+and the expensive term is separation — which is why the warning keys on the
+source file's length rather than on the length of the mix. But two runs of one
+track on one machine is a measurement, not a model: nothing has been timed on a
+cold cache, on a long source, or on hardware that is not this one, and a
+progress bar that lies about time left is the one lie this interface is built
+not to tell. So it still says what's queued and lets you watch it rather than
+promising a time. `docs/architecture.md` has the figures and why the gap
+between them and the cold-preview number is not a coincidence.
+
+Nothing about the API is expected to change to make room for presets when they
+arrive.
 
 Ask the API directly for a preview — any single point in the decay arc, by a
 `progress` value from 0 to 1 and an optional list of stems to solo — and get

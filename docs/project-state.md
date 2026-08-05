@@ -174,12 +174,17 @@ move, not attempted here because this task writes no application code.
   `start_new_session=True` plus `os.killpg` carries platform nuance not worth
   adding speculatively against a case that doesn't exist yet. Revisit if
   Demucs configuration ever gains worker processes of its own.
-- **No automated test asserts that a cached *fallback* separation still
-  reports itself as a fallback through the supervisor's warm path** — only a
-  manual spot-check does. If that behaviour ever regressed, a song separated
-  before Demucs was installed would silently read as properly separated the
-  next time its cache was loaded, with per-stem controls implying a separation
-  that never happened.
+- ~~**No automated test asserts that a cached *fallback* separation still
+  reports itself as a fallback through the supervisor's warm path.**~~ Closed
+  by the final fix wave:
+  `test_a_cached_fallback_still_reports_itself_as_a_fallback` writes a fallback
+  cache, calls `run_separation`, and asserts the reason survives. It was worth
+  closing rather than carrying: the warm path returns
+  `SeparationResult(_load_cache(…), _load_fallback_reason(…))` directly instead
+  of going through `separate_detailed`, deliberately, so it is a second place
+  that has to remember — and forgetting makes a song separated before Demucs
+  was installed read as properly separated, with per-stem controls implying a
+  separation that never happened.
 - **No `update`-level test covers the renders fetch flow.**
   `GotRenders`, `GotRenderJobs` and `refreshRenders` appear nowhere in
   `ui/tests`, so the fetch-ordering fix described above (and the stale-jobs
@@ -187,7 +192,12 @@ move, not attempted here because this task writes no application code.
   would fail if it regressed. `OpenRenders` itself does appear —
   `UpdateTest.elm:439,442` drives it, but only incidentally, to assert the
   queue and renders screens are never both open at once; nothing there
-  exercises the fetch it triggers. Relatedly, `keepStreamed` pins the
+  exercises the fetch it triggers. The final fix wave narrowed this rather than
+  closing it: the screen's Cancel wiring is now asserted through `Main.view`
+  (`RendersTest.elm`, "the Cancel button, through the whole application"),
+  because that one control can destroy something and `jobFor` alone could not
+  vouch for it. The rest of `Page.Renders`' and all of `Page.Queue`'s view
+  markup is still unasserted. Relatedly, `keepStreamed` pins the
   held copy of a streamed job unconditionally, so a poll can never correct it
   once it's set — safe today only because every server-side update publishes
   to every subscriber, so the held copy and a poll's copy never actually
@@ -238,6 +248,52 @@ move, not attempted here because this task writes no application code.
   `reporter` and `cancel` that `run_pipeline` already has in scope — the same
   two arguments `separate_song`'s own `work` function already passes to
   `run_separation` today.
+
+  **The preview path reaches the same call, and that is what made this
+  UI-reachable rather than curl-only.** `RenderSession.stems()`
+  (`sleepmix/session.py`) also calls the in-process `separation.separate()`, so
+  the first preview on a song with no cached stems runs a full Demucs inside
+  `SessionRegistry`'s per-song use lock, holding a threadpool thread, with no
+  job, no queue row, no Cancel and an indeterminate "Preparing…" panel. Every
+  door into the mixer is gated on `song.stems` being non-empty, which is what
+  normally keeps that call unreachable — see the invariant below, which is the
+  thing that gate depends on and which this branch briefly broke.
+
+**The invariant `songs.stems` carries, added by the final fix wave:**
+
+`songs.stems` and the on-disk separation cache are two records of one fact, and
+after Plan 3c they can be written at different moments. Only one line can make
+them disagree — the `invalidate_cache` inside `separate_song`'s work function,
+which `force=true` reaches — and it now clears `stems` in the same breath.
+
+The rule is: **from the moment the cache is deleted until the moment new stems
+are written, the row says the song has none.** Nothing else in the codebase
+deletes a cache while a row survives it.
+
+This is not bookkeeping. Every gate into the mixer reads `song.stems` and not
+the cache — `Page.Song.mixerPanel` for the button, `Main`'s `OpenMixer` for the
+model, deliberately, because the client cannot see the disk. Before the fix, a
+forced retry that was cancelled (newly possible from the queue screen) left a
+row reading "not separated" *and* listing four stems *and* offering an enabled
+Open-the-mixer with no explanatory line. Opening it did the two worst things
+available here: the in-process Demucs run described above, and then — once it
+cached four real stems while the mixer's rows had been built from the stale
+list — a `plan_stem_configs` that matched none of them and returned every
+available stem at its defaults, silently discarding every gain, reverb send and
+decay setting on screen.
+
+Every task on the branch was individually right. The cancel path is correct to
+reset only the *status*; the atomic cache write is correct and is precisely why
+force leaves nothing on disk; making a running separation cancellable is what
+makes the sequence occur at all; and gating the mixer on `song.stems` was right
+back when stems and cache could only ever be written together. Nobody owned the
+sentence that has to be true across all four, which is why it is written down
+here rather than left to be re-derived.
+
+`tests/test_api_songs.py` holds it as a sequence rather than a unit —
+`test_cancelling_a_forced_separation_leaves_the_song_with_no_stems` and
+`test_a_forced_separation_that_fails_also_leaves_no_stems` — because no single
+step is wrong and only the order is.
 
 ## Plan 3b: the mixer
 
@@ -469,7 +525,7 @@ and its endpoint, the mixer, preview playback, and schema-driven controls are
 all closed now; each entry below is written in the past tense, names what
 closed it, and keeps whatever reasoning is still worth having on hand rather
 than being deleted outright. Still open from this list: the import-size
-warning, the two-point separation progress bar, the render screen, and
+warning, the coarse separation progress bar, the render screen, and
 presets — those stay in the present tense because they still are.
 
 - **Nothing in the interface played audio, and nothing said so — closed by
@@ -563,18 +619,31 @@ presets — those stay in the present tense because they still are.
   often than anything before it did; that remains open and is recorded
   separately above, under Plan 3b.
 
-- **The separation progress bar is real but has nothing to animate.** The SSE
-  machinery works end to end — `watchJob` opens the stream, events decode,
-  `Watching`'s fraction reaches the bar — but the separation job emits only two
-  progress points: `0.0` when it starts and `1.0` when it completes, which is
-  terminal and clears the bar. So the bar renders, sits at 0% for the entire
-  run, and then vanishes; the percentage beside it reads "0%" the whole time.
-  The port machinery is right and the payload is thin. **Plan 3b's render
-  progress should not assume the bar moves** — a render reports many
-  intermediate fractions (`pipeline.run_pipeline`'s stage checkpoints, see
-  `docs/architecture.md`) and will animate properly, but anything inheriting
-  this bar for separation should either accept the two-point behaviour or make
-  `separation.separate` report per-stem progress first.
+- **The separation progress bar is real but has almost nothing to animate.**
+  The SSE machinery works end to end — `watchJob` opens the stream, events
+  decode, `Watching`'s fraction reaches the bar. What is thin is the payload.
+  Plan 3c's subprocess split changed the numbers without changing the
+  substance: the job emits `0.0` from the route's own `reporter.emit`, then the
+  worker's three hard-coded phase lines (`separation_worker._phase`: `0.05`
+  "Loading the model", `0.15` "Separating stems", `0.90` "Writing stems"), then
+  `1.0`, which is terminal and clears the bar. **The whole Demucs run happens
+  between `0.15` and `0.90`**, so the bar jumps to 15% within a second or two
+  and then sits there for the entire separation — the several minutes that are
+  the only part anybody is waiting through. It reads "15%" the whole time.
+
+  It is not that Demucs cannot report more: `demucs.apply.apply_model` takes a
+  `progress` flag, and `_demucs_separate` passes `progress=False`. Turning it
+  on writes a tqdm bar to *stderr*, which `_StderrTail` drains and keeps only
+  as a failure tail — so making the bar move means parsing that, or splitting
+  the call per model shift and emitting a phase line between each, and neither
+  is a line of work.
+
+  **Anything inheriting this bar should not assume it moves.** A render does —
+  `pipeline.run_pipeline` reports many intermediate fractions through its stage
+  checkpoints, see `docs/architecture.md` — but a separation's does not, and a
+  screen that says otherwise is telling the operator a bar is informative while
+  they decide whether to cancel. `Page.Queue.progress` said exactly that until
+  Plan 3c's final fix wave, and now says what is true.
 
 - **No mixer — closed by Plan 3b's Task 6.** Nothing in this UI read
   `/api/schema` or let a user touch a single decay/reverb/tempo parameter;

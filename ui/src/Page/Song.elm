@@ -182,10 +182,12 @@ stemList stems =
 nothing but an inline `width`, so it needs a sibling-free parent of a known
 size to be a percentage *of*, and the track is what shows the remainder.
 
-Separation currently reports two progress points — 0.0 when it starts and 1.0
-when it finishes, which is terminal and clears the bar — so in practice this
-sits empty for the whole run. That is the payload being thin, not the bar
-being broken; see `docs/project-state.md`.
+Separation reports five fractions and only one of them lands anywhere useful:
+0.0 from the route, then the worker's hard-coded 0.05, 0.15 and 0.90, then 1.0,
+which is terminal and clears the bar. The whole Demucs run sits between 0.15
+and 0.90, so in practice this bar reaches 15% almost immediately and stays
+there for the entire wait. That is the payload being thin, not the bar being
+broken; see `docs/project-state.md` for what moving it would cost.
 -}
 progressBar : Maybe Float -> Html msg
 progressBar progress =

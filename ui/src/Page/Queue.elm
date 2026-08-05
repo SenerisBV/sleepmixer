@@ -410,9 +410,23 @@ statusClass status =
 
 {-| A bar for the job that is actually moving, and for no other.
 
-Both kinds report real fractions while they run — `separation_process` parses
-Demucs' own phase lines and `progress.Reporter` clamps and monotonises the
-render's — so this bar means something. A queued job's `fraction` is 0.0 and
+**The two kinds of job mean very different things by this bar, and only one of
+them moves.** A render's fraction is real: `pipeline.run_pipeline` reports
+through its stage checkpoints and `progress.Reporter` clamps and monotonises
+it, so the bar advances as the mix is built. A separation's does not.
+`separation_worker._phase` emits three hard-coded fractions — 0.05, 0.15,
+0.90 — and `_demucs_separate` calls `apply_model` with `progress=False`, so
+everything between "Separating stems" and "Writing stems" is one opaque call.
+The bar reaches 15% in the first second or two and stays there for the whole
+run, which is the several minutes anyone is actually waiting through.
+
+Drawn anyway, and deliberately: this is the screen where the operator decides
+whether to cancel, and a still bar next to a "running" status is at least
+honest about there being nothing to say. What would not be honest is claiming
+it means more than it does — see `docs/project-state.md` for what making a
+separation's bar move would cost.
+
+A queued job's `fraction` is 0.0 and
 will stay there until the worker reaches it, and an empty track next to the word
 "waiting" would be a bar that says nothing twice; the sentence under the row
 says the useful thing instead. A terminal job has nowhere left to get to.

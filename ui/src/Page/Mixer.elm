@@ -263,12 +263,21 @@ between a render that starts on the render and one that runs Demucs first:
 minutes before anything else happens, and by far the largest term in how long
 this takes.
 
-**And no estimate of that time.** Nothing in this project measures the ratio
-between a track's length and its render's, so a number here would be invented.
-The "Preparing…" panel a few lines up is deliberately indeterminate for the
-same reason, and a bar that lies about time left is the one lie this interface
-is built not to tell. If a measured ratio ever proves stable, an estimate can
-become something this line claims; until then it does not.
+**And no estimate of that time**, though the ordering above is no longer a
+guess. One render has been measured end to end: a 246.6 s source at the default
+20-minute output, stems already cached, finished in 13.6 s wall-clock and 11.0 s
+on a second run — against 180.55 s for the same track's cold first preview. So
+a render from warm stems really is the cheap half and separation really is the
+expensive one, which is what the second phrase on this line is for.
+
+What has *not* been measured is everything an estimate would need: a cold
+cache, a source that is not four minutes, a machine that is not this one. Two
+warm runs of one track is a measurement, not a model, and a number stated here
+would be read as the model. The "Preparing…" panel a few lines up is
+deliberately indeterminate for the same reason, and a bar that lies about time
+left is the one lie this interface is built not to tell. If a ratio is ever
+measured widely enough to be stable, an estimate can become something this line
+claims; until then it does not.
 -}
 preflight : Bool -> State -> String
 preflight stemsSeparated state =
