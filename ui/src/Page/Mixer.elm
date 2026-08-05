@@ -2,9 +2,9 @@ module Page.Mixer exposing
     ( Pending(..), State
     , everyStemDisabled, init, loopOverride, params, preflight, renderBlock
     , renderConfig, setField, setProgress, soloedStems, toggleField, toggleSolo
-    , applyPreset, armConfirm, lastUsed, newPresetName, presetById, presetSaved
-    , saveMessage, saveOverAvailable, selectPreset, selection, setPresetName
-    , view
+    , applyBlock, applyPreset, armConfirm, lastUsed, newPresetName, presetById
+    , presetSaved, saveMessage, saveOverAvailable, selectPreset, selection
+    , setPresetName, view
     )
 
 {-| The mixer: hear one point in the decay arc while you shape it.
@@ -775,7 +775,7 @@ presetBar config =
             selection config.presets config.state
 
         blocked =
-            applyBlock config.preview chosen
+            applyBlock config.preview chosen (lastUsed config.presets config.song /= Nothing)
     in
     div [ class "presets" ]
         [ div [ class "preset-row" ]
@@ -868,8 +868,9 @@ presetSelect config chosen =
         )
 
 
-{-| Why Apply cannot be pressed, if it cannot — the sentence rather than a
-`Bool`, for the reason `renderBlock` gives about the Render button.
+{-| Why the bar's own Apply cannot be pressed, if it cannot — the sentence
+rather than a `Bool`, for the reason `renderBlock` gives about the Render
+button.
 
 Readiness is asked *first*, and that ordering is the fix to a screen that
 refused to explain itself: with the selection asked first, a mixer still
@@ -884,9 +885,19 @@ what you are about to hear: `Preview.request` refuses while `Warming`, and the
 preview already in flight is of the config from before the apply. The mixer
 would then be showing one recipe and playing another, which is the single thing
 this screen must never do.
+
+**Once the preview is playable, "nothing chosen" is not the same sentence in
+every mixer.** `lastUsedLine`'s Apply needs no selection at all, and it is
+live the moment the preview is — so a song with a "last used here" preset has
+a perfectly usable Apply button sitting right below this one while this block
+still says "choose a preset". Left unchanged, that reads as if neither button
+works. `hasLastUsed` is that one bit of context, threaded in from
+`lastUsed config.presets config.song /= Nothing` at the call site — this
+function does not read the song or the preset list itself, because the
+sentence only needs to know whether the alternative exists, not what it is.
 -}
-applyBlock : Preview.State -> Maybe Api.Preset -> Maybe String
-applyBlock preview chosen =
+applyBlock : Preview.State -> Maybe Api.Preset -> Bool -> Maybe String
+applyBlock preview chosen hasLastUsed =
     if not (Preview.isPlayable preview) then
         Just
             ("The mixer is still preparing, so nothing can be applied yet — "
@@ -898,11 +909,19 @@ applyBlock preview chosen =
     else
         case chosen of
             Nothing ->
-                Just
-                    ("Choose a preset to apply. Applying replaces every setting below, "
-                        ++ "including the ones the preset does not mention — it is "
-                        ++ "\"make it look like this\", not \"merge this in\"."
-                    )
+                if hasLastUsed then
+                    Just
+                        ("Choose a preset above to apply it here — or use the "
+                            ++ "\"Last used here\" line below, whose Apply needs no "
+                            ++ "selection at all."
+                        )
+
+                else
+                    Just
+                        ("Choose a preset to apply. Applying replaces every setting below, "
+                            ++ "including the ones the preset does not mention — it is "
+                            ++ "\"make it look like this\", not \"merge this in\"."
+                        )
 
             Just _ ->
                 Nothing

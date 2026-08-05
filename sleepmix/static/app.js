@@ -10890,13 +10890,13 @@ var $author$project$Waveform$caption = function (region) {
 var $elm$html$Html$h2 = _VirtualDom_node('h2');
 var $author$project$Page$Mixer$Delete = 1;
 var $author$project$Page$Mixer$SaveOver = 0;
-var $author$project$Page$Mixer$applyBlock = F2(
-	function (preview, chosen) {
+var $author$project$Page$Mixer$applyBlock = F3(
+	function (preview, chosen, hasLastUsed) {
 		if (!$author$project$Preview$isPlayable(preview)) {
 			return $elm$core$Maybe$Just('The mixer is still preparing, so nothing can be applied yet — ' + ('doing it now would move every control without changing what ' + ('you hear. Both Apply buttons become live as soon as the first ' + 'preview plays.')));
 		} else {
 			if (chosen.$ === 1) {
-				return $elm$core$Maybe$Just('Choose a preset to apply. Applying replaces every setting below, ' + ('including the ones the preset does not mention — it is ' + '\u0022make it look like this\u0022, not \u0022merge this in\u0022.'));
+				return hasLastUsed ? $elm$core$Maybe$Just('Choose a preset above to apply it here — or use the ' + ('\u0022Last used here\u0022 line below, whose Apply needs no ' + 'selection at all.')) : $elm$core$Maybe$Just('Choose a preset to apply. Applying replaces every setting below, ' + ('including the ones the preset does not mention — it is ' + '\u0022make it look like this\u0022, not \u0022merge this in\u0022.'));
 			} else {
 				return $elm$core$Maybe$Nothing;
 			}
@@ -11106,7 +11106,13 @@ var $author$project$Page$Mixer$saveOverAvailable = F2(
 	});
 var $author$project$Page$Mixer$presetBar = function (config) {
 	var chosen = A2($author$project$Page$Mixer$selection, config.ag, config.a6);
-	var blocked = A2($author$project$Page$Mixer$applyBlock, config.q, chosen);
+	var blocked = A3(
+		$author$project$Page$Mixer$applyBlock,
+		config.q,
+		chosen,
+		!_Utils_eq(
+			A2($author$project$Page$Mixer$lastUsed, config.ag, config.ch),
+			$elm$core$Maybe$Nothing));
 	return A2(
 		$elm$html$Html$div,
 		_List_fromArray(

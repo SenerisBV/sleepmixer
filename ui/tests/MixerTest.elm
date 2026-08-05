@@ -1242,6 +1242,37 @@ presetSuite =
                             )
                         |> Expect.equal (Just (Config.BoolValue False))
             ]
+        , describe "whether the bar's own Apply can be pressed"
+            [ test "with nothing chosen and no last-used alternative, says to choose one" <|
+                \_ ->
+                    Mixer.applyBlock Preview.Idle Nothing False
+                        |> Maybe.map (String.contains "Choose a preset to apply")
+                        |> Expect.equal (Just True)
+            , test "with nothing chosen but a live \"last used\" Apply beside it, says so instead" <|
+                \_ ->
+                    -- The bar's own Apply is inert with nothing picked from the
+                    -- select, but `lastUsedLine`'s Apply needs no selection at
+                    -- all and is live right there whenever the preview is
+                    -- playable. Telling the operator only "choose a preset"
+                    -- reads as if neither button works.
+                    Mixer.applyBlock Preview.Idle Nothing True
+                        |> Maybe.map (String.contains "Choose a preset to apply")
+                        |> Expect.equal (Just False)
+            , test "and that message points at the live alternative" <|
+                \_ ->
+                    Mixer.applyBlock Preview.Idle Nothing True
+                        |> Maybe.map (String.contains "Last used")
+                        |> Expect.equal (Just True)
+            , test "still preparing overrides both, whether or not a last-used exists" <|
+                \_ ->
+                    Mixer.applyBlock Preview.Warming Nothing True
+                        |> Maybe.map (String.contains "still preparing")
+                        |> Expect.equal (Just True)
+            , test "a preset chosen leaves nothing to say" <|
+                \_ ->
+                    Mixer.applyBlock Preview.Idle (Just gentle) True
+                        |> Expect.equal Nothing
+            ]
         , describe "applying one through `update`"
             [ test "fires exactly one preview, through the state machine" <|
                 \_ ->
