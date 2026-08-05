@@ -31,7 +31,7 @@ schema =
             decoded
 
         Err _ ->
-            { fields = Dict.empty, sections = Dict.empty }
+            { description = "", fields = Dict.empty, sections = Dict.empty }
 
 
 suite : Test

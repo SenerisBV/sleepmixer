@@ -47,11 +47,11 @@ type Field
 
 
 type alias Section =
-    { fields : Dict String Field }
+    { description : String, fields : Dict String Field }
 
 
 type alias Schema =
-    { fields : Dict String Field, sections : Dict String Section }
+    { description : String, fields : Dict String Field, sections : Dict String Section }
 
 
 fieldLabel : Field -> String
@@ -78,14 +78,17 @@ fieldLabel aField =
 
 decoder : Decoder Schema
 decoder =
-    Decode.map2 Schema
+    Decode.map3 Schema
+        (Decode.map (Maybe.withDefault "") (Decode.maybe (Decode.field "description" Decode.string)))
         (Decode.field "fields" (Decode.dict field))
         (Decode.field "sections" (Decode.dict section))
 
 
 section : Decoder Section
 section =
-    Decode.map Section (Decode.field "fields" (Decode.dict field))
+    Decode.map2 Section
+        (Decode.map (Maybe.withDefault "") (Decode.maybe (Decode.field "description" Decode.string)))
+        (Decode.field "fields" (Decode.dict field))
 
 
 {-| Dispatch on the type *and* on whether choices are present: the server emits

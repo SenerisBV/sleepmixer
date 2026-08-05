@@ -69,14 +69,17 @@ seedJson =
 
 {-| A whole `/api/schema` response with one section (`loop`), whose fields are
 its real shape, `start_s` and all — exercises `Section`'s decoder, which isn't
-exposed on its own. -}
+exposed on its own. The section's `description` is the real captured value
+(task-3, `SLEEPMIX_DATA_DIR=$(mktemp -d) pipenv run sleepmix ui --no-open
+--port 8765`, `curl -s localhost:8765/api/schema`). -}
 schemaWithLoopSectionJson : String
 schemaWithLoopSectionJson =
     """
     { "fields": {}
     , "sections":
         { "loop":
-            { "fields":
+            { "description":"Which fragment of the song gets repeated, and how the repeats are joined.\\n\\nA mix is one loop played over and over for however long you asked for.\\nLeave the start and end empty and a beat-aligned loop is found for you,\\nsomewhere between the search bounds; set them and that region is used\\nexactly. Everything here is about choosing and joining the fragment — the\\neroding happens elsewhere."
+            , "fields":
                 { "start_s":
                     { "type":"float","default":null,"label":"Loop start"
                     , "help":"Leave empty to auto-detect a beat-aligned loop."
@@ -92,11 +95,14 @@ schemaWithLoopSectionJson =
 
 
 {-| A full `/api/schema` response shape: top-level `fields` plus one
-`sections` entry, enough to exercise `Schema.decoder` end to end. -}
+`sections` entry, enough to exercise `Schema.decoder` end to end. The
+top-level `description` is the real captured value, from the same server
+run as `schemaWithLoopSectionJson`. -}
 wholeSchemaJson : String
 wholeSchemaJson =
     """
-    { "fields":
+    { "description":"Everything that decides what a finished mix sounds like.\\n\\nThe mixer groups these two under \\"Mix\\": a seed that fixes the random parts\\nof the decay so the same settings give the same mix twice, and the name of\\nthe model used to split the song into stems."
+    , "fields":
         { "seed": { "type":"int","default":0,"label":"Seed","help":null }
         , "separation_model":
             { "type":"str","default":"htdemucs_ft","label":"Separation model","help":null }
@@ -114,6 +120,19 @@ wholeSchemaJson =
                 }
             }
         }
+    }
+    """
+
+
+{-| A section with no `description` key at all — the shape an older server
+(or a hand-built fixture) might send. Decoding this must not fail; it should
+land on `""` per the brief, since a missing paragraph is a smaller failure
+than a mixer that will not load. -}
+sectionMissingDescriptionJson : String
+sectionMissingDescriptionJson =
+    """
+    { "fields":
+        { "seed": { "type":"int","default":0,"label":"Seed","help":null } }
     }
     """
 
@@ -159,6 +178,26 @@ decodeField json =
 
                     Nothing ->
                         Decode.decodeString (Decode.fail "missing field 'x'") "null"
+            )
+
+
+{-| Decode a lone section-object fragment the way `Schema.decoder` would meet
+it: nested under a `sections` dict, since `section` itself isn't exposed. -}
+decodeSection : String -> Result Decode.Error Schema.Section
+decodeSection json =
+    let
+        wrapped =
+            "{ \"fields\": {}, \"sections\": { \"x\": " ++ json ++ " } }"
+    in
+    Decode.decodeString Schema.decoder wrapped
+        |> Result.andThen
+            (\schema ->
+                case Dict.get "x" schema.sections of
+                    Just s ->
+                        Ok s
+
+                    Nothing ->
+                        Decode.decodeString (Decode.fail "missing section 'x'") "null"
             )
 
 
@@ -306,12 +345,17 @@ suite =
                             case Dict.get "loop" schema.sections of
                                 Just loopSection ->
                                     Expect.all
-                                        [ Dict.get "start_s"
-                                            >> Maybe.map Schema.fieldLabel
-                                            >> Expect.equal (Just "Loop start")
-                                        , Dict.get "bars"
-                                            >> Maybe.map Schema.fieldLabel
-                                            >> Expect.equal (Just "Bars")
+                                        [ \fields ->
+                                            Dict.get "start_s" fields
+                                                |> Maybe.map Schema.fieldLabel
+                                                |> Expect.equal (Just "Loop start")
+                                        , \fields ->
+                                            Dict.get "bars" fields
+                                                |> Maybe.map Schema.fieldLabel
+                                                |> Expect.equal (Just "Bars")
+                                        , \_ ->
+                                            loopSection.description
+                                                |> Expect.equal "Which fragment of the song gets repeated, and how the repeats are joined.\n\nA mix is one loop played over and over for however long you asked for.\nLeave the start and end empty and a beat-aligned loop is found for you,\nsomewhere between the search bounds; set them and that region is used\nexactly. Everything here is about choosing and joining the fragment — the\neroding happens elsewhere."
                                         ]
                                         loopSection.fields
 
@@ -337,11 +381,21 @@ suite =
                                         |> Maybe.andThen (\sec -> Dict.get "sample_rate" sec.fields)
                                         |> Maybe.map Schema.fieldLabel
                                         |> Expect.equal (Just "Sample rate")
+                                , \s ->
+                                    s.description
+                                        |> Expect.equal "Everything that decides what a finished mix sounds like.\n\nThe mixer groups these two under \"Mix\": a seed that fixes the random parts\nof the decay so the same settings give the same mix twice, and the name of\nthe model used to split the song into stems."
                                 ]
                                 schema
 
                         Err err ->
                             Expect.fail (Decode.errorToString err)
+            ]
+        , describe "descriptions"
+            [ test "a section without a description decodes to \"\" rather than failing" <|
+                \_ ->
+                    decodeSection sectionMissingDescriptionJson
+                        |> Result.map .description
+                        |> Expect.equal (Ok "")
             ]
         ]
 
