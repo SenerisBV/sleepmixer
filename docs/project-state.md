@@ -1116,67 +1116,117 @@ found alongside them.
   **1.0003, +0.00 dB**, and is what `tests/test_preview.py`'s
   `test_a_mastered_preview_sits_at_the_render_s_level` now asserts.
 
-  1. **The 1.82 dB attributed to fade ordering does not survive a direct
-     measurement, and neither does the transient-at-t=0 hypothesis that
-     replaced it as a first guess.** The figure itself — **0.8107, −1.82
-     dB**, from the RMS method above, fades on versus off — is real and
-     stays recorded. The explanation attached to it was not: 8 seconds of
-     fade across a 20-minute arc decaying to `amp_end_db` = −9 dB attenuates
-     ordinary material by about 0.06 dB, not 1.82, and nobody had checked
-     that arithmetic before writing the entry.
+  1. **The 1.82 dB attributed to fade ordering does not describe the mixer's
+     actual default render, and the transient-at-t=0 hypothesis that replaced
+     it as a first guess doesn't either — but the figure itself turned out to
+     be exactly reproducible, and content-dependence is the reason both of
+     those things are true at once.** The figure — **0.8107, −1.82 dB** —
+     is real, traced this task to its literal source, and stays recorded.
 
-     Measured directly rather than re-inferred (Task 6 of this plan): a
-     render at default config against a throwaway `SLEEPMIX_DATA_DIR`, stems
-     supplied via `sleepmix.separation._write_cache` from this repository's
-     own orphaned separation cache (`.sleepmix_cache/004542e5a96e70ee/`, the
-     real stems of the 2:43 track this document's render-timing figures
-     already use — no Demucs run needed), reporting on the mix immediately
-     before `_apply_fades`. **The global peak is not at t = 0.** It sits at
-     t = 14.657 s of a 1200 s render (sample 646,351 at 44.1 kHz) — roughly
-     one loop-length (11.0 s) past the start, comfortably outside both the
-     8-second fade-in and the last-12-second fade-out. It is **7.12 dB**
-     above the 99th percentile of |sample| across the whole render (1.358 vs.
-     0.598), so it is a real, audible peak rather than a lone outlier in the
-     noise floor. It is **40 samples (0.91 ms) wide** at half its own height,
-     and the raw samples across that width rise and fall smoothly — not a
-     one- or two-sample discontinuity — which reads as a genuine moment in
-     the music (most plausibly the `bass` stem, the most energetic of the
-     three stems enabled by default with `drums` off) rather than a decoder
-     or splice artefact. It survives `cycle_crossfade_ms = 0` bit-for-bit —
-     identical sample index, identical value to the last digit — which rules
-     out the inter-iteration crossfade (item 2, below) as its cause.
+     **Where the number actually comes from.** `tests/test_preview.py`'s
+     `_level_cfg()` builds a `MixConfig` with `output.duration_min = 0.5`
+     (a 30-second render, for a fast, well-posed test) and both fades
+     zeroed; its own docstring already said "at the default 8 s fade-in the
+     same measurement reads −1.82 dB" — this task confirmed it rather than
+     taking the docstring's word for it. Re-running
+     `_preview_to_render_ratio` (the RMS-of-mid-arc-window method the
+     baseline above uses) against `_level_cfg()`'s synthetic stems
+     (`conftest.fake_separate`: three summed sine tones, not a real
+     recording) reproduced both figures this document already carried,
+     essentially exactly: fades zeroed gives **1.0003181, +0.0028 dB**
+     (matching the recorded baseline "1.0003, +0.00 dB"), and setting fades
+     to the real `MixConfig` defaults (8 s in / 12 s out) gives
+     **0.8107466, −1.8223 dB** (matching the recorded "0.8107, −1.82 dB" to
+     four figures). **The number is exactly right for the config it was
+     measured in.** That config is a 30-second render — where an 8 s fade-in
+     plus a 12 s fade-out cover 20 of the render's 30 total seconds, two
+     thirds of the whole arc, not the 0.67% of a 20-minute arc the original
+     entry's own arithmetic (correctly) assumed. The entry conflated "this
+     number is real" with "this number describes the mixer's actual default
+     render" — only the first is true.
 
-     Because the peak sits entirely outside the region either fade touches,
-     `_apply_fades` running before `normalize_peak` provably changes nothing
-     about *this* render: re-running the pipeline with `fade_in_s =
-     fade_out_s = 0` produces the identical pre-`normalize_peak` maximum
-     (1.3577473163604736) and therefore the identical gain factor
-     (0.6564188599586487) that the default 8 s/12 s fades produce.
-     Measured the same way, `preview.master_gain(session, reverb=True)` for
-     this exact render is 0.6564188545205888 — equal to the pipeline's own
-     factor to eight significant figures, a **0.00 dB** gap, not 1.82. The
-     reason "iteration 0 is the loudest window" (`master_gain`'s own
-     docstring) does not hold here: decay is negligible this early in a
-     twenty-minute arc, so which of the first several iterations is loudest
-     is decided by where the source material itself happens to be loudest,
-     not by a monotonic decline.
+     **What the mixer's actual default does, measured directly rather than
+     re-inferred (Task 6 of this plan):** a render at the real default
+     config (`duration_min = 20`) against a throwaway `SLEEPMIX_DATA_DIR`,
+     stems supplied via `sleepmix.separation._write_cache` from this
+     repository's own orphaned separation cache
+     (`.sleepmix_cache/004542e5a96e70ee/`, a real 2:43 track — the same one
+     Plan 2b's cold-session-build measurement above uses, and **not** the
+     4:06/246.6 s track Plan 3b's Task 7 and Plan 3c's render-timing figure
+     use; the two are different source files and a reader comparing numbers
+     across this document should not assume otherwise), reporting on the mix
+     immediately before `_apply_fades`. **The global peak is not at t = 0.**
+     It sits at t = 14.657 s of a 1200 s render (sample 646,351 at 44.1 kHz)
+     — roughly one loop-length (11.0 s) past the start, comfortably outside
+     both the 8-second fade-in and the last-12-second fade-out. It is
+     **7.12 dB** above the 99th percentile of |sample| across the whole
+     render (1.358 vs. 0.598), so it is a real, audible peak rather than a
+     lone outlier in the noise floor. It is **40 samples (0.91 ms) wide** at
+     half its own height, and the raw samples across that width rise and
+     fall smoothly — not a one- or two-sample discontinuity — which reads
+     as a genuine moment in the music (most plausibly the `bass` stem, the
+     most energetic of the three stems enabled by default with `drums` off)
+     rather than a decoder or splice artefact. It survives
+     `cycle_crossfade_ms = 0` bit-for-bit — identical sample index,
+     identical value to the last digit — which rules out the inter-iteration
+     crossfade (item 2, below) as its cause. And directly comparing the
+     pipeline's own `normalize_peak` gain factor with fades at their default
+     8 s/12 s against the same fades zeroed, at this exact config, gives the
+     identical factor either way — **0.6564188599586487, both times, to the
+     last digit.** Separately, `preview.master_gain(session, reverb=True)`
+     for this render is 0.6564188545205888 — equal to that same factor to
+     eight significant figures, a **0.00 dB** gap, not 1.82, measured by
+     direct comparison of the two gain factors rather than by the RMS method
+     above. Repeating that same direct gain-factor comparison at
+     `duration_min = 0.5` — matching the short-render *length* the 1.82 dB
+     figure was measured at, but with these same real stems instead of
+     synthetic sine tones — again gives an identical factor with fades on or
+     off. **So the arc length is not what makes the difference; the content
+     is.**
 
-     Neither explanation survives, and this task's own instructions are
-     explicit that an honestly-labelled unexplained number outranks a tidy
-     wrong one — so the 1.82 dB stays here as exactly that: a real figure
-     from a real (if now unreproduced-by-this-task) RMS-based measurement,
-     with both stories this document has attached to it now shown false by a
-     direct measurement of the same quantities. Whoever next has reason to
-     touch this should re-run the original RMS method against a captured
-     render rather than trust either story. **Why this is not being closed
-     regardless of the true cause:** `preview.render_window` applies one gain
-     factor to every window, computed once per `reverb` setting and memoized
-     on the session (`sleepmix/preview.py:101`), so the ratio between a
-     preview at the start of the arc, the middle and the end is exact
-     whatever the true offset between `master_gain` and `normalize_peak` is.
-     A uniform offset cannot change any comparison the mixer exists to
-     support. See Plan 3e's retirement, in the Plan 3f section below, for
-     the fuller reasoning.
+     **The mechanism, and why both are true at once.** A monotonically
+     decaying pure tone (`_level_cfg()`'s synthetic stems: no dynamics, no
+     transients, decay applied on top of a constant sine) has its own
+     un-faded peak guaranteed to sit at t = 0, because nothing else in the
+     signal can ever exceed it. Fading that region — worth two thirds of the
+     arc at `duration_min = 0.5` — measurably lowers the peak `normalize_peak`
+     finds, raising the gain applied to everything else, exactly as the
+     original entry described: this is not a wrong explanation, it is a
+     correct one for the signal it was measured against. A real 2:43
+     recording has no such guarantee — its loudest moment is wherever the
+     music happens to be loudest, and at this stem set that turns out to be
+     3.65 s into the render's second pass through the loop, nowhere near
+     either fade, at both output lengths tested. `master_gain`'s own
+     docstring assumption — "decay only removes energy, so the peak falls
+     monotonically across the arc and iteration 0 is the loudest window this
+     module can produce" — is true of the synthetic signal it is usually
+     verified against and not reliably true of real material, where decay is
+     negligible this early in the arc and which of the first several
+     iterations is loudest tracks the music, not iteration order.
+
+     Both explanations this document has carried for the 1.82 dB are
+     therefore not simply wrong: the transient-at-t=0 guess is wrong outright
+     (Step 1 found a real transient, just not at t=0, and not affected by
+     the fade); the original fade-ordering story is *correct*, reproduced
+     exactly, for the synthetic short-duration fixture that produced the
+     number, and does not generalize to what the mixer's real default does
+     with a real recording, where the same measurement — at either the
+     fixture's 30-second length or the mixer's real 20-minute one — reads
+     0.00 dB. The live, evidenced explanation for the gap between the
+     recorded figure and the mixer's real behavior is content-dependence:
+     whether the calibration and normalization windows agree depends on
+     whether the material's own loudest moment sits where a fade (or,
+     failing that, nothing at all) can move it — true by construction for a
+     decaying pure tone, and, on the one real track measured here, false at
+     every duration tried. **Why this is not being closed regardless of
+     which regime a given render falls into:** `preview.render_window`
+     applies one gain factor to every window, computed once per `reverb`
+     setting and memoized on the session (`sleepmix/preview.py:101`), so the
+     ratio between a preview at the start of the arc, the middle and the end
+     is exact whatever the true offset between `master_gain` and
+     `normalize_peak` turns out to be for a given song. A uniform offset
+     cannot change any comparison the mixer exists to support. See Plan 3e's
+     retirement, in the Plan 3f section below, for the fuller reasoning.
   2. **The inter-iteration `equal_power_crossfade` can sum above a single
      iteration's peak.** Two consecutive decayed iterations overlap for
      `cycle_crossfade_ms`, and their sum in that region can exceed either
@@ -1232,8 +1282,9 @@ found alongside them.
   plan, which is also where the two-more-fields-and-two-bugs finding above
   came from. They were recorded in the first place because the sizes were
   counter-intuitive — the one written down first was the smallest, and the
-  largest had never been measured directly until this task did it and found
-  its own explanation didn't hold either.
+  largest had never been measured against the mixer's actual default until
+  this task did it, and found the number it already had on file described a
+  test fixture rather than the mixer.
 
 - **Nothing is ever reclaimed, and the one that mattered most is now closed
   halfway.** Ranked by how much it actually costs. Both of the first two were
