@@ -1236,32 +1236,69 @@ found alongside them.
      to 0.9995 with `cycle_crossfade_ms = 0.0` and nothing else changed —
      so the residual is entirely this. With default reverb it is masked to
      about 0.01 dB, because reverb smears the peak either way. Still open.
-  3. ~~`output.sample_rate` is absent from `RenderSession._master_key`,
-     although `run_pipeline` resamples before normalizing.~~ **Closed by Task
-     5 of this plan** (`fix: the master-gain cache notices an output-rate
-     change`, commit `1500e39`): `output.sample_rate` is now one of the
-     fields `_master_key` reads (`sleepmix/session.py`), so changing it
-     clears the memoized gain like every other field that feeds one.
+  3. **A preview and a render can disagree by about 0.01 dB with default
+     reverb on, and the reason is the calibration window, not the memo that
+     caches its result.** Still open. This entry has been closed once and
+     reopened, and the round trip is the part worth keeping.
 
-     **What that same task found while it was in there is worth recording
-     separately: three more fields are still absent from `_master_key`** —
-     `fade_in_s`/`fade_out_s`, `cycle_crossfade_ms`, and `config.soundbed`.
-     These are the same fields as three of this list's four calibration-
-     window gaps, but the bug is a different one and the two should not be
-     read as one problem stated twice. The calibration-window gap (items 1,
-     2 and 4 in this list) is that `render_window(session, 0.0, ...)` never
-     sees fades, the crossfade, or the sound bed, so the *window it
-     measures* is unrepresentative of what a real render does with those
-     settings turned on. The `_master_key` gap is that **even if that window
-     were made perfectly representative tomorrow, changing any of those four
-     fields would still not invalidate the memoized gain at all** — a
-     session that already computed `master_gain` keeps serving the old
-     factor after the operator moves the fade-in slider, changes the
-     crossfade duration, or turns the sound bed on, because none of those
-     four fields is one `update_config` compares to decide whether to clear
-     `self.master_gain`. Two failures that happen to involve the same
-     fields, not one failure described twice. Neither is fixed here — this
-     task writes no application code.
+     **What was closed, and why it was reopened.** The entry used to read
+     "`output.sample_rate` is absent from `RenderSession._master_key`,
+     although `run_pipeline` resamples before normalizing" — and Task 5 of
+     Plan 3f added it (commit `1500e39`), with a review that traced the
+     invalidation chain end to end and found every link sound: a changed
+     rate gives a different key, the comparison in `update_config` fails,
+     `master_gain.clear()` runs. Every link was true. **Nobody measured the
+     value at the far end of the chain.** The final review did, and it is
+     bit-identical:
+
+     ```
+     sample_rate=22050   wet=0.5556662371509203
+     sample_rate=44100   wet=0.5556662371509203
+     sample_rate=48000   wet=0.5556662371509203
+     peak_db=-6  (control)   wet=0.31247408816298333
+     channels=1  (control)   wet=0.5853150780716774
+     ```
+
+     Reproduced independently during the fix wave against a different
+     synthetic song (different absolute figures, same invariance: all three
+     rates identical to the last digit, both controls moving). The reason is
+     one line: **`preview.render_window` never resamples.** It works end to
+     end at `loop.sr`, and `output.sample_rate` is read in exactly one place
+     in the whole codebase — `sleepmix/pipeline.py:81`, the resample before
+     normalizing — which every preview path has already finished before. So
+     adding `sample_rate` to `_master_key` *cannot* change the value
+     `_master_key` guards. What it can do is make the operator pay a full
+     extra calibration window on a rate change, which is precisely the cost
+     `_master_key`'s own docstring exists to prevent. Task 5's change and
+     its test were reverted in the final fix wave; the docstring now records
+     the measurement so the field is not re-added on the same reasoning.
+
+     **What is actually still open** is the residual this list's baseline
+     leaves behind: with default reverb the preview-versus-render offset
+     measures about **0.01 dB** (see item 2 — the crossfade's +0.37 dB on
+     the dry path is masked to roughly that with reverb on). That is a
+     *calibration-window* gap — the window `master_gain` measures is not
+     quite the signal `normalize_peak` sees — and no change to the memo's
+     key can move it. Closing it means changing what the window contains,
+     which is items 1, 2 and 4 in this list, not this one.
+
+     **The three other absences from `_master_key` are not bugs, and this
+     entry previously said they were.** `fade_in_s`/`fade_out_s`,
+     `cycle_crossfade_ms` and `config.soundbed` are all absent from the key,
+     and Plan 3f's Task 5 recorded that as a second real defect — that even
+     with a perfect calibration window, a session would keep serving a stale
+     gain after the operator moved the fade-in slider. **Measured, it does
+     not.** `render_window` at progress 0.0 gets `iteration = 0` and takes
+     the empty-context branch (`sleepmix/preview.py:196-199`), so it never
+     reaches the crossfade, the fades or the bed at all; the gain is
+     bit-identical with `cycle_crossfade_ms = 0`, with both fades zeroed,
+     with `soundbed.enabled = True`, and with `duration_min = 40`. **The
+     memo is sound as written and these four fields must not be added to
+     `_master_key`** — doing so would buy nothing and cost a calibration
+     window each, which is how item 3 got closed wrongly the first time.
+     The calibration-window gaps those same fields *do* cause are items 1, 2
+     and 4; that they name the same fields is a coincidence of which stage
+     the window skips, not evidence of a second bug.
   4. **The sound bed is never mixed into the calibration window.**
      `render_window` sums only the configured stems and never calls
      `soundbed.build_soundbed`, while `run_pipeline` adds the bed before
@@ -1276,11 +1313,12 @@ found alongside them.
      *previews entirely*, a different and larger problem, recorded in the
      Plan 3f section below.
 
-  Three of the four are still not fixed, deliberately — see Plan 3e's
-  retirement below for why closing them was judged not to serve the mixer's
-  actual job. The fourth (`output.sample_rate`) was closed by Task 5 of this
-  plan, which is also where the two-more-fields-and-two-bugs finding above
-  came from. They were recorded in the first place because the sizes were
+  All four are still open, deliberately — see Plan 3e's retirement below for
+  why closing them was judged not to serve the mixer's actual job. Item 3 was
+  briefly marked closed by Task 5 of this plan and reopened by the same plan's
+  final review, on a measurement; the entry itself records the round trip,
+  because "the invalidation chain is sound" was true and beside the point.
+  They were recorded in the first place because the sizes were
   counter-intuitive — the one written down first was the smallest, and the
   largest had never been measured against the mixer's actual default until
   this task did it, and found the number it already had on file described a
@@ -1617,10 +1655,11 @@ existing claim.
   `normalize_peak` is. A uniform offset cannot change any comparison the mixer
   exists to support — the judgement a preview exists for is "how eroded is
   this by the middle," not "does this match a render's absolute loudness
-  played back tomorrow on a different device." Two small pieces survived into
+  played back tomorrow on a different device." One small piece survived into
   this plan instead of the level-matching rewrite: correcting the 1.82 dB
-  entry above (this task) and giving `output.sample_rate` to `_master_key`
-  (Task 5, also above).
+  entry above. A second, giving `output.sample_rate` to `_master_key`
+  (Task 5), was reverted by this plan's final review once the memoized gain
+  was measured at three output rates and found identical — see item 3 above.
 
 - **The sound bed's absence from previews is a character gap, not a level
   one, and it is still open.** `render_window` sums only the configured

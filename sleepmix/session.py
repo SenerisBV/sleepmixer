@@ -148,12 +148,29 @@ class RenderSession:
 
         It is measured from iteration 0, where ``apply_decay`` returns the loop
         untouched — so no decay setting can move it. Dragging a decay slider
-        must not invalidate this, or every preview pays a second window render."""
+        must not invalidate this, or every preview pays a second window render.
+
+        What is *deliberately* absent is as load-bearing as what is present.
+        ``output.sample_rate`` is not here, and must not be added: the
+        calibration window is ``preview.render_window``, which works end to end
+        at ``loop.sr`` and never resamples — ``output.sample_rate`` is read in
+        exactly one place in this codebase, ``pipeline.py``'s resample before
+        normalizing, which every preview path has already finished before. It
+        was added in Plan 3f Task 5 and reverted in the same plan's final
+        review once someone measured the gain instead of tracing the
+        invalidation chain: identical to the last digit at 22050, 44100 and
+        48000, where ``peak_db`` and ``channels`` both move it. Adding it
+        cannot change the value this key guards; it only makes the operator pay
+        a whole extra calibration window on a rate change, which is the exact
+        cost this docstring exists to avoid. The same measurement clears
+        ``fade_in_s``/``fade_out_s``, ``cycle_crossfade_ms`` and
+        ``config.soundbed`` for the same reason — ``render_window`` at progress
+        0 takes the iteration-0 branch and touches none of them. See the
+        level-matching entry in ``docs/project-state.md``."""
         return (
             tuple(sorted(asdict(config.reverb).items())),
             config.output.peak_db,
             config.output.channels,
-            config.output.sample_rate,
             tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send)
                   for sc in config.stems),
         )
