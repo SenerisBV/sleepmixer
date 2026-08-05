@@ -100,6 +100,46 @@
   .mixer h2 { margin-bottom: 1rem; }
   .mixer .waveform { margin-bottom: .5rem; }
 
+  /* The preset bar, from `Page.Mixer.presetBar`. Emitted inside
+     `div [ class "mixer" ]`, directly under the waveform caption and above the
+     arc — read these selectors against that markup rather than against the
+     class-coverage test, which proves a rule exists somewhere and not that it
+     applies where the class is emitted (`.back` needed four scopes for exactly
+     that reason). Left unscoped throughout because nothing but the mixer emits
+     any of them, and because two of them are `<p>` elements that also carry
+     `.dim` or `.error`, which are 0-1-0 and must keep winning where they say
+     something these do not. */
+  .presets { border-top: 1px solid var(--line); margin-top: 1.25rem;
+             padding-top: 1rem; }
+  .presets p { margin: .35rem 0; max-width: 46rem; }
+  .preset-row { display: flex; align-items: center; gap: .5rem;
+                flex-wrap: wrap; margin: .4rem 0; }
+  .preset-label { color: var(--dim); flex: 0 0 6rem; }
+  /* The same width for both, so the name box lines up under the select and the
+     two rows read as one control panel rather than as two. */
+  .preset-select, .preset-name { flex: 0 1 16rem; min-width: 0; }
+  .preset-apply, .preset-last-apply, .preset-save, .preset-save-over,
+  .preset-delete, .preset-go, .preset-keep { font-size: .85rem;
+                                             padding: .2rem .6rem; }
+  /* Apply is the one control here that moves every other control on the
+     screen, so it carries the accent exactly as the Render button does. The
+     rest of the bar stays quiet. */
+  .preset-apply, .preset-last-apply { border-color: var(--accent);
+                                      color: var(--accent); }
+  /* Amber, and the same amber as `.warn`: nothing has gone wrong, but what the
+     next click does cannot be undone. */
+  .preset-confirm { display: flex; align-items: center; gap: .5rem;
+                    flex-wrap: wrap; color: #e0af68; }
+  .preset-question { flex: 1 1 20rem; min-width: 0; }
+  .preset-last { display: flex; align-items: center; gap: .5rem;
+                 flex-wrap: wrap; color: var(--dim); }
+  .preset-last-name { color: var(--fg); font-weight: 600; letter-spacing: .02em; }
+  /* Shown when the mixer opened before `GET /api/config/default` answered, or
+     after it failed. Amber for the same reason the confirm is: the mixer works
+     and is honest about what it shows — it simply did not start where the
+     tool's own defaults start. */
+  .mixer-defaults { color: #e0af68; font-size: .9rem; }
+
   .arc { border-top: 1px solid var(--line); margin-top: 1.25rem;
          padding-top: 1rem; }
   .arc-row { display: flex; align-items: center; gap: 1rem; }

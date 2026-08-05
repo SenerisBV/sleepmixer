@@ -1,7 +1,9 @@
 module Page.Mixer exposing
-    ( State
+    ( Pending(..), State
     , everyStemDisabled, init, loopOverride, params, preflight, renderBlock
     , renderConfig, setField, setProgress, soloedStems, toggleField, toggleSolo
+    , applyPreset, armConfirm, lastUsed, newPresetName, presetById, presetSaved
+    , saveMessage, saveOverAvailable, selectPreset, selection, setPresetName
     , view
     )
 
@@ -32,6 +34,7 @@ import Dict exposing (Dict)
 import Html exposing (Attribute, Html, button, details, div, h2, h3, input, label, option, p, span, summary, text)
 import Html.Attributes as Attr exposing (class, disabled, type_)
 import Html.Events exposing (onCheck, onClick, onInput)
+import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
 import Page.Renders as Renders
@@ -47,21 +50,88 @@ The song, its peaks and its loop region live in `Main` — they belong to the
 song, not to this screen, and survive leaving it. Progress, solo and the config
 being shaped do not: closing the mixer stops the audio and forgets them, which
 is why they sit here and are thrown away wholesale.
+
+The preset bar's three fields are the same argument again. Which preset the
+select is on, what is typed in the name box and which destructive button is
+awaiting a confirm are all facts about this sitting at this screen — the
+presets themselves live in `Main`, because they outlive it and are the same for
+every song. `selectedPreset` is an id rather than a preset so that a list
+re-fetched after a save or a delete is the only thing that decides whether it
+still resolves; see `selection`.
+
+`openedAtSchemaDefaults` is a fact about the config this screen *started* from
+and is therefore recorded when it opens rather than read off the model later. A
+mixer that opened before `GET /api/config/default` answered is at the schema's
+defaults for the rest of its life, whatever the model holds by the time anyone
+looks.
 -}
 type alias State =
     { songId : String
     , progress : Float
     , solo : Maybe String
     , config : Config.Config
+    , selectedPreset : Maybe String
+    , presetName : String
+    , pending : Maybe Pending
+    , openedAtSchemaDefaults : Bool
     }
 
 
-init : String -> Schema.Schema -> List String -> State
-init songId schema stemNames =
+{-| A destructive button that has been pressed once and is waiting to be meant.
+
+Both of these are one click from Apply and neither is undoable — a preset saved
+over does not keep what it held, and a deleted one is gone from a table nothing
+else references. `window.confirm` is not reachable from Elm without a port, and
+a port for a yes/no is a worse trade than a sentence and two buttons, which is
+also the only version `elm-test` can press.
+-}
+type Pending
+    = SaveOver
+    | Delete
+
+
+{-| Open the mixer, over the server's own default config when there is one.
+
+`Config.fromSchema` alone is a *different starting point* from the one
+`sleepmix render` uses, and the difference is on every stem: the schema
+describes each field of one stem and has no way to describe a list, so it
+gives every stem the same values, while `MixConfig` curates four — drums off,
+bass decay off, vocals on an `exp` curve to 2200 Hz, other to 2400 Hz. Laying
+`GET /api/config/default` over the schema's defaults is what closes that, and
+it is laid over rather than used raw because the schema is still the authority
+on which keys may exist and what bounds they are held to (`Config.overlay`).
+
+`Nothing` is the fallback, not the absence of a decision: the mixer opens
+anyway, because a screen that will not open because one fetch failed is worse
+than one that opens at a starting point it can name — and it names it, in
+`defaultsNote`.
+-}
+init : String -> Schema.Schema -> List String -> Maybe Decode.Value -> State
+init songId schema stemNames defaults =
+    let
+        base =
+            Config.fromSchema schema stemNames
+    in
     { songId = songId
     , progress = 0
     , solo = Nothing
-    , config = Config.fromSchema schema stemNames
+    , config =
+        case defaults of
+            Just published ->
+                Config.overlay schema published base
+
+            Nothing ->
+                base
+    , selectedPreset = Nothing
+    , presetName = ""
+    , pending = Nothing
+    , openedAtSchemaDefaults =
+        case defaults of
+            Just _ ->
+                False
+
+            Nothing ->
+                True
     }
 
 
@@ -200,6 +270,220 @@ everyStemDisabled : State -> Bool
 everyStemDisabled state =
     not (List.isEmpty state.config.stems)
         && List.all (stemEnabled >> not) state.config.stems
+
+
+-- PRESETS
+
+
+{-| The preset an id names, if the list still has one.
+
+Every question the bar asks goes through this, because every one of them is
+"does this id still resolve" — the select's own selection, the "last used here"
+line, and whether Save over and Delete have anything to act on. A preset
+deleted a moment ago is an id that resolves to nothing, and nothing is exactly
+what each of those should then offer.
+-}
+presetById : List Api.Preset -> Maybe String -> Maybe Api.Preset
+presetById presets wanted =
+    case wanted of
+        Nothing ->
+            Nothing
+
+        Just id ->
+            List.head (List.filter (\preset -> preset.id == id) presets)
+
+
+{-| Which preset the select is on.
+
+Held as an id and resolved against the list every time rather than stored as a
+preset, so a list re-fetched after a delete drops the selection by itself: there
+is no way to be selecting a preset that is no longer there.
+-}
+selection : List Api.Preset -> State -> Maybe Api.Preset
+selection presets state =
+    presetById presets state.selectedPreset
+
+
+{-| Is there a preset to save over, or delete?
+
+The same question as `selection` and stated separately because it is what two
+buttons are disabled by — a `Bool` at the call site rather than a `Maybe`
+compared to `Nothing` in the markup.
+-}
+saveOverAvailable : List Api.Preset -> State -> Bool
+saveOverAvailable presets state =
+    case selection presets state of
+        Just _ ->
+            True
+
+        Nothing ->
+            False
+
+
+{-| The preset this song last had applied, if it still exists.
+
+`songs.last_preset_id` is deliberately not a foreign key, so deleting a preset
+leaves the id dangling on every song that pointed at it. Resolving it here is
+what turns that into nothing at all rather than into a line with an empty name
+in it — and nothing at all is the right answer, because the recipe it named no
+longer exists to apply.
+-}
+lastUsed : List Api.Preset -> Api.Song -> Maybe Api.Preset
+lastUsed presets song =
+    presetById presets song.lastPresetId
+
+
+{-| The name to save under, or nothing to save under at all.
+
+Trimmed, because `presets.name` is `NOT NULL UNIQUE` and a name that is
+whitespace either side of a word is a second row that reads identically to the
+first in the select.
+-}
+newPresetName : State -> Maybe String
+newPresetName state =
+    case String.trim state.presetName of
+        "" ->
+            Nothing
+
+        trimmed ->
+            Just trimmed
+
+
+setPresetName : String -> State -> State
+setPresetName raw state =
+    { state | presetName = raw }
+
+
+{-| Choose a preset in the select, or choose none — the placeholder option
+carries an empty value, which is the only value the select can produce that is
+not an id.
+
+A confirm armed against the *previous* selection is dropped, because the
+sentence beside it names a preset and the button under it would act on this
+one. That is a two-click path to deleting something nobody meant to.
+-}
+selectPreset : String -> State -> State
+selectPreset raw state =
+    { state
+        | selectedPreset =
+            if String.isEmpty raw then
+                Nothing
+
+            else
+                Just raw
+        , pending = Nothing
+    }
+
+
+armConfirm : Maybe Pending -> State -> State
+armConfirm pending state =
+    { state | pending = pending }
+
+
+{-| A preset that has just been created: it becomes the selection, and the name
+box is empty again so the next Save as… is not pre-loaded with the last one.
+-}
+presetSaved : Api.Preset -> State -> State
+presetSaved preset state =
+    { state | selectedPreset = Just preset.id, presetName = "", pending = Nothing }
+
+
+{-| Make the mixer look like this preset — and leave this song's loop region
+where it is.
+
+Built over `Config.fromSchema` rather than over the config on screen, because
+apply means *make it look like this* and not *merge this in*: a field the
+preset does not carry goes back to its default rather than keeping a value from
+the recipe the operator believes they have just replaced.
+
+**The loop region is the exception, and it is carried explicitly because
+nothing else would carry it.** `loop.start_s` and `loop.end_s` have a `null`
+schema default, so `fromSchema` omits them entirely, and `Config.forPreset`
+strips them from every preset that is saved — so a plain overlay silently
+reverts a region the operator chose on *this song* back to auto-detection, with
+no control on screen changing to say so. They are seconds into one particular
+piece of audio; they belong to the song, and applying a recipe is not a
+statement about them either way.
+
+Carried in both directions: a preset written by an older build could carry
+seconds measured on different audio, and a mixer that is auto-detecting its
+loop must go on auto-detecting it rather than adopt them.
+-}
+applyPreset : Schema.Schema -> Api.Preset -> State -> State
+applyPreset schema preset state =
+    let
+        applied =
+            Config.fromSchema schema (List.map .name state.config.stems)
+                |> Config.overlay schema preset.config
+    in
+    { state
+        | config = carryLoopRegion schema state.config applied
+        , selectedPreset = Just preset.id
+        , pending = Nothing
+    }
+
+
+{-| The two loop fields of `from`, written over whatever `into` has for them.
+
+Through `Config.set`, which is the same door every typed control uses: a value
+is rendered back to the string the box would have held and re-parsed under the
+schema's own bounds, and an absent one is set to `""`, which is how `Config.set`
+is told to remove a key. Absent means "detect the loop yourself", so removing
+is as load-bearing as inserting.
+-}
+carryLoopRegion : Schema.Schema -> Config.Config -> Config.Config -> Config.Config
+carryLoopRegion schema from into =
+    List.foldl (carryLoopKey schema from) into [ "start_s", "end_s" ]
+
+
+carryLoopKey : Schema.Schema -> Config.Config -> String -> Config.Config -> Config.Config
+carryLoopKey schema from key into =
+    let
+        target =
+            Config.InSection "loop" key
+    in
+    Config.set schema
+        target
+        (Config.valueAt target from
+            |> Maybe.map Config.valueString
+            |> Maybe.withDefault ""
+        )
+        into
+
+
+{-| What to say when a save is refused.
+
+Both statuses are reachable by ordinary use and neither may fail silently. The
+409 is the one the operator causes: two setups saved under one name, where the
+server refuses the second rather than replacing the first — Save over is the
+button for that, and the sentence points at it. The 400 is the server's own
+validation, which runs `MixConfig.from_dict` before storing anything, and the
+detail it answers with is the only description of what was wrong.
+
+Takes the generic wording rather than deriving it, exactly as
+`Page.Renders.deleteMessage` does, so `Main.httpErrorToString` stays the one
+place an `Http.Error` becomes English.
+-}
+saveMessage : Http.Error -> String -> String
+saveMessage err detail =
+    case err of
+        Http.BadStatus 409 ->
+            "There is already a preset with that name. Pick another, or select "
+                ++ "that one and use Save over to replace what it holds."
+
+        Http.BadStatus 400 ->
+            "The server refused that config — "
+                ++ detail
+                ++ ". It validates a preset before storing it, so that a recipe "
+                ++ "which could never render fails here rather than at render time."
+
+        Http.BadStatus 404 ->
+            "That preset is no longer there — it was deleted while this screen "
+                ++ "was open."
+
+        _ ->
+            "Could not save that preset — " ++ detail
+
 
 
 -- STARTING A RENDER
@@ -360,6 +644,8 @@ view :
     , loopSeconds : Maybe Float
     , startingRender : Bool
     , renderError : Maybe String
+    , presets : List Api.Preset
+    , presetProblem : Maybe String
     , onBack : msg
     , onProgress : String -> msg
     , onSolo : String -> msg
@@ -367,6 +653,13 @@ view :
     , onToggle : Config.Target -> Bool -> msg
     , onRetry : msg
     , onRender : msg
+    , onPresetSelected : String -> msg
+    , onPresetApplied : String -> msg
+    , onPresetName : String -> msg
+    , onPresetSaveAs : msg
+    , onPresetPending : Maybe Pending -> msg
+    , onPresetSaveOver : msg
+    , onPresetDelete : msg
     }
     -> Html msg
 view config =
@@ -388,6 +681,12 @@ view config =
             , loop = Maybe.map (\r -> { startS = r.startS, endS = r.endS }) config.loop
             }
         , Waveform.caption config.loop
+
+        -- Above the arc, because a preset is the recipe every control below it
+        -- is a detail of: you pick one, then you shape it. It is also the one
+        -- row on this screen that changes every other control at once, which
+        -- is a thing to see before you start moving them.
+        , presetBar config
         , arcPanel config
 
         -- Directly under the arc rather than at the foot of the screen. A
@@ -401,6 +700,285 @@ view config =
         , stemsPanel wiring config.state config.schema config.onSolo
         , settingsPanel wiring config.state config.schema
         ]
+
+
+
+-- THE PRESET BAR
+
+
+{-| Saved recipes: apply one, save this one, or throw one away.
+
+A row rather than a screen. Presets are applied *here*, against the controls
+they move and while a preview is playing, so a screen of their own would be a
+second place to navigate to for what is one row — and you would be looking at
+the preset list rather than at the mixer it changes.
+
+Every decision on it is a pure function above, so `elm-test` reaches all of
+them: which preset is selected, whether there is one to save over, whether the
+"last used here" line resolves, and what a refused save says. What is left here
+is markup and wiring.
+-}
+presetBar :
+    { a
+        | state : State
+        , song : Api.Song
+        , presets : List Api.Preset
+        , presetProblem : Maybe String
+        , preview : Preview.State
+        , onPresetSelected : String -> msg
+        , onPresetApplied : String -> msg
+        , onPresetName : String -> msg
+        , onPresetSaveAs : msg
+        , onPresetPending : Maybe Pending -> msg
+        , onPresetSaveOver : msg
+        , onPresetDelete : msg
+    }
+    -> Html msg
+presetBar config =
+    let
+        chosen =
+            selection config.presets config.state
+
+        blocked =
+            applyBlock config.preview chosen
+    in
+    div [ class "presets" ]
+        [ div [ class "preset-row" ]
+            [ span [ class "preset-label" ] [ text "Preset" ]
+            , presetSelect config chosen
+            , button
+                [ class "preset-apply"
+                , onClick (config.onPresetApplied (Maybe.withDefault "" (Maybe.map .id chosen)))
+                , disabled (blocked /= Nothing)
+                ]
+                [ text "Apply" ]
+            , button
+                [ class "preset-save-over"
+                , onClick (config.onPresetPending (Just SaveOver))
+                , disabled (not (saveOverAvailable config.presets config.state))
+                ]
+                [ text "Save over…" ]
+            , button
+                [ class "preset-delete"
+                , onClick (config.onPresetPending (Just Delete))
+                , disabled (not (saveOverAvailable config.presets config.state))
+                ]
+                [ text "Delete…" ]
+            ]
+        , case blocked of
+            Just words ->
+                p [ class "dim" ] [ text words ]
+
+            Nothing ->
+                text ""
+        , div [ class "preset-row" ]
+            [ span [ class "preset-label" ] [ text "New preset" ]
+            , input
+                [ type_ "text"
+                , class "preset-name"
+                , Attr.value config.state.presetName
+                , Attr.placeholder "Name this setup"
+                , onInput config.onPresetName
+                ]
+                []
+            , button
+                [ class "preset-save"
+                , onClick config.onPresetSaveAs
+
+                -- A `POST` with an empty name is a 422 from the server and a
+                -- row with no name in the select if it ever got past one.
+                , disabled (newPresetName config.state == Nothing)
+                ]
+                [ text "Save as…" ]
+            ]
+        , confirmLine config chosen
+        , lastUsedLine config
+        , case config.presetProblem of
+            Just words ->
+                p [ class "error" ] [ text words ]
+
+            Nothing ->
+                text ""
+        , defaultsNote config.state
+        ]
+
+
+{-| The saved presets, in the order `GET /api/presets` answered — by name,
+which is the only order a list of recipes has.
+
+The first option is a placeholder carrying an empty value, and it is what makes
+"nothing selected" a state the browser and the model agree on. Without it the
+select would show the first preset while the model held no selection, and
+Delete would be one click from removing a preset nobody chose.
+-}
+presetSelect :
+    { a | presets : List Api.Preset, onPresetSelected : String -> msg }
+    -> Maybe Api.Preset
+    -> Html msg
+presetSelect config chosen =
+    let
+        chosenId =
+            Maybe.withDefault "" (Maybe.map .id chosen)
+    in
+    Html.select
+        [ class "preset-select", onInput config.onPresetSelected ]
+        (option [ Attr.value "", Attr.selected (chosenId == "") ] [ text "— no preset —" ]
+            :: List.map
+                (\preset ->
+                    option
+                        [ Attr.value preset.id, Attr.selected (preset.id == chosenId) ]
+                        [ text preset.name ]
+                )
+                config.presets
+        )
+
+
+{-| Why Apply cannot be pressed, if it cannot — the sentence rather than a
+`Bool`, for the reason `renderBlock` gives about the Render button.
+
+The second case is the one worth stating. Applying while the opening preview is
+still in flight would move every control on the screen and change nothing about
+what you are about to hear: `Preview.request` refuses while `Warming`, and the
+preview already in flight is of the config from before the apply. The mixer
+would then be showing one recipe and playing another, which is the single thing
+this screen must never do.
+-}
+applyBlock : Preview.State -> Maybe Api.Preset -> Maybe String
+applyBlock preview chosen =
+    case chosen of
+        Nothing ->
+            Just
+                ("Choose a preset to apply. Applying replaces every setting below, "
+                    ++ "including the ones the preset does not mention — it is "
+                    ++ "\"make it look like this\", not \"merge this in\"."
+                )
+
+        Just _ ->
+            if Preview.isPlayable preview then
+                Nothing
+
+            else
+                Just
+                    ("The mixer is still preparing, so applying now would move "
+                        ++ "every control without changing what you hear. It becomes "
+                        ++ "live as soon as the first preview plays."
+                    )
+
+
+{-| A destructive button, pressed once, asking to be meant.
+
+Both of these are irreversible and both sit one button away from Apply, which
+is pressed constantly. The sentence names the preset, so a confirm cannot be
+answered about a different one than it was armed for — and `selectPreset`
+disarms it when the selection moves, so it cannot go stale either.
+-}
+confirmLine :
+    { a
+        | state : State
+        , onPresetPending : Maybe Pending -> msg
+        , onPresetSaveOver : msg
+        , onPresetDelete : msg
+    }
+    -> Maybe Api.Preset
+    -> Html msg
+confirmLine config chosen =
+    case ( config.state.pending, chosen ) of
+        ( Just SaveOver, Just preset ) ->
+            confirmRow config
+                ("Replace “"
+                    ++ preset.name
+                    ++ "” with what is on screen? What it holds now is not kept anywhere."
+                )
+                "Save over it"
+                config.onPresetSaveOver
+
+        ( Just Delete, Just preset ) ->
+            confirmRow config
+                ("Delete “"
+                    ++ preset.name
+                    ++ "”? Any song that remembers it will simply stop showing it."
+                )
+                "Delete it"
+                config.onPresetDelete
+
+        _ ->
+            text ""
+
+
+confirmRow :
+    { a | onPresetPending : Maybe Pending -> msg }
+    -> String
+    -> String
+    -> msg
+    -> Html msg
+confirmRow config question wording onConfirm =
+    p [ class "preset-confirm" ]
+        [ span [ class "preset-question" ] [ text question ]
+        , button [ class "preset-go", onClick onConfirm ] [ text wording ]
+        , button [ class "preset-keep", onClick (config.onPresetPending Nothing) ]
+            [ text "Keep it" ]
+        ]
+
+
+{-| What was last applied to *this song*, when it still exists.
+
+A shortcut for the opt-in and not a weakening of it: nothing is applied
+automatically, because a preset that re-applied itself would mean editing one
+silently changes songs tuned weeks ago. So this is a name and a button, and the
+button is the same one the bar's own Apply presses.
+
+Absent entirely when the id does not resolve — see `lastUsed`.
+-}
+lastUsedLine :
+    { a
+        | song : Api.Song
+        , presets : List Api.Preset
+        , preview : Preview.State
+        , onPresetApplied : String -> msg
+    }
+    -> Html msg
+lastUsedLine config =
+    case lastUsed config.presets config.song of
+        Nothing ->
+            text ""
+
+        Just preset ->
+            p [ class "preset-last" ]
+                [ span [ class "dim" ] [ text "Last used here: " ]
+                , span [ class "preset-last-name" ] [ text preset.name ]
+                , button
+                    [ class "preset-last-apply"
+                    , onClick (config.onPresetApplied preset.id)
+                    , disabled (not (Preview.isPlayable config.preview))
+                    ]
+                    [ text "Apply" ]
+                ]
+
+
+{-| Said when this mixer opened without the server's own defaults.
+
+Falling back to the schema's defaults is the right call — a mixer that will not
+open because one fetch failed is worse than one that opens somewhere it can
+name — but doing it silently would re-open the gap the default-config route was
+added to close, and the gap is audible: every stem erodes identically, where a
+render at defaults does not.
+-}
+defaultsNote : State -> Html msg
+defaultsNote state =
+    if state.openedAtSchemaDefaults then
+        p [ class "mixer-defaults" ]
+            [ text
+                ("This mixer opened at the schema's own defaults: the server's "
+                    ++ "default config had not arrived. Every stem therefore starts "
+                    ++ "identical, where a render at defaults starts with drums off, "
+                    ++ "bass decay off, and the vocal and other stems eroding on "
+                    ++ "curves of their own. Leave the mixer and open it again to "
+                    ++ "start from the server's."
+                )
+            ]
+
+    else
+        text ""
 
 
 

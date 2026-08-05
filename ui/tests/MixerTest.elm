@@ -21,6 +21,7 @@ import Expect
 import Fixtures
 import Http
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Main
 import Page.Mixer as Mixer
 import Page.Renders as Renders
@@ -47,7 +48,7 @@ song =
 
 mixer : Mixer.State
 mixer =
-    Mixer.init "song-1" Fixtures.schema song.stems
+    Mixer.init "song-1" Fixtures.schema song.stems Nothing
 
 
 step : Main.Msg -> Main.Model -> Main.Model
@@ -229,6 +230,108 @@ there.
 screen : Main.Model -> Query.Single Main.Msg
 screen model =
     Query.fromHtml (Main.view model)
+
+
+
+-- PRESETS
+
+
+{-| A stored config, as `GET /api/presets` hands it over: opaque JSON, exactly
+as `Api.Preset` holds it.
+-}
+value : String -> Decode.Value
+value raw =
+    Decode.decodeString Decode.value raw
+        |> Result.withDefault Encode.null
+
+
+gentle : Api.Preset
+gentle =
+    { id = "preset-1"
+    , name = "Gentle"
+    , config =
+        value """{"tempo": {"speed": 0.5}, "stems": [{"name": "drums", "gain_db": -6.0}]}"""
+    , createdAt = "2026-08-05T10:00:00+00:00"
+    }
+
+
+deep : Api.Preset
+deep =
+    { id = "preset-2"
+    , name = "Deep erosion"
+    , config = value """{"seed": 42}"""
+    , createdAt = "2026-08-05T11:00:00+00:00"
+    }
+
+
+{-| A preset carrying a loop region, which `Config.forPreset` strips and so
+nothing this build writes can produce. One written by an older build could, and
+the current song's region still has to win.
+-}
+withARegion : Api.Preset
+withARegion =
+    { gentle | id = "preset-3", name = "Elsewhere", config = value """{"loop": {"start_s": 99.0}}""" }
+
+
+{-| The order `GET /api/presets` answers in: by name.
+-}
+presets : List Api.Preset
+presets =
+    [ deep, gentle ]
+
+
+withPresets : Main.Model -> Main.Model
+withPresets =
+    step (Main.GotPresets (Ok presets))
+
+
+{-| `GET /api/config/default`, trimmed to two facts the schema's own defaults
+disagree with: `MixConfig` curates its stem list, and the schema cannot
+describe a list at all.
+-}
+serverDefaults : Decode.Value
+serverDefaults =
+    value """{"seed": 7, "stems": [{"name": "drums", "enabled": false}]}"""
+
+
+{-| The mixer as it opens once the server's defaults have arrived.
+-}
+onDefaults : Main.Model
+onDefaults =
+    onSong song
+        |> step (Main.GotDefaultConfig (Ok serverDefaults))
+        |> step Main.OpenMixer
+
+
+{-| A region set on this song, the way the loop boxes set one.
+-}
+withRegion : Main.Model -> Main.Model
+withRegion model =
+    model
+        |> step (Main.FieldChanged (Config.InSection "loop" "start_s") "12.5")
+        |> step (Main.FieldChanged (Config.InSection "loop" "end_s") "30")
+
+
+valueIn : Config.Target -> Mixer.State -> Maybe Config.Value
+valueIn target state =
+    Config.valueAt target state.config
+
+
+{-| Warm, with the presets fetched and one of them chosen in the select.
+-}
+chosen : Main.Model
+chosen =
+    warm |> withPresets |> step (Main.PresetSelected "preset-1")
+
+
+{-| A song that points at a preset, and one that points at a deleted one.
+-}
+onLastUsed : Maybe String -> Main.Model
+onLastUsed lastPresetId =
+    onSong { song | lastPresetId = lastPresetId }
+        |> step Main.OpenMixer
+        |> step (Main.PreviewPlaying (Just 12.5))
+        |> withPresets
 
 
 suite : Test
@@ -999,6 +1102,433 @@ suite =
                             |> .renderError
                             |> Expect.equal Nothing
                 ]
+            ]
+        , presetSuite
+        ]
+
+
+{-| The preset bar: resolving an id against the list, applying one, and the row
+of controls as the screen actually renders it.
+
+The one thing here that is silent when it is wrong is the loop region. A preset
+carries no `loop.start_s` or `loop.end_s` — `Config.forPreset` strips them — and
+`Config.fromSchema` never introduces them, so an apply built out of those two
+alone reverts the region this song is set to back to auto-detection, with
+nothing on screen saying it moved. That is what "leaves the loop region alone"
+below is about, and it is asserted at the pure function *and* through `update`.
+-}
+presetSuite : Test
+presetSuite =
+    describe "presets"
+        [ describe "resolving an id against the list"
+            [ test "an id the list has" <|
+                \_ ->
+                    Mixer.presetById presets (Just "preset-1")
+                        |> Maybe.map .name
+                        |> Expect.equal (Just "Gentle")
+            , test "an id it does not" <|
+                \_ ->
+                    Mixer.presetById presets (Just "preset-gone")
+                        |> Maybe.map .name
+                        |> Expect.equal Nothing
+            , test "and no id at all" <|
+                \_ ->
+                    Mixer.presetById presets Nothing
+                        |> Maybe.map .name
+                        |> Expect.equal Nothing
+            ]
+        , describe "the last used here line"
+            [ test "resolves the song's own last preset" <|
+                \_ ->
+                    Mixer.lastUsed presets { song | lastPresetId = Just "preset-2" }
+                        |> Maybe.map .name
+                        |> Expect.equal (Just "Deep erosion")
+            , test "a preset that has since been deleted resolves to nothing" <|
+                \_ ->
+                    -- The dangling id is deliberate server-side: the song row
+                    -- keeps it and this is where it is resolved. Nothing at
+                    -- all, rather than an entry with no name in it.
+                    Mixer.lastUsed presets { song | lastPresetId = Just "preset-gone" }
+                        |> Maybe.map .name
+                        |> Expect.equal Nothing
+            , test "and a song that has never had one shows nothing either" <|
+                \_ ->
+                    Mixer.lastUsed presets song
+                        |> Maybe.map .name
+                        |> Expect.equal Nothing
+            ]
+        , describe "applying one"
+            [ test "takes the value the preset carries" <|
+                \_ ->
+                    mixer
+                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> valueIn (Config.InSection "tempo" "speed")
+                        |> Expect.equal (Just (Config.FloatValue 0.5))
+            , test "and a per-stem one, matched by name" <|
+                \_ ->
+                    mixer
+                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> valueIn (Config.InStem 1 "gain_db")
+                        |> Expect.equal (Just (Config.FloatValue -6.0))
+            , test "a field the preset does not carry goes back to its default" <|
+                \_ ->
+                    -- Apply means "make it look like this", not "merge this
+                    -- in": a field left holding what happened to be on screen
+                    -- would be a control nothing on the screen accounts for.
+                    mixer
+                        |> Mixer.setField Fixtures.schema (Config.Top "seed") "42"
+                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> valueIn (Config.Top "seed")
+                        |> Expect.equal (Just (Config.IntValue 0))
+            , test "the loop region this song is set to is left alone" <|
+                \_ ->
+                    mixer
+                        |> Mixer.setField Fixtures.schema (Config.InSection "loop" "start_s") "12.5"
+                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> valueIn (Config.InSection "loop" "start_s")
+                        |> Expect.equal (Just (Config.FloatValue 12.5))
+            , test "both ends of it" <|
+                \_ ->
+                    mixer
+                        |> Mixer.setField Fixtures.schema (Config.InSection "loop" "end_s") "30"
+                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> valueIn (Config.InSection "loop" "end_s")
+                        |> Expect.equal (Just (Config.FloatValue 30))
+            , test "even when the preset carries a region of its own" <|
+                \_ ->
+                    mixer
+                        |> Mixer.setField Fixtures.schema (Config.InSection "loop" "start_s") "12.5"
+                        |> Mixer.applyPreset Fixtures.schema withARegion
+                        |> valueIn (Config.InSection "loop" "start_s")
+                        |> Expect.equal (Just (Config.FloatValue 12.5))
+            , test "and a mixer detecting its loop goes on detecting it" <|
+                \_ ->
+                    -- Absent means "find the loop yourself". A preset written
+                    -- by an older build could carry seconds measured on
+                    -- different audio; taking them would move this song's
+                    -- region to a place chosen for another one.
+                    mixer
+                        |> Mixer.applyPreset Fixtures.schema withARegion
+                        |> valueIn (Config.InSection "loop" "start_s")
+                        |> Expect.equal Nothing
+            , test "the portable half of the loop section is still taken" <|
+                \_ ->
+                    mixer
+                        |> Mixer.applyPreset Fixtures.schema
+                            { gentle | config = value """{"loop": {"bars": 16}}""" }
+                        |> valueIn (Config.InSection "loop" "bars")
+                        |> Expect.equal (Just (Config.IntValue 16))
+            , test "and the preset applied becomes the one selected" <|
+                \_ ->
+                    mixer
+                        |> Mixer.applyPreset Fixtures.schema gentle
+                        |> Mixer.selection presets
+                        |> Maybe.map .name
+                        |> Expect.equal (Just "Gentle")
+            ]
+        , describe "applying one through `update`"
+            [ test "fires exactly one preview, through the state machine" <|
+                \_ ->
+                    -- Not the port. Every control change in this screen goes
+                    -- through `Preview.request`, and an apply is a control
+                    -- change that moves every control at once.
+                    chosen
+                        |> step (Main.PresetApplied "preset-1")
+                        |> .preview
+                        |> phase
+                        |> Expect.equal "InFlight"
+            , test "and what goes out is the applied config" <|
+                \_ ->
+                    chosen
+                        |> step (Main.PresetApplied "preset-1")
+                        |> carried (Decode.at [ "tempo", "speed" ] Decode.float)
+                        |> Expect.equal (Just (Ok 0.5))
+            , test "with this song's loop region still in it" <|
+                \_ ->
+                    warm
+                        |> withRegion
+                        |> withPresets
+                        |> step (Main.PresetApplied "preset-1")
+                        |> carried (Decode.at [ "loop", "start_s" ] Decode.float)
+                        |> Expect.equal (Just (Ok 12.5))
+            , test "and the end of it" <|
+                \_ ->
+                    warm
+                        |> withRegion
+                        |> withPresets
+                        |> step (Main.PresetApplied "preset-1")
+                        |> carried (Decode.at [ "loop", "end_s" ] Decode.float)
+                        |> Expect.equal (Just (Ok 30))
+            , test "an id the list no longer has changes nothing" <|
+                \_ ->
+                    warm
+                        |> withPresets
+                        |> step (Main.PresetApplied "preset-gone")
+                        |> carried (Decode.at [ "tempo", "speed" ] Decode.float)
+                        |> Expect.equal (Just (Ok 0.7))
+            ]
+        , describe "saving one"
+            [ test "a name with nothing but spaces in it is not a name" <|
+                \_ ->
+                    mixer |> Mixer.setPresetName "   " |> Mixer.newPresetName |> Expect.equal Nothing
+            , test "and one with spaces around it is trimmed" <|
+                \_ ->
+                    mixer
+                        |> Mixer.setPresetName "  Gentle  "
+                        |> Mixer.newPresetName
+                        |> Expect.equal (Just "Gentle")
+            , test "a name already taken says so rather than failing silently" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetSaved (Err (Http.BadStatus 409)))
+                        |> .presetProblem
+                        |> Maybe.map (String.contains "already a preset")
+                        |> Expect.equal (Just True)
+            , test "a config the server refuses says that instead" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetSaved (Err (Http.BadStatus 400)))
+                        |> .presetProblem
+                        |> Maybe.map (String.contains "refused")
+                        |> Expect.equal (Just True)
+            , test "a preset that saved becomes the selected one" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetSaved (Ok gentle))
+                        |> withPresets
+                        |> .mixer
+                        |> Maybe.andThen (Mixer.selection presets)
+                        |> Maybe.map .name
+                        |> Expect.equal (Just "Gentle")
+            , test "and the name box is empty again" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetNameChanged "Gentle")
+                        |> step (Main.PresetSaved (Ok gentle))
+                        |> .mixer
+                        |> Maybe.andThen Mixer.newPresetName
+                        |> Expect.equal Nothing
+            ]
+        , describe "saving over one and deleting one"
+            [ test "neither is offered until a preset is selected" <|
+                \_ ->
+                    warm.mixer
+                        |> Maybe.map (Mixer.saveOverAvailable presets)
+                        |> Expect.equal (Just False)
+            , test "and both are once one is" <|
+                \_ ->
+                    chosen.mixer
+                        |> Maybe.map (Mixer.saveOverAvailable presets)
+                        |> Expect.equal (Just True)
+            , test "choosing a different preset disarms a confirm" <|
+                \_ ->
+                    -- Otherwise the sentence names one preset and the button
+                    -- destroys another.
+                    chosen
+                        |> step (Main.PresetPending (Just Mixer.Delete))
+                        |> step (Main.PresetSelected "preset-2")
+                        |> .mixer
+                        |> Maybe.andThen .pending
+                        |> Expect.equal Nothing
+            , test "a delete the server refused keeps its reason through the re-fetch it causes" <|
+                \_ ->
+                    -- The refused branch both says why and re-asks for the
+                    -- list, since the row it acted on may have moved. A
+                    -- `GotPresets` that cleared the message would wipe the
+                    -- sentence in the same breath as writing it.
+                    chosen
+                        |> step (Main.PresetDeleted (Err (Http.BadStatus 500)))
+                        |> withPresets
+                        |> .presetProblem
+                        |> Expect.notEqual Nothing
+            , test "and a message from one visit to the bar does not survive into the next" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetSaved (Err (Http.BadStatus 409)))
+                        |> step Main.CloseMixer
+                        |> step Main.OpenMixer
+                        |> .presetProblem
+                        |> Expect.equal Nothing
+            , test "a preset deleted leaves nothing selected" <|
+                \_ ->
+                    chosen
+                        |> step (Main.PresetDeleted (Ok ()))
+                        |> .mixer
+                        |> Maybe.andThen (Mixer.selection presets)
+                        |> Expect.equal Nothing
+            ]
+        , describe "the mixer's starting config"
+            [ test "is the server's own default, not the schema's" <|
+                \_ ->
+                    -- The schema cannot describe a list, so a schema-built
+                    -- mixer starts every stem identical while `MixConfig`
+                    -- curates four different ones.
+                    onDefaults
+                        |> carried (stemField 1 "enabled" Decode.bool)
+                        |> Expect.equal (Just (Ok False))
+            , test "including the top-level fields it states" <|
+                \_ ->
+                    onDefaults
+                        |> carried (Decode.field "seed" Decode.int)
+                        |> Expect.equal (Just (Ok 7))
+            , test "and a fetch that failed falls back to the schema's" <|
+                \_ ->
+                    onSong song
+                        |> step (Main.GotDefaultConfig (Err Http.NetworkError))
+                        |> step Main.OpenMixer
+                        |> carried (stemField 1 "enabled" Decode.bool)
+                        |> Expect.equal (Just (Ok True))
+            ]
+        , describe "the bar as it renders"
+            -- Everything above tests functions that decide. These test that
+            -- the screen calls them: a decision nothing invokes is perfect and
+            -- invisible, which is how `.progress-fill` shipped.
+            [ test "the select carries every saved preset, in the order they arrived" <|
+                \_ ->
+                    warm
+                        |> withPresets
+                        |> screen
+                        |> Query.find [ Selector.class "preset-select" ]
+                        |> Query.findAll [ Selector.tag "option" ]
+                        |> Query.index 1
+                        |> Query.has [ Selector.text "Deep erosion" ]
+            , test "and the one after it" <|
+                \_ ->
+                    warm
+                        |> withPresets
+                        |> screen
+                        |> Query.find [ Selector.class "preset-select" ]
+                        |> Query.findAll [ Selector.tag "option" ]
+                        |> Query.index 2
+                        |> Query.has [ Selector.text "Gentle" ]
+            , test "choosing one tells Main which" <|
+                \_ ->
+                    warm
+                        |> withPresets
+                        |> screen
+                        |> Query.find [ Selector.class "preset-select" ]
+                        |> Event.simulate (Event.input "preset-1")
+                        |> Event.expect (Main.PresetSelected "preset-1")
+            , test "Apply applies the one that is selected" <|
+                \_ ->
+                    chosen
+                        |> screen
+                        |> Query.find [ Selector.class "preset-apply" ]
+                        |> Event.simulate Event.click
+                        |> Event.expect (Main.PresetApplied "preset-1")
+            , test "and cannot be pressed with nothing selected" <|
+                \_ ->
+                    warm
+                        |> withPresets
+                        |> screen
+                        |> Query.find [ Selector.class "preset-apply" ]
+                        |> Query.has [ Selector.disabled True ]
+            , test "nor before the first preview has played" <|
+                \_ ->
+                    -- The config would change and the preview already in
+                    -- flight would come back as the mix from before it.
+                    opened
+                        |> withPresets
+                        |> step (Main.PresetSelected "preset-1")
+                        |> screen
+                        |> Query.find [ Selector.class "preset-apply" ]
+                        |> Query.has [ Selector.disabled True ]
+            , test "Save as… saves what is on screen under the name typed" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetNameChanged "Gentle")
+                        |> screen
+                        |> Query.find [ Selector.class "preset-save" ]
+                        |> Event.simulate Event.click
+                        |> Event.expect Main.SavePresetAs
+            , test "and refuses an empty name rather than posting one" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.find [ Selector.class "preset-save" ]
+                        |> Query.has [ Selector.disabled True ]
+            , test "Save over asks first, because it destroys a recipe" <|
+                \_ ->
+                    chosen
+                        |> screen
+                        |> Query.find [ Selector.class "preset-save-over" ]
+                        |> Event.simulate Event.click
+                        |> Event.expect (Main.PresetPending (Just Mixer.SaveOver))
+            , test "and the confirm is what actually saves over it" <|
+                \_ ->
+                    chosen
+                        |> step (Main.PresetPending (Just Mixer.SaveOver))
+                        |> screen
+                        |> Query.find [ Selector.class "preset-go" ]
+                        |> Event.simulate Event.click
+                        |> Event.expect Main.SaveOverConfirmed
+            , test "Delete asks first too" <|
+                \_ ->
+                    chosen
+                        |> screen
+                        |> Query.find [ Selector.class "preset-delete" ]
+                        |> Event.simulate Event.click
+                        |> Event.expect (Main.PresetPending (Just Mixer.Delete))
+            , test "and its confirm names the preset it is about to remove" <|
+                \_ ->
+                    chosen
+                        |> step (Main.PresetPending (Just Mixer.Delete))
+                        |> screen
+                        |> Query.find [ Selector.class "preset-confirm" ]
+                        |> Query.has [ Selector.text "Gentle" ]
+            , test "which is what deletes it" <|
+                \_ ->
+                    chosen
+                        |> step (Main.PresetPending (Just Mixer.Delete))
+                        |> screen
+                        |> Query.find [ Selector.class "preset-go" ]
+                        |> Event.simulate Event.click
+                        |> Event.expect Main.DeletePresetConfirmed
+            , test "the last used here line names the preset when it resolves" <|
+                \_ ->
+                    onLastUsed (Just "preset-2")
+                        |> screen
+                        |> Query.find [ Selector.class "preset-last" ]
+                        |> Query.has [ Selector.text "Deep erosion" ]
+            , test "and its Apply applies that one rather than the selection" <|
+                \_ ->
+                    onLastUsed (Just "preset-2")
+                        |> screen
+                        |> Query.find [ Selector.class "preset-last-apply" ]
+                        |> Event.simulate Event.click
+                        |> Event.expect (Main.PresetApplied "preset-2")
+            , test "a deleted preset leaves no line at all" <|
+                \_ ->
+                    onLastUsed (Just "preset-gone")
+                        |> screen
+                        |> Query.findAll [ Selector.class "preset-last" ]
+                        |> Query.count (Expect.equal 0)
+            , test "and neither does a song that never had one" <|
+                \_ ->
+                    onLastUsed Nothing
+                        |> screen
+                        |> Query.findAll [ Selector.class "preset-last" ]
+                        |> Query.count (Expect.equal 0)
+            , test "a failed save says so where the buttons are" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetSaved (Err (Http.BadStatus 409)))
+                        |> screen
+                        |> Query.find [ Selector.class "presets" ]
+                        |> Query.has [ Selector.text "already a preset" ]
+            , test "a mixer opened without the server's defaults says which defaults it opened at" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.find [ Selector.class "mixer-defaults" ]
+                        |> Query.has [ Selector.text "schema" ]
+            , test "and one opened with them says nothing" <|
+                \_ ->
+                    onDefaults
+                        |> step (Main.PreviewPlaying (Just 12.5))
+                        |> screen
+                        |> Query.findAll [ Selector.class "mixer-defaults" ]
+                        |> Query.count (Expect.equal 0)
             ]
         ]
 

@@ -1,5 +1,6 @@
 port module Main exposing
     ( BadEvent
+    , Defaults(..)
     , JobOutcome(..)
     , Model
     , Msg(..)
@@ -193,6 +194,44 @@ type Settings
     | SettingsUnavailable String
 
 
+{-| The server's own default `MixConfig`, which is what a mixer opens on.
+
+Fetched once at startup beside the schema, and for the same reason: it is the
+same answer for the life of the process, and asking for it when someone presses
+"Open the mixer" would put a round trip between them and the screen.
+
+A union rather than a `Maybe` beside an error string, exactly as `Settings` is.
+The distinction that earns it is between "it has not answered yet" and "it
+answered badly" — the mixer opens either way, so both are a fallback to the
+schema's defaults, but only one of them has anything to say about why.
+
+The schema and this are *not* interchangeable. `Schema` describes shapes and
+this carries values; `Config.overlay` is what puts one over the other, with the
+schema still deciding which keys may exist and what bounds they are held to.
+-}
+type Defaults
+    = DefaultsLoading
+    | DefaultsReady Decode.Value
+    | DefaultsUnavailable String
+
+
+{-| The published defaults, when there are any to open a mixer on.
+
+Both non-ready states collapse to `Nothing` here, and `Page.Mixer.init` records
+that the mixer opened without them so the screen can say so. A mixer that
+refused to open until this arrived would turn one failed GET into a feature
+nobody can reach.
+-}
+publishedDefaults : Defaults -> Maybe Decode.Value
+publishedDefaults defaults =
+    case defaults of
+        DefaultsReady value ->
+            Just value
+
+        _ ->
+            Nothing
+
+
 {-| A render POST that has gone out and not yet been answered.
 
 Carries the song it was issued for as well as the request that will answer it,
@@ -233,6 +272,16 @@ type alias Model =
     , loop : Maybe Api.LoopRegion
     , loopError : Maybe String
     , settings : Settings
+    , defaults : Defaults
+
+    -- Every saved preset, and whatever the last thing the bar did has to say
+    -- for itself. The list lives here rather than in `Mixer.State` because it
+    -- outlives the screen and is the same for every song; the bar's own
+    -- selection and name box do not, and are thrown away with the mixer.
+    -- `presetProblem` is rendered by the bar and by nothing else, so
+    -- `leaveMixer` clears it for the reason `renderError` is cleared there.
+    , presets : List Api.Preset
+    , presetProblem : Maybe String
     , mixer : Maybe Mixer.State
     , renders : Maybe Renders.State
     , renderJobs : List Api.Job
@@ -510,6 +559,19 @@ type Msg
     | GotQueueJobs (Result Http.Error (List Api.Job))
     | CancelJobClicked String
     | JobCancelSent (Result Http.Error Api.Cancellation)
+    | GotPresets (Result Http.Error (List Api.Preset))
+    | GotDefaultConfig (Result Http.Error Decode.Value)
+    | PresetSelected String
+    | PresetApplied String
+    | PresetNameChanged String
+    | SavePresetAs
+    | PresetSaved (Result Http.Error Api.Preset)
+    | PresetPending (Maybe Mixer.Pending)
+    | SaveOverConfirmed
+    | PresetUpdated (Result Http.Error Api.Preset)
+    | DeletePresetConfirmed
+    | PresetDeleted (Result Http.Error ())
+    | LastPresetSet (Result Http.Error Api.Song)
 
 
 main : Program () Model Msg
@@ -602,6 +664,9 @@ init _ =
       , loop = Nothing
       , loopError = Nothing
       , settings = SettingsLoading
+      , defaults = DefaultsLoading
+      , presets = []
+      , presetProblem = Nothing
       , mixer = Nothing
       , renders = Nothing
       , renderJobs = []
@@ -630,6 +695,13 @@ init _ =
             }
         , Request.songs GotSongs
         , Request.schema GotSchema
+
+        -- Beside the schema rather than on entering the mixer: both describe
+        -- the same config and neither changes for the life of the process, so
+        -- asking for either later would put a round trip between pressing
+        -- "Open the mixer" and seeing one.
+        , Request.defaultConfig GotDefaultConfig
+        , Request.presets GotPresets
         ]
     )
 
@@ -922,8 +994,15 @@ update msg model =
 
                     else
                         let
+                            -- Over the server's own defaults when they have
+                            -- arrived, and the schema's alone when they have
+                            -- not — which the screen then says, because the
+                            -- two differ on every stem.
                             state =
-                                Mixer.init song.id schema song.stems
+                                Mixer.init song.id
+                                    schema
+                                    song.stems
+                                    (publishedDefaults model.defaults)
 
                             -- One preview at progress 0, which is also what
                             -- `master_gain` calibrates from: until it returns
@@ -945,8 +1024,23 @@ update msg model =
                             -- inherit a sentence from a previous one whatever
                             -- put it there.
                             , renderError = Nothing
+
+                            -- Same argument, one row up: the bar is the only
+                            -- thing that renders this, so a message from the
+                            -- last time it was open is a message about a
+                            -- screen that has been closed since.
+                            , presetProblem = Nothing
                           }
-                        , sendPreview toSend
+                        , Cmd.batch
+                            [ sendPreview toSend
+
+                            -- Re-asked here as well as at startup. The bar is
+                            -- the only place presets are visible, so entering
+                            -- it is the natural moment to be sure the list is
+                            -- current — and the only retry there is for a
+                            -- startup fetch that failed.
+                            , Request.presets GotPresets
+                            ]
                         )
 
                 _ ->
@@ -1298,6 +1392,204 @@ update msg model =
                 | queueProblem = Just ("Could not cancel that job — " ++ httpErrorToString err)
               }
             , Request.jobs GotQueueJobs
+            )
+
+        GotPresets (Ok presets) ->
+            -- The list, and deliberately *not* a clear of `presetProblem`. A
+            -- refused delete both writes its reason and re-fetches — the row
+            -- may have changed under it — so clearing here would wipe the
+            -- sentence in the same breath as writing it, exactly the mistake
+            -- `JobCancelSent`'s refused branch avoids one screen along. The
+            -- message is cleared where it was raised from: entering the mixer,
+            -- leaving it, and every button that starts a new attempt.
+            ( { model | presets = presets }, Cmd.none )
+
+        GotPresets (Err err) ->
+            -- Said rather than swallowed, and said in the bar, which is the
+            -- only place presets appear at all. An empty select with no
+            -- explanation reads as "you have never saved one", which is a
+            -- different and much worse sentence than the true one.
+            ( { model
+                | presetProblem =
+                    Just
+                        ("Could not load your presets — "
+                            ++ httpErrorToString err
+                            ++ ". Leave the mixer and open it again to try that fetch once more."
+                        )
+              }
+            , Cmd.none
+            )
+
+        GotDefaultConfig (Ok published) ->
+            ( { model | defaults = DefaultsReady published }, Cmd.none )
+
+        GotDefaultConfig (Err err) ->
+            ( { model | defaults = DefaultsUnavailable (httpErrorToString err) }, Cmd.none )
+
+        PresetSelected raw ->
+            -- Choosing is not applying, so nothing is sent: `withMixer` would
+            -- fire a preview of a config that has not changed.
+            ( mapMixer (Mixer.selectPreset raw) model, Cmd.none )
+
+        PresetNameChanged raw ->
+            ( mapMixer (Mixer.setPresetName raw) model, Cmd.none )
+
+        PresetPending pending ->
+            ( mapMixer (Mixer.armConfirm pending) model, Cmd.none )
+
+        PresetApplied presetId ->
+            case ( model.mixer, model.settings ) of
+                ( Just _, SettingsReady schema ) ->
+                    case Mixer.presetById model.presets (Just presetId) of
+                        Just preset ->
+                            -- Through `withMixer`, which is the same door
+                            -- every slider and checkbox goes through: it hands
+                            -- the new config to `Preview.request` and sends
+                            -- whatever that decides to send. Nothing here
+                            -- touches the audio port, and an apply is exactly
+                            -- one control change — a large one.
+                            withMixer (Mixer.applyPreset schema preset)
+                                { model | presetProblem = Nothing }
+                                |> andThen (rememberPreset preset.id)
+
+                        Nothing ->
+                            -- Unreachable from the bar: the select is built
+                            -- from the same list this resolves against, so an
+                            -- id that does not resolve is not on screen to be
+                            -- pressed. Doing nothing beats inventing a message
+                            -- about a preset nobody can see.
+                            ( model, Cmd.none )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        SavePresetAs ->
+            case model.mixer of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just state ->
+                    case Mixer.newPresetName state of
+                        Nothing ->
+                            -- The button is disabled without a name; the model
+                            -- does not rely on that being true.
+                            ( model, Cmd.none )
+
+                        Just name ->
+                            ( { model | presetProblem = Nothing }
+                              -- `Config.forPreset`, never `Config.encode`: a
+                              -- preset must not carry this song's loop region
+                              -- or a separation model, and both are silent
+                              -- when they are wrong.
+                            , Request.createPreset name
+                                (Config.forPreset state.config)
+                                PresetSaved
+                            )
+
+        PresetSaved (Ok preset) ->
+            ( mapMixer (Mixer.presetSaved preset) { model | presetProblem = Nothing }
+            , Cmd.batch [ Request.presets GotPresets, rememberPresetCmd preset.id model ]
+            )
+
+        PresetSaved (Err err) ->
+            ( { model | presetProblem = Just (Mixer.saveMessage err (httpErrorToString err)) }
+            , Cmd.none
+            )
+
+        SaveOverConfirmed ->
+            case model.mixer of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just state ->
+                    case Mixer.selection model.presets state of
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                        Just preset ->
+                            -- The preset's own name goes back unchanged: this
+                            -- button replaces what a preset holds, and the one
+                            -- route covers renaming too only because the
+                            -- server needed both in one call.
+                            ( mapMixer (Mixer.armConfirm Nothing)
+                                { model | presetProblem = Nothing }
+                            , Request.updatePreset preset.id
+                                preset.name
+                                (Config.forPreset state.config)
+                                PresetUpdated
+                            )
+
+        PresetUpdated (Ok preset) ->
+            ( { model | presetProblem = Nothing }
+            , Cmd.batch [ Request.presets GotPresets, rememberPresetCmd preset.id model ]
+            )
+
+        PresetUpdated (Err err) ->
+            ( { model | presetProblem = Just (Mixer.saveMessage err (httpErrorToString err)) }
+            , Cmd.none
+            )
+
+        DeletePresetConfirmed ->
+            case model.mixer of
+                Nothing ->
+                    ( model, Cmd.none )
+
+                Just state ->
+                    case Mixer.selection model.presets state of
+                        Nothing ->
+                            ( model, Cmd.none )
+
+                        Just preset ->
+                            ( mapMixer (Mixer.armConfirm Nothing)
+                                { model | presetProblem = Nothing }
+                            , Request.deletePreset preset.id PresetDeleted
+                            )
+
+        PresetDeleted (Ok ()) ->
+            -- The selection is dropped by the re-fetch rather than here: it is
+            -- an id resolved against the list every time it is read, so a list
+            -- without that preset in it is already a bar with nothing
+            -- selected. Clearing it explicitly as well, because a select whose
+            -- value names a row that no longer exists is a browser deciding
+            -- for itself which option to show.
+            ( mapMixer (Mixer.selectPreset "") model, Request.presets GotPresets )
+
+        PresetDeleted (Err err) ->
+            ( { model
+                | presetProblem =
+                    Just ("Could not delete that preset — " ++ httpErrorToString err)
+              }
+            , Request.presets GotPresets
+            )
+
+        LastPresetSet (Ok updated) ->
+            -- The song row comes back with its new `last_preset_id`, which is
+            -- what the "Last used here" line reads. Adopted only while that
+            -- song is still the one on screen: this answers after a round trip
+            -- and the operator may have moved on, and writing it then would
+            -- put another song's row under an open mixer.
+            if model.selectedSongId == Just updated.id then
+                ( { model | currentSong = Just updated }, Cmd.none )
+
+            else
+                ( model, Cmd.none )
+
+        LastPresetSet (Err err) ->
+            -- The preset *was* applied — this is only the note of which one,
+            -- and the note failing is not the apply failing. Said anyway,
+            -- because the "Last used here" line silently not appearing next
+            -- time is the kind of small unexplained absence this interface
+            -- keeps deciding against.
+            ( { model
+                | presetProblem =
+                    Just
+                        ("That preset is applied, but this song could not be made to "
+                            ++ "remember it — "
+                            ++ httpErrorToString err
+                            ++ ". The mix on screen is unaffected."
+                        )
+              }
+            , Cmd.none
             )
 
 
@@ -1692,6 +1984,43 @@ withMixer change model =
                 ( { model | mixer = Just updated, preview = preview }, sendPreview toSend )
 
 
+{-| A change to the mixer that is not a change to the mix.
+
+`withMixer`'s sibling, and the difference between them is the whole of it:
+that one hands the new config to `Preview.request`, this one does not. Choosing
+a preset in the select, typing a name, and arming a confirm all change what the
+screen shows and nothing about what is playing — passing them through
+`withMixer` would fire a preview of a config that has not moved, and a scrubber
+drag would then be competing with keystrokes in a name box for the one request
+slot.
+-}
+mapMixer : (Mixer.State -> Mixer.State) -> Model -> Model
+mapMixer change model =
+    { model | mixer = Maybe.map change model.mixer }
+
+
+{-| Remember this preset as the one this song last had.
+
+`songs.last_preset_id` exists for exactly one line on one screen — "Last used
+here" — and is never applied on its own. Written when a preset is applied and
+when one is saved from this song's mixer, which are the two moments the song
+and the preset were last the same thing.
+-}
+rememberPreset : String -> Model -> ( Model, Cmd Msg )
+rememberPreset presetId model =
+    ( model, rememberPresetCmd presetId model )
+
+
+rememberPresetCmd : String -> Model -> Cmd Msg
+rememberPresetCmd presetId model =
+    case model.mixer of
+        Just state ->
+            Request.setLastPreset state.songId (Just presetId) LastPresetSet
+
+        Nothing ->
+            Cmd.none
+
+
 sendPreview : Maybe Preview.Params -> Cmd msg
 sendPreview toSend =
     case toSend of
@@ -1730,6 +2059,11 @@ leaveMixer model =
                 , previewError = Nothing
                 , loopSeconds = Nothing
                 , renderError = Nothing
+
+                -- The preset bar is the only thing that renders this, so a
+                -- message left behind here would reappear over the next
+                -- mixer — about a save that happened on a different song.
+                , presetProblem = Nothing
               }
             , stopPreview ()
             )
@@ -2004,6 +2338,8 @@ mixerView model state =
                     , loopSeconds = model.loopSeconds
                     , startingRender = renderStartingFor song.id model
                     , renderError = model.renderError
+                    , presets = model.presets
+                    , presetProblem = model.presetProblem
                     , onBack = CloseMixer
                     , onProgress = ProgressChanged
                     , onSolo = SoloToggled
@@ -2011,12 +2347,48 @@ mixerView model state =
                     , onToggle = FieldToggled
                     , onRetry = RetryPreview
                     , onRender = RenderClicked
+                    , onPresetSelected = PresetSelected
+                    , onPresetApplied = PresetApplied
+                    , onPresetName = PresetNameChanged
+                    , onPresetSaveAs = SavePresetAs
+                    , onPresetPending = PresetPending
+                    , onPresetSaveOver = SaveOverConfirmed
+                    , onPresetDelete = DeletePresetConfirmed
                     }
                 , errorLine (\reason -> "Could not find the loop — " ++ reason) model.loopError
+
+                -- Why the mixer had to fall back to the schema's defaults, as
+                -- opposed to *that* it did, which the bar itself states. The
+                -- reason lives here because this is where every other
+                -- `Http.Error` on this screen is turned into a sentence.
+                , defaultsProblem model.defaults
                 ]
 
         _ ->
             p [ class "dim" ] [ text "Loading the mixer…" ]
+
+
+{-| Why the server's own defaults are not here.
+
+Unlike the schema, this does not stop the mixer opening — it opens at the
+schema's defaults and says so — so this is the reason rather than the fact, and
+it is not an error line in red for the same reason: nothing is broken, the
+starting point is merely a different one from the tool's own.
+-}
+defaultsProblem : Defaults -> Html msg
+defaultsProblem defaults =
+    case defaults of
+        DefaultsUnavailable reason ->
+            p [ class "dim" ]
+                [ text
+                    ("The server's default config could not be fetched — "
+                        ++ reason
+                        ++ "."
+                    )
+                ]
+
+        _ ->
+            text ""
 
 
 {-| A schema that never arrived is not a detail: every control in the mixer is
