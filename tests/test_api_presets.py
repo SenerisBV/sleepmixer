@@ -41,3 +41,36 @@ def test_an_invalid_config_is_rejected_on_save(client):
     r = client.post("/api/presets", json={"name": "Bad", "config": {"seed": -1}})
     assert r.status_code == 400
     assert "seed" in r.json()["detail"].lower()
+
+
+def test_put_replaces_a_preset(client):
+    made = client.post("/api/presets", json={"name": "gentle", "config": {}}).json()
+    answer = client.put(f"/api/presets/{made['id']}",
+                        json={"name": "deep", "config": {"seed": 3}})
+    assert answer.status_code == 200
+    assert answer.json()["name"] == "deep"
+    assert client.get("/api/presets").json()["presets"][0]["config"] == {"seed": 3}
+
+
+def test_put_rejects_a_config_that_could_never_render(client):
+    """The same reason create validates: storing it moves the failure to
+    render time, by which point the connection to the bad value is gone."""
+    made = client.post("/api/presets", json={"name": "gentle", "config": {}}).json()
+    answer = client.put(f"/api/presets/{made['id']}",
+                        json={"name": "gentle", "config": {"seed": -1}})
+    assert answer.status_code == 400
+    assert client.get("/api/presets").json()["presets"][0]["config"] == {}
+
+
+def test_put_on_an_unknown_preset_is_a_404(client):
+    assert client.put("/api/presets/nope",
+                      json={"name": "x", "config": {}}).status_code == 404
+
+
+def test_put_onto_a_taken_name_is_a_409(client):
+    client.post("/api/presets", json={"name": "gentle", "config": {}})
+    other = client.post("/api/presets", json={"name": "deep", "config": {}}).json()
+    answer = client.put(f"/api/presets/{other['id']}",
+                        json={"name": "gentle", "config": {}})
+    assert answer.status_code == 409
+    assert "gentle" in answer.json()["detail"]

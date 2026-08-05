@@ -211,11 +211,42 @@ class Store:
                 "SELECT * FROM presets ORDER BY name").fetchall()
             return [_preset_from_row(r) for r in rows]
 
+    def get_preset(self, preset_id: str) -> dict | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM presets WHERE id = ?", (preset_id,)).fetchone()
+            return _preset_from_row(row) if row is not None else None
+
     def delete_preset(self, preset_id: str) -> bool:
         with self._lock:
             cur = self._conn.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
             self._conn.commit()
             return cur.rowcount > 0
+
+    def update_preset(self, preset_id: str, name: str, config: dict) -> dict | None:
+        """Rename a preset, replace its config, or both.
+
+        The unique index cannot tell "this name is taken by someone else" from
+        "this name is taken by the row I am updating", and the second is the
+        common case — saving over a preset without renaming it. So the
+        collision is checked explicitly rather than caught, and the two are
+        distinguishable to the caller."""
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT id FROM presets WHERE id = ?", (preset_id,)).fetchone()
+            if row is None:
+                return None
+            clash = self._conn.execute(
+                "SELECT id FROM presets WHERE name = ? AND id != ?",
+                (name, preset_id)).fetchone()
+            if clash is not None:
+                raise ValueError(f"a preset named {name!r} already exists")
+            self._conn.execute(
+                "UPDATE presets SET name = ?, config = ? WHERE id = ?",
+                (name, json.dumps(config), preset_id))
+            updated = self._conn.execute(
+                "SELECT * FROM presets WHERE id = ?", (preset_id,)).fetchone()
+            return _preset_from_row(updated)
 
     # -- renders --------------------------------------------------------
     def add_render(self, song_id: str, config: dict, path: str, status: str) -> dict:

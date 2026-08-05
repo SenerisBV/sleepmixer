@@ -151,6 +151,34 @@ def test_preset_names_are_unique(store):
         store.add_preset("Slow", {})
 
 
+def test_update_preset_replaces_name_and_config(store):
+    made = store.add_preset("gentle", {"seed": 1})
+    updated = store.update_preset(made["id"], "deep", {"seed": 2})
+    assert updated["name"] == "deep"
+    assert updated["config"] == {"seed": 2}
+    assert [p["id"] for p in store.list_presets()] == [made["id"]]
+
+
+def test_update_preset_keeping_its_own_name_is_not_a_collision(store):
+    """Saving over a preset without renaming it is the common case, and the
+    unique index would refuse it if the check were written carelessly."""
+    made = store.add_preset("gentle", {"seed": 1})
+    updated = store.update_preset(made["id"], "gentle", {"seed": 2})
+    assert updated["config"] == {"seed": 2}
+
+
+def test_update_preset_onto_another_preset_name_is_refused(store):
+    store.add_preset("gentle", {})
+    other = store.add_preset("deep", {})
+    with pytest.raises(ValueError):
+        store.update_preset(other["id"], "gentle", {})
+    assert store.get_preset(other["id"])["name"] == "deep"
+
+
+def test_update_preset_returns_none_for_an_unknown_id(store):
+    assert store.update_preset("nope", "x", {}) is None
+
+
 def test_renders_round_trip(store):
     song = store.add_song(path="/tmp/a.wav", title="A", duration_s=1.0, sample_rate=44100)
     r = store.add_render(song_id=song["id"], config={"seed": 3},
