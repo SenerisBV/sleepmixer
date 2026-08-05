@@ -159,6 +159,30 @@ def separate_song(song_id: str, request: Request, force: bool = False) -> dict:
             cancel.check()
             if force:
                 invalidate_cache(path, model, cache_dir=str(cache_dir()))
+                # The row and the cache are two records of one fact, and this
+                # is the only line in the codebase that can make them
+                # disagree. Deleting the stems while `songs.stems` still
+                # lists them leaves a row that claims a separation nothing on
+                # disk can honour — and every gate into the mixer reads that
+                # field rather than the cache, so the claim is believed.
+                #
+                # Cleared HERE rather than in the two handlers below, because
+                # the window opens at the deletion and not at the exception:
+                # from this line until the final update_song, the honest
+                # answer to "what stems does this song have" is none. Both
+                # exits — Cancelled and any other failure — inherit that for
+                # free, and a success overwrites it with the real list.
+                #
+                # What the alternative costs is worth naming, since it is the
+                # thing this branch made reachable: a cancelled forced retry
+                # left a row reading "not separated" WITH a stem list and an
+                # enabled Open-the-mixer. Opening it runs `separation.separate
+                # ()` in-process inside SessionRegistry's per-song lock — no
+                # job, no queue row, no Cancel — and then caches stems the
+                # mixer's rows were not built from, so `plan_stem_configs`
+                # matches none of them and every gain, send and decay on
+                # screen is silently replaced by a default.
+                store.update_song(song_id, stems=[])
             result = run_separation(path, model, str(cache_dir()),
                                      reporter=reporter, cancel=cancel)
         except Cancelled:

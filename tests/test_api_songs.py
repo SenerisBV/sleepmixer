@@ -1,4 +1,5 @@
 import functools
+import os
 import time
 
 import numpy as np
@@ -40,6 +41,16 @@ def _wait_for_terminal(client, job_id, deadline_s=15.0):
     raise AssertionError(
         f"job {job_id} never reached a terminal status within {deadline_s}s "
         f"— last status seen was {last_status!r}")
+
+
+def _wait_until(predicate, what, deadline_s=15.0):
+    """Block until ``predicate()`` holds, or say which wait never ended."""
+    deadline = time.time() + deadline_s
+    while time.time() < deadline:
+        if predicate():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"waited {deadline_s}s and {what}")
 
 
 def test_schema_endpoint_returns_config_metadata(client):
@@ -157,3 +168,98 @@ def test_cancelling_a_separation_leaves_the_song_pending(client, tmp_path, monke
 
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "cancelled"
     assert client.get(f"/api/songs/{song['id']}").json()["separation_status"] == "pending"
+
+
+def test_cancelling_a_forced_separation_leaves_the_song_with_no_stems(
+        client, tmp_path, monkeypatch):
+    """The row must never claim stems the disk does not have.
+
+    Written as a *sequence* rather than a unit, because no single step is
+    wrong. ``force=true`` deletes the cached stems before spawning the child —
+    correct, that is what force means. A cancel resets the status to
+    "pending" — correct, nothing was produced. But between them nothing
+    cleared ``songs.stems``, so a cancelled forced retry left the row saying
+    "not separated" *and* listing four stems that no longer exist anywhere.
+
+    Both mixer gates (``Page.Song.mixerPanel`` and ``Main``'s ``OpenMixer``)
+    read ``song.stems``, not the cache, so that row opens the mixer. The first
+    preview then calls the *in-process* ``separation.separate()`` inside
+    ``SessionRegistry``'s per-song lock — a full Demucs run with no job, no
+    queue row and no Cancel, which is the incident this whole branch exists to
+    make impossible — and the stems it finally caches do not match the rows
+    the mixer built from the stale list, so ``plan_stem_configs`` discards
+    every setting on screen and plays every stem at its default.
+    """
+    from sleepmix.paths import cache_dir
+    from sleepmix.separation import _cache_key, _cache_path
+
+    path = _song_file(tmp_path / "a.wav")
+    song = client.post("/api/songs", json={"path": path}).json()
+
+    monkeypatch.setattr(
+        "sleepmix.server.api.songs.run_separation",
+        functools.partial(run_separation, worker_module="tests.stub_separation_worker"))
+
+    first = client.post(f"/api/songs/{song['id']}/separate")
+    _wait_for_terminal(client, first.json()["id"])
+    separated = client.get(f"/api/songs/{song['id']}").json()
+    assert separated["stems"], "precondition: the song has stems and a cache"
+    key = _cache_key(path, client.app.state.separation_model)
+    assert os.path.isdir(_cache_path(str(cache_dir()), key))
+
+    # Retry with Demucs — which deletes the cache first — and stop it.
+    monkeypatch.setenv("STUB_SLEEP_S", "30")
+    forced = client.post(f"/api/songs/{song['id']}/separate?force=true")
+    job_id = forced.json()["id"]
+    # Waiting for the deletion rather than cancelling straight away is what
+    # makes this test about the thing it is about. A job cancelled while still
+    # queued never enters the closure at all, so the cache would still be
+    # there and the row would be honest for a reason that has nothing to do
+    # with the fix — a pass by accident, intermittently.
+    _wait_until(lambda: not os.path.isdir(_cache_path(str(cache_dir()), key)),
+                "the forced separation never invalidated the cache")
+    assert client.post(f"/api/jobs/{job_id}/cancel").json()["cancelled"] is True
+    _wait_for_terminal(client, job_id)
+
+    after = client.get(f"/api/songs/{song['id']}").json()
+    assert not os.path.isdir(_cache_path(str(cache_dir()), key)), (
+        "force deleted the cache; this test is about the row that outlived it")
+    assert after["separation_status"] == "pending"
+    assert after["stems"] == [], (
+        "the cached stems were deleted, so the row must not still list them — "
+        "every mixer gate reads this field and would open on a song with "
+        "nothing on disk")
+
+
+def test_a_forced_separation_that_fails_also_leaves_no_stems(
+        client, tmp_path, monkeypatch):
+    """The same hole, through the other exit.
+
+    ``except Exception`` predates this branch and never touched ``stems``
+    either; it was only ever unreachable in practice because a forced
+    separation that crashed was rarer than one that is now cancellable with a
+    button. The row it leaves is worse, not better: "failed" with a stem list.
+    """
+    from sleepmix.paths import cache_dir
+    from sleepmix.separation import _cache_key, _cache_path
+
+    path = _song_file(tmp_path / "a.wav")
+    song = client.post("/api/songs", json={"path": path}).json()
+
+    monkeypatch.setattr(
+        "sleepmix.server.api.songs.run_separation",
+        functools.partial(run_separation, worker_module="tests.stub_separation_worker"))
+
+    first = client.post(f"/api/songs/{song['id']}/separate")
+    _wait_for_terminal(client, first.json()["id"])
+    assert client.get(f"/api/songs/{song['id']}").json()["stems"]
+
+    monkeypatch.setenv("STUB_EXIT_CODE", "3")
+    forced = client.post(f"/api/songs/{song['id']}/separate?force=true")
+    _wait_for_terminal(client, forced.json()["id"])
+
+    after = client.get(f"/api/songs/{song['id']}").json()
+    key = _cache_key(path, client.app.state.separation_model)
+    assert not os.path.isdir(_cache_path(str(cache_dir()), key))
+    assert after["separation_status"] == "failed"
+    assert after["stems"] == []
