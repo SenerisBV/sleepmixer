@@ -100,7 +100,44 @@ mixer's own lookup against the (now shorter) presets list simply stops
 finding it, so the "last used here" line quietly stops appearing. No
 migration, no constraint, and no 500 anywhere in that path.
 
-**Four small things this plan's own reviews found and left, none of them
+**What the final whole-branch review changed.** (1) `Mixer.applyPreset` built
+its base from `Config.fromSchema` alone rather than sharing `Mixer.init`'s
+base (schema defaults overlaid with the published ones) — the two agreed on
+every scalar leaf, because a schema default already equals the dataclass
+default, and diverged in exactly the one place `MixConfig` curates a list the
+schema cannot describe: the stems. A preset silent about a stem, or applied to
+a song whose stems didn't match the ones the preset was saved from, fell all
+the way back to the schema's uniform values — drums enabled, vocals on the
+wrong curve — with `defaultsNote` staying silent, because the defaults *had*
+arrived. Fixed by pulling the shared base into `Mixer.baseConfig`, used by
+both `init` and `applyPreset` now, with `Main`'s one production call site
+threading `publishedDefaults model.defaults` through. (2) `GotDefaultConfig`'s
+error branch unconditionally overwrote `model.defaults` with
+`DefaultsUnavailable`, which used to be harmless because the fetch only ever
+happened once per session; now that `OpenMixer` re-issues it on every open, a
+transient failure arriving after an earlier fetch had already succeeded could
+discard a `DefaultsReady` value that worked, regressing every later mixer in
+the session to the schema's bare defaults for no reason a fetch failure this
+time actually caused. Only `DefaultsLoading`/`DefaultsUnavailable` now move to
+`DefaultsUnavailable` on error; `DefaultsReady` stays exactly as it was. (3)
+That same overwrite was the only way `defaultsProblem`'s "could not be
+fetched" sentence could render under a mixer that had, in fact, opened with
+the real defaults — (2)'s fix closes this too, confirmed by reverting just
+that guard and watching the contradiction reappear, not assumed. (4)
+`applyBlock`'s "Choose a preset to apply" used to show beside a fully live
+`lastUsedLine` Apply button whenever the preview was playable and nothing was
+picked from the dropdown — that Apply needs no selection at all — reading as
+if neither button worked; it now names the "Last used here" line as the live
+alternative when one exists for the song. (5) Five stale documentation claims
+about presets and the server's defaults, mostly found while tracing (1)
+through the docs that describe it, are corrected in `README.md`,
+`ui/README.md` and `docs/architecture.md`: an undercount of `setLastPreset`'s
+call sites, an "always" a failed fetch actually falsifies, `other`'s decay
+curve misattributed as `exp` when it is `linear`, a docstring pointer that
+says nothing about what it's cited for, and a preset-save network-error
+branch that does not exist in the suite.
+
+**Five small things this plan's own reviews found and left, none of them
 blocking:**
 
 - **A check-then-act race survives in `_migrate_last_preset_id`** (added to
@@ -132,6 +169,25 @@ blocking:**
   their paths, verbs, and JSON encoding — are exercised only by reading, the
   same as every other function in that module. Pre-existing convention, not a
   gap this plan introduced.
+- **Nothing in either suite exercises `Config.overlay` against the *real*
+  schema or the *real* published defaults, and the final review's Fix (1)
+  above is exactly what living in that gap costs.** `ui/tests/Fixtures.elm`'s
+  schema is a trimmed hand-copy of one live `GET /api/schema` response, with
+  no `reverb` section and no `search_end`; the Python side's own test of
+  `GET /api/config/default` stops at `MixConfig.from_dict(body) ==
+  MixConfig()` and never reaches Elm at all. So the branch's headline claim —
+  that a mixer opens on the same values `sleepmix render` would use — held,
+  through six per-task reviews and two earlier whole-branch fix-wave attempts
+  that also missed it, only because `Fixtures.elm`'s schema and the server's
+  real one happen to agree with each other, not because either is ever
+  checked against the other's ground truth. `MixerTest.elm`'s `onDefaults`
+  fixture (three tests use it) is the closest either suite comes, and it is
+  still a hand-written `Decode.Value` standing in for the real route.
+  Closing this needs one fixture generated on one side — a real
+  `GET /api/schema` and a real `GET /api/config/default` response, captured
+  once against a running server — and consumed unmodified by the other side,
+  the same shape `_ui_body` (Plan 3b, above) still lacks for `Config.encode`.
+  Not attempted here.
 
 **What this plan does not cover, named up front rather than discovered
 later:** a presets screen (list, browse, delete from outside the mixer),
