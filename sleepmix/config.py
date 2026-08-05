@@ -263,15 +263,22 @@ class OutputConfig:
                 "clipping."})
 
 
+# This docstring is published as the mixer's top-level description, so it is
+# read directly above the one row Mix renders. It deliberately does NOT say what
+# a seed is for: the seed's own `help` says that, an inch lower, and Mix renders
+# exactly one control — so a description that explained the seed would be 100%
+# of the section restating 100% of itself. Same shape Task 4 of Plan 3f fixed
+# twice (Mix claiming two controls while showing one; Soundbed's description and
+# note carrying one sentence between them). Name the control here, explain it
+# there.
 @dataclass
 class MixConfig:
     """Everything that decides what a finished mix sounds like.
 
-    One of these has a control in the mixer, under "Mix": the seed, which fixes
-    the random parts of the decay so the same settings give the same mix twice.
-    The other is the model the song is split into stems with, which is a fact
-    about the separation rather than about the mix. Everything else a mix is
-    made of is in the sections below."""
+    Just one of these gets a control in the mixer, under "Mix": the seed. The
+    other is the model the song is split into stems with, which is a fact about
+    the separation rather than about the mix. Everything else a mix is made of
+    is in the sections below."""
 
     # ``min`` is not decoration: ``validate`` rejects a negative seed, and the
     # UI builds its controls from this metadata alone. Without a floor here the
