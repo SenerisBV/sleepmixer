@@ -11,17 +11,26 @@ added or its bounds change.
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from typing import Any
 
 
 @dataclass
 class StemDecayConfig:
-    """Per-stem 'disintegration' parameters.
+    """How one stem falls apart across the length of the mix.
 
-    Each value is interpolated from its ``*_start`` to ``*_end`` across the full
-    length of the mix, so the loop erodes a little more on every repetition.
-    """
+    Every value here is a pair: where the stem starts and where it ends up.
+    Progress through the mix is reshaped by ``curve`` before any of these are
+    interpolated — linear moves from start to end in a straight line, exp
+    stays close to the start values longer then collapses, log moves early
+    and lingers near the end ones — so how close the first minute sounds to
+    the start values depends on the curve chosen, not just on how much of the
+    mix has played.
+
+    Five things happen to a stem, in this order: treble is filtered away,
+    notches are punched out of what is left, brief gaps are dropped in, the
+    level falls, and noise is mixed in underneath."""
 
     enabled: bool = field(default=True, metadata={"label": "Enabled"})
     curve: str = field(default="linear", metadata={
@@ -68,7 +77,12 @@ class StemDecayConfig:
 
 @dataclass
 class StemConfig:
-    """One separated stem and how it should behave in the mix."""
+    """One separated stem and how it should behave in the mix.
+
+    Every stem the separation produced gets a row: whether it is in the mix at
+    all, how loud, how much of it goes into the reverb, and its own decay
+    settings. Stems erode independently, which is the point — vocals can
+    dissolve while the bass stays put."""
 
     name: str = field(default="other", metadata={
         "label": "Stem", "choices": ["vocals", "drums", "bass", "other", "mix"]})
@@ -82,6 +96,14 @@ class StemConfig:
 
 @dataclass
 class LoopConfig:
+    """Which fragment of the song gets repeated, and how the repeats are joined.
+
+    A mix is one loop played over and over for however long you asked for.
+    Leave the start and end empty and a beat-aligned loop is found for you,
+    somewhere between the search bounds; set them and that region is used
+    exactly. Everything here is about choosing and joining the fragment — the
+    eroding happens elsewhere."""
+
     bars: int = field(default=8, metadata={
         "label": "Bars", "min": 1, "max": 64, "step": 1})
     beats_per_bar: int = field(default=4, metadata={
@@ -110,6 +132,12 @@ class LoopConfig:
 
 @dataclass
 class TempoConfig:
+    """How fast and how low the loop plays, before any of it erodes.
+
+    Slowing a track down and dropping it a little is most of what makes it
+    sound like it is somewhere else. This happens once, to the loop, and every
+    repetition inherits it."""
+
     # Playback speed as a fraction of the original. 0.7 = 70% speed (slower,
     # longer). Pitch is preserved unless ``pitch_semitones`` is set.
     speed: float = field(default=0.7, metadata={
@@ -122,6 +150,15 @@ class TempoConfig:
 
 @dataclass
 class ReverbConfig:
+    """The space the stems sit in.
+
+    One shared set of room, damping and wet/dry settings for every stem — but
+    reverb is run once per stem rather than once on the summed mix, because it
+    does not distribute over a sum of signals that were each sent into it by a
+    different amount. Each stem's own send decides how much of itself reaches
+    it. Larger and wetter pushes the mix further away, which is usually what
+    you want for something you intend to fall asleep to."""
+
     room_size: float = field(default=0.85, metadata={
         "label": "Room size", "min": 0.0, "max": 1.0, "step": 0.01})
     damping: float = field(default=0.5, metadata={
@@ -138,6 +175,11 @@ class ReverbConfig:
 
 @dataclass
 class SoundbedConfig:
+    """A continuous bed underneath the mix: noise, binaural tones, or both.
+
+    Off by default. Mixed in when you render — previews never include it, so
+    turning it on changes nothing you can hear in the mixer."""
+
     enabled: bool = field(default=False, metadata={"label": "Sound bed"})
     noise_type: str = field(default="pink", metadata={
         "label": "Noise type", "choices": ["pink", "brown", "white", "none"]})
@@ -157,6 +199,12 @@ class SoundbedConfig:
 
 @dataclass
 class OutputConfig:
+    """The shape of the finished file: how long, how loud, and how it starts
+    and ends.
+
+    Length is the one that matters most, because everything else in the config
+    describes a journey and this says how long the journey takes."""
+
     duration_min: float = field(default=20.0, metadata={
         "label": "Duration", "unit": "min", "min": 1.0, "max": 480.0, "step": 1.0,
         "help": "Length of the finished mix."})
@@ -178,6 +226,12 @@ class OutputConfig:
 
 @dataclass
 class MixConfig:
+    """Everything that decides what a finished mix sounds like.
+
+    The mixer groups these two under "Mix": a seed that fixes the random parts
+    of the decay so the same settings give the same mix twice, and the name of
+    the model used to split the song into stems."""
+
     # ``min`` is not decoration: ``validate`` rejects a negative seed, and the
     # UI builds its controls from this metadata alone. Without a floor here the
     # generated control can produce a value the config refuses, and the failure
@@ -263,6 +317,25 @@ _SECTION_TYPES = {
 }
 
 
+def _describe_type(dc_type: type) -> str:
+    """A section's own explanation, taken from the class it describes.
+
+    Sourced from ``__doc__`` so the text lives with the thing it explains
+    rather than in a table beside it, which is how the two come to disagree.
+
+    ``dataclass`` synthesises a ``__doc__`` that is the constructor signature,
+    and publishing that would put ``LoopConfig(bars: 'int' = 8, ...)`` on
+    screen as though it meant something. That case raises instead: a section
+    added without a description should fail loudly here rather than quietly
+    render a heading with nothing under it."""
+    doc = inspect.cleandoc(dc_type.__doc__ or "")
+    if not doc or doc.startswith(f"{dc_type.__name__}("):
+        raise ValueError(
+            f"{dc_type.__name__} needs a docstring: it is published to the UI "
+            f"as the section's description")
+    return doc
+
+
 def config_schema() -> dict[str, Any]:
     """Describe every config field so a UI can generate its own controls.
 
@@ -270,8 +343,10 @@ def config_schema() -> dict[str, Any]:
     moment a parameter is added. This is the single source of truth for bounds,
     units and labels."""
     return {
+        "description": _describe_type(MixConfig),
         "fields": _describe_fields(MixConfig),
-        "sections": {name: {"fields": _describe_fields(t)}
+        "sections": {name: {"description": _describe_type(t),
+                             "fields": _describe_fields(t)}
                      for name, t in _SECTION_TYPES.items()},
     }
 

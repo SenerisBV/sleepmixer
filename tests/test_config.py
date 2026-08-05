@@ -1,6 +1,9 @@
+import dataclasses
 import importlib.resources as res
 
-from sleepmix.config import MixConfig, config_schema, plan_stem_configs
+import pytest
+
+from sleepmix.config import MixConfig, _SECTION_TYPES, config_schema, plan_stem_configs
 
 
 def test_defaults_are_valid():
@@ -155,3 +158,31 @@ def test_schema_gives_seed_the_floor_validate_enforces():
     assert seed["type"] == "int"
     assert seed["default"] == 0
     assert seed["min"] == 0
+
+
+def test_every_section_carries_a_description():
+    """A section with no description reaches the mixer as a heading and a row
+    of controls with nothing saying what any of it is for. Derived from
+    _SECTION_TYPES rather than written out, so a section added later fails
+    here until somebody describes it."""
+    schema = config_schema()
+    for name in _SECTION_TYPES:
+        assert schema["sections"][name]["description"].strip(), name
+
+
+def test_the_top_level_carries_a_description():
+    assert config_schema()["description"].strip()
+
+
+def test_a_generated_dataclass_docstring_is_refused(monkeypatch):
+    """dataclass writes a __doc__ that is just the constructor signature.
+    Publishing that would put 'LoopConfig(bars: int = 8, ...)' on screen as
+    though it explained something."""
+    import sleepmix.config as cfg
+
+    @dataclasses.dataclass
+    class Undocumented:
+        x: int = 1
+
+    with pytest.raises(ValueError, match="Undocumented"):
+        cfg._describe_type(Undocumented)
