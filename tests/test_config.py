@@ -214,8 +214,10 @@ def test_the_fields_whose_names_hide_their_effect_carry_help():
 
 
 def test_help_says_something_the_label_does_not():
-    """A help string that restates the label is worse than none — it adds
-    height without information."""
+    """A minimal sanity check, not proof of substance: it only catches the
+    laziest failure mode, a help string that is the label copied verbatim (or
+    padded to be longer than it). It cannot tell real information apart from
+    filler."""
     sections = config_schema()["sections"]
     for section, names in NEEDS_HELP.items():
         for name in names:

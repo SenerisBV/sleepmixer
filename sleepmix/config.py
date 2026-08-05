@@ -76,12 +76,14 @@ class StemDecayConfig:
         "label": "Noise floor start", "unit": "dB", "min": -120.0, "max": 0.0,
         "step": 1.0,
         "help": "How much noise is mixed in underneath at the beginning. "
-                "Added after everything else, so it does not get filtered."})
+                "Added last in the decay, after the lowpass, spectral holes "
+                "and dropouts."})
     noise_end_db: float = field(default=-42.0, metadata={
         "label": "Noise floor end", "unit": "dB", "min": -120.0, "max": 0.0,
         "step": 1.0,
         "help": "How much noise is mixed in underneath by the end. Added "
-                "after everything else, so it does not get filtered."})
+                "last in the decay, after the lowpass, spectral holes and "
+                "dropouts."})
 
     # Fraction of spectral bins zeroed ('holes' in the spectrum), 0..1.
     spectral_hole_start: float = field(default=0.0, metadata={
@@ -129,12 +131,12 @@ class LoopConfig:
         "label": "Bars", "min": 1, "max": 64, "step": 1,
         "help": "Together with beats per bar, decides how long the repeated "
                 "fragment is, in musical rather than clock time — eight bars "
-                "of four beats at the detected tempo, by default."})
+                "of four beats, by default."})
     beats_per_bar: int = field(default=4, metadata={
         "label": "Beats per bar", "min": 1, "max": 16, "step": 1,
         "help": "Together with bars, decides how long the repeated fragment "
                 "is, in musical rather than clock time — eight bars of four "
-                "beats at the detected tempo, by default."})
+                "beats, by default."})
     crossfade_ms: float = field(default=120.0, metadata={
         "label": "Seam crossfade", "unit": "ms", "min": 0.0, "max": 2000.0,
         "step": 10.0})
