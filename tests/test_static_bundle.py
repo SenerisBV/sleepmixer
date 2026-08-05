@@ -150,10 +150,27 @@ def _code_only(text: str) -> str:
 
 def _emitted_class_names():
     names = set()
+    for module_names in _classes_by_module().values():
+        names |= module_names
+    return names
+
+
+def _classes_by_module() -> dict[str, set[str]]:
+    """Module name -> the class names its literals emit.
+
+    Which module a class comes from is not bookkeeping — it is what makes a
+    *scoped* rule checkable. `.renders .progress-fill` is a perfectly good rule
+    for the renders screen and no rule at all for the song and queue screens,
+    which emit the same class outside any `.renders` ancestor. Knowing that
+    `progress-fill` is written in three modules and `renders` in one is enough
+    to say so."""
+    by_module: dict[str, set[str]] = {}
     for path in _elm_sources():
+        names: set[str] = set()
         for match in CLASS_LITERAL.finditer(_code_only(path.read_text())):
             names.update(match.group(1).split())
-    return names
+        by_module[path.name] = names
+    return by_module
 
 
 def _stylesheet() -> str:
@@ -175,14 +192,82 @@ def _strip_css_comments(css: str) -> str:
     return re.sub(r"/\*.*?\*/", " ", css, flags=re.DOTALL)
 
 
-def _has_rule(css: str, name: str) -> bool:
-    """Is `name` used as a selector, rather than merely appearing?
+def _unconditional_rules(css: str) -> list[tuple[str, str]]:
+    """Every top-level `(selector, declarations)`, at-rules excluded entirely.
 
-    A selector is followed by the end of itself: a combinator or another
-    simple selector (whitespace, `.`, `#`, `>`, `+`, `~`, `[`, `:`), a comma,
-    or the opening brace. Requiring one of those is what stops a bare mention
-    inside a declaration value from counting."""
-    return re.search(rf"\.{re.escape(name)}(?![\w-])\s*[,{{:\[>+~.#\s]", css) is not None
+    **At-rules are excluded because a conditional rule is not a rule.** The
+    regex this replaced was satisfied by anything that looked like a selector
+    anywhere in the stylesheet, including inside `@media (prefers-reduced-motion:
+    reduce)`. Deleting the unconditional `.preparing-fill` — the one carrying
+    the height and the background — and keeping only the reduced-motion copy
+    left this module green while, for every operator who has not turned motion
+    off, the "Preparing…" bar became an empty div with no height and no colour,
+    on screen for the two minutes the first preview takes. That is this
+    project's original invisible-bar bug, walked back in through the test
+    written to stop it.
+
+    Cheap to parse because this stylesheet is plain CSS: a top-level prelude
+    runs to its `{`, and a declaration block has no nested braces. At-rule
+    bodies are skipped whole rather than descended into, which is exactly the
+    behaviour wanted — a rule that only exists under a condition is a rule the
+    default rendering does not have.
+    """
+    rules: list[tuple[str, str]] = []
+    i, n, start = 0, len(css), 0
+    while i < n:
+        if css[i] == "{":
+            prelude = css[start:i].strip()
+            depth, j = 1, i + 1
+            while j < n and depth:
+                if css[j] == "{":
+                    depth += 1
+                elif css[j] == "}":
+                    depth -= 1
+                j += 1
+            if not prelude.startswith("@"):
+                rules.append((prelude, css[i + 1:j - 1]))
+            i = start = j
+        elif css[i] == "}":
+            i += 1
+            start = i
+        else:
+            i += 1
+    return rules
+
+
+_COMBINATOR = re.compile(r"\s*[>+~]\s*|\s+")
+_SIMPLE_CLASS = re.compile(r"\.(-?[A-Za-z_][\w-]*)")
+
+
+def _class_scopes(css: str, name: str) -> list[frozenset[str]]:
+    """Every ancestor-class set under which `name` is styled unconditionally.
+
+    One entry per place the class is selected. `.progress-fill { … }` yields
+    `frozenset()` — styled everywhere. `.renders .progress-fill { … }` yields
+    `{"renders"}` — styled only inside that screen. An empty entry list means
+    the class has no rule at all.
+
+    Empty declaration blocks are not counted: `.progress-fill { }` is a
+    selector with nothing behind it, which paints exactly as much as no rule.
+    """
+    scopes: list[frozenset[str]] = []
+    for selector, body in _unconditional_rules(css):
+        if not body.strip():
+            continue
+        for alternative in selector.split(","):
+            compounds = [c for c in _COMBINATOR.split(alternative.strip()) if c]
+            seen: set[str] = set()
+            for compound in compounds:
+                classes = set(_SIMPLE_CLASS.findall(compound))
+                if name in classes:
+                    scopes.append(frozenset(seen))
+                seen |= classes
+    return scopes
+
+
+def _has_rule(css: str, name: str) -> bool:
+    """Is `name` styled by an unconditional, non-empty rule anywhere?"""
+    return bool(_class_scopes(css, name))
 
 
 def test_every_class_the_views_emit_has_a_rule_on_the_page():
@@ -194,6 +279,7 @@ def test_every_class_the_views_emit_has_a_rule_on_the_page():
     string on one side and a stylesheet on the other — so nothing but this
     connects them."""
     css = _stylesheet()
+    by_module = _classes_by_module()
     names = _emitted_class_names()
     assert len(names) > 10, "the scan found suspiciously few classes; check the regex"
     missing = sorted(name for name in names if not _has_rule(css, name))
@@ -201,6 +287,25 @@ def test_every_class_the_views_emit_has_a_rule_on_the_page():
         "these classes are emitted by ui/src and have no rule in "
         f"sleepmix/static/index.html, so whatever they style is unstyled — "
         f"and an empty div among them renders as nothing at all: {missing}"
+    )
+
+    # A rule can exist and still not reach the element. `.renders
+    # .progress-fill` styles the bar on the renders screen and leaves the song
+    # and queue screens with the same invisible empty div as no rule at all —
+    # so for every module that writes the class, at least one of its rules must
+    # be scoped to ancestors that module can actually supply.
+    unreachable = []
+    for module, emitted in sorted(by_module.items()):
+        for name in sorted(emitted):
+            scopes = _class_scopes(css, name)
+            if scopes and not any(scope <= emitted for scope in scopes):
+                needed = " or ".join(
+                    "inside ." + " .".join(sorted(scope)) for scope in scopes)
+                unreachable.append(f"{name} (emitted by {module}, styled only {needed})")
+    assert not unreachable, (
+        "these classes have a rule, but every rule is scoped to an ancestor "
+        "the module emitting them never renders, so on that screen they are "
+        f"as unstyled as if the rule were missing: {unreachable}"
     )
 
 
@@ -212,22 +317,56 @@ def test_a_class_mentioned_only_in_prose_does_not_count_as_a_rule():
     invisible empty div — left it passing, because the stylesheet's own header
     comment names `.progress-fill` while explaining why it needs one. The
     regression this project has already shipped once could have walked back in
-    through the test written to stop it."""
+    through the test written to stop it.
+
+    Three more ways in have since been closed, all of them the same shape — a
+    rule that exists but does not paint:
+
+    * a rule that only applies inside `@media (prefers-reduced-motion: reduce)`,
+      which is nothing at all for everyone who has not turned motion off;
+    * a rule with an empty declaration block;
+    * a rule re-scoped to an ancestor the element does not have.
+    """
     css = _strip_css_comments(
         """/* .ghost is an empty div, so it must have a rule of its own */
            .app { max-width: 62rem; }
            .real-one, .other { color: red; }
            .parent .child { color: blue; }
            .flag:hover { color: green; }
-           .thing::after { content: ".fake"; }"""
+           .thing::after { content: ".fake"; }
+           .hollow { }
+           @media (prefers-reduced-motion: reduce) {
+             .motion-only { animation: none; }
+           }"""
     )
     assert not _has_rule(css, "ghost"), "a comment is not a rule"
     assert not _has_rule(css, "fake"), "a string inside a declaration is not a rule"
+    assert not _has_rule(css, "hollow"), "an empty declaration block is not a rule"
+    assert not _has_rule(css, "motion-only"), (
+        "a rule that only exists under a media query does not style the "
+        "default rendering, which is the one almost everyone sees")
     for name in ("app", "real-one", "other", "parent", "child", "flag", "thing"):
         assert _has_rule(css, name), f"{name} is a selector and should count"
 
-    # And the real page, which is the case that matters.
-    assert _has_rule(_stylesheet(), "progress-fill")
+    # Scope, which is the difference between a rule and a rule that reaches.
+    assert _class_scopes(css, "child") == [frozenset({"parent"})]
+    assert _class_scopes(css, "app") == [frozenset()]
+
+    # And the real page, which is the case that matters. Both bars are empty
+    # divs carrying nothing but an inline width, so a height and a background
+    # are the two declarations that decide whether they exist on screen — and
+    # both have to be outside any media query.
+    page = _stylesheet()
+    assert _has_rule(page, "progress-fill")
+    assert _has_rule(page, "preparing-fill")
+    for name in ("progress-fill", "preparing-fill"):
+        declarations = " ".join(
+            body for selector, body in _unconditional_rules(page)
+            if any(name in set(_SIMPLE_CLASS.findall(part))
+                   for part in selector.split(","))
+        )
+        assert "height" in declarations, f".{name} would occupy no space"
+        assert "background" in declarations, f".{name} would paint nothing"
 
 
 def test_no_class_name_is_assembled_at_runtime():
