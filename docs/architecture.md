@@ -874,7 +874,7 @@ at the default `output.duration_min` (20 minutes, i.e. a 1200 s mix from a
 246.6 s source) was watched start to finish over its own `GET
 /api/jobs/{id}/events` stream and finished in **13.6 s** wall-clock, corroborated
 by a second run's file `Last-Modified` timestamp against its job's
-`created_at` (**11.0 s**). Both are three orders of magnitude below the
+`created_at` (**11.0 s**). Both sit at roughly 13:1 against the
 180.55 s cold-preview figure two paragraphs up, and that gap is not a
 coincidence: a render pays for loop detection and per-stem time-stretching
 exactly once regardless of the output length, then iterates

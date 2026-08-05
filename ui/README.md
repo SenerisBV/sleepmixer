@@ -170,8 +170,8 @@ pre-flight line saying two things and no third: how long the finished mix will
 be, and whether the stems are already separated, which is the largest term in
 how long this takes — and the one measurement there is bears that ordering out:
 a 246.6 s source rendered to a 20-minute mix in 13.6 s wall-clock once its
-stems were cached, three orders of magnitude below what the same track costs
-cold. **It still states no estimate of that time**, for the same reason the
+stems were cached — roughly 13:1 against the cold figure of 180.55 s
+for the preview path. **It still states no estimate of that time**, for the same reason the
 "Preparing…" panel above it draws no fraction: one track timed twice on one
 machine, warm, is a measurement and not a model, and a number on that line
 would be read as one. On success the screen moves to the renders

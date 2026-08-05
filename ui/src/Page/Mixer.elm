@@ -266,7 +266,7 @@ this takes.
 **And no estimate of that time**, though the ordering above is no longer a
 guess. One render has been measured end to end: a 246.6 s source at the default
 20-minute output, stems already cached, finished in 13.6 s wall-clock and 11.0 s
-on a second run — against 180.55 s for the same track's cold first preview. So
+on a second run — roughly 13:1 against the cold preview figure measured at 180.55 s. So
 a render from warm stems really is the cheap half and separation really is the
 expensive one, which is what the second phrase on this line is for.
 
