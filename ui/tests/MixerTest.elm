@@ -1226,15 +1226,17 @@ presetSuite =
                         |> Mixer.selection presets
                         |> Maybe.map .name
                         |> Expect.equal (Just "Gentle")
-            , test "a stem the preset does not name keeps the published default, not the schema's" <|
+            , test "a field within a stem the preset does name still falls back to the published default, not the schema's" <|
                 \_ ->
-                    -- `gentle` names only `drums`. `onDefaults` opened with
+                    -- `gentle` names `drums`, but only to set `gain_db` — it
+                    -- says nothing about `enabled`. `onDefaults` opened with
                     -- `serverDefaults`, which curates `drums.enabled = false` —
                     -- the one fact `Config.fromSchema` cannot state on its own.
                     -- Applying a preset must build its base the same way
-                    -- `Mixer.init` did, or every stem the preset is silent
-                    -- about falls back to the schema's uniform default instead
-                    -- of the one the server actually publishes.
+                    -- `Mixer.init` did, or every field the preset is silent
+                    -- about (whether or not the stem it belongs to is named)
+                    -- falls back to the schema's uniform default instead of
+                    -- the one the server actually publishes.
                     onDefaults.mixer
                         |> Maybe.andThen
                             (Mixer.applyPreset Fixtures.schema (Just serverDefaults) gentle
@@ -1317,6 +1319,22 @@ presetSuite =
                         |> step (Main.PresetApplied "preset-gone")
                         |> carried (Decode.at [ "tempo", "speed" ] Decode.float)
                         |> Expect.equal (Just (Ok 0.9))
+            , test "through the real message path, a stem the preset leaves untouched still lands on the published default" <|
+                \_ ->
+                    -- The unit-level test above hands `Mixer.applyPreset` its
+                    -- defaults by hand and only proves the function is right.
+                    -- `Main.elm`'s `PresetApplied` handler is what actually
+                    -- threads `publishedDefaults model.defaults` through in
+                    -- the running program, and nothing before this pinned
+                    -- that wiring: `Mixer.applyPreset schema Nothing preset`
+                    -- at that call site reinstates the Critical for every
+                    -- real apply while every other test stays green.
+                    onDefaults
+                        |> withPresets
+                        |> step (Main.PreviewPlaying (Just 12.5))
+                        |> step (Main.PresetApplied "preset-1")
+                        |> carried (stemField 1 "enabled" Decode.bool)
+                        |> Expect.equal (Just (Ok False))
             ]
         , describe "an answer that outlives the mixer that asked for it"
             -- The window is the same one `PendingRender` exists for: a POST
@@ -1702,6 +1720,24 @@ presetSuite =
                         |> screen
                         |> Query.findAll [ Selector.class "mixer-defaults" ]
                         |> Query.count (Expect.equal 0)
+            , test "the screen itself points at the live alternative for a song that has one" <|
+                \_ ->
+                    -- Every `applyBlock` test above calls the function
+                    -- directly and hands it a hand-written `Bool`, which
+                    -- proves the function is right and says nothing about
+                    -- whether `presetBar` still passes it the real answer.
+                    -- `presetBar` computes that third argument itself, from
+                    -- `lastUsed config.presets config.song /= Nothing`; a
+                    -- hardcoded `False` there passes every test above while
+                    -- silently reinstating the misleading message for every
+                    -- song that actually has a last-used preset.
+                    onSong { song | lastPresetId = Just "preset-2" }
+                        |> step Main.OpenMixer
+                        |> step (Main.PreviewPlaying (Just 12.5))
+                        |> withPresets
+                        |> screen
+                        |> Query.find [ Selector.class "presets" ]
+                        |> Query.has [ Selector.text "whose Apply needs no" ]
             ]
         ]
 
