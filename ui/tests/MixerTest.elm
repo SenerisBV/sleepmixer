@@ -1465,6 +1465,20 @@ presetSuite =
                         |> step Main.OpenMixer
                         |> carried (stemField 1 "enabled" Decode.bool)
                         |> Expect.equal (Just (Ok True))
+            , test "a retry that fails after defaults already arrived does not discard them" <|
+                \_ ->
+                    -- `OpenMixer` re-issues `Request.defaultConfig` on every
+                    -- open, so a value that already arrived can be followed by
+                    -- a transient failure later in the same session. That
+                    -- failure must not undo a fetch that already worked — the
+                    -- next mixer should still open on the good value, not slip
+                    -- back to `DefaultsUnavailable` and the schema's defaults.
+                    onSong song
+                        |> step (Main.GotDefaultConfig (Ok serverDefaults))
+                        |> step (Main.GotDefaultConfig (Err Http.NetworkError))
+                        |> step Main.OpenMixer
+                        |> carried (stemField 1 "enabled" Decode.bool)
+                        |> Expect.equal (Just (Ok False))
             ]
         , describe "the bar as it renders"
             -- Everything above tests functions that decide. These test that
@@ -1619,6 +1633,18 @@ presetSuite =
                         |> step Main.OpenMixer
                         |> screen
                         |> Query.has [ Selector.text "default config could not be fetched" ]
+            , test "a retry that fails after the mixer opened with them stays silent about it" <|
+                \_ ->
+                    -- The guard in `GotDefaultConfig`'s error branch is what
+                    -- keeps this true: without it, a stray failure answering
+                    -- after `onDefaults` opened would flip `model.defaults` to
+                    -- `DefaultsUnavailable` and this sentence would appear
+                    -- under a mixer whose bar correctly says nothing is
+                    -- wrong, because `openedAtSchemaDefaults` is `False`.
+                    onDefaults
+                        |> step (Main.GotDefaultConfig (Err Http.NetworkError))
+                        |> screen
+                        |> Query.hasNot [ Selector.text "default config could not be fetched" ]
             , test "a mixer still preparing says so rather than only asking for a choice" <|
                 \_ ->
                     -- Readiness before selection: with nothing chosen and the

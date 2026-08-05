@@ -1437,7 +1437,25 @@ update msg model =
             ( { model | defaults = DefaultsReady published }, Cmd.none )
 
         GotDefaultConfig (Err err) ->
-            ( { model | defaults = DefaultsUnavailable (httpErrorToString err) }, Cmd.none )
+            -- `OpenMixer` re-issues this fetch on every open, so a value that
+            -- already arrived can be followed by a transient failure later in
+            -- the same session. That failure must not discard a fetch that
+            -- already worked — only a state that never had a value moves to
+            -- `DefaultsUnavailable`; `DefaultsReady` stays exactly as it was.
+            ( { model
+                | defaults =
+                    case model.defaults of
+                        DefaultsReady _ ->
+                            model.defaults
+
+                        DefaultsLoading ->
+                            DefaultsUnavailable (httpErrorToString err)
+
+                        DefaultsUnavailable _ ->
+                            DefaultsUnavailable (httpErrorToString err)
+              }
+            , Cmd.none
+            )
 
         PresetSelected raw ->
             -- Choosing is not applying, so nothing is sent: `withMixer` would
