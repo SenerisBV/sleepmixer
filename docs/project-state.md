@@ -1095,31 +1095,88 @@ These were identified and left as-is; each has a reason it wasn't worth
 fixing in the branch that found it. Plan 1 (`feat/core-hooks`) items are
 listed first, followed by Plan 2a (`feat/server-foundation`) items, followed
 by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
-(`feat/elm-shell`) items found during this plan's review.
+(`feat/elm-shell`) items found during this plan's review, followed by Plan 3f
+(`feat/legibility`) items found during this plan's own final task, which is
+also where two long-false entries above (the renders resource problem, the
+`JobManager` leak) were finally retired and a third (the `shutil` import) was
+found alongside them.
 
 - **Four things contribute to a render's final peak that `master_gain`'s
   calibration window never sees.** `preview.master_gain` measures one window,
   `render_window(session, 0.0, reverb=<the flag>, master=False)`, and derives
   a gain from its peak. `pipeline.run_pipeline` peak-normalizes something
   rather different, and each difference moves a preview off the render's
-  level. Listed by measured magnitude, largest first. All four were measured
-  the same way: RMS of a mid-arc mastered preview over the corresponding
-  crossfade-free region of a real `run_pipeline` output, default config,
-  changing one thing at a time. The baseline — default reverb, `reverb=True`,
-  fades off — is **1.0003, +0.00 dB**, and is what `tests/test_preview.py`'s
+  level. Listed by measured magnitude, largest first, with a caveat the first
+  entry itself is now the record of: the largest number here had the wrong
+  story attached to it for a whole branch, corrected only once someone
+  measured directly instead of inferring. All four were measured the same
+  way: RMS of a mid-arc mastered preview over the corresponding crossfade-free
+  region of a real `run_pipeline` output, default config, changing one thing
+  at a time. The baseline — default reverb, `reverb=True`, fades off — is
+  **1.0003, +0.00 dB**, and is what `tests/test_preview.py`'s
   `test_a_mastered_preview_sits_at_the_render_s_level` now asserts.
 
-  1. **`_apply_fades` runs before `normalize_peak`, and `fade_in_s` defaults
-     to 8 s.** This is by far the largest of the four and was never recorded
-     until now. The fade attenuates precisely the region iteration 0
-     occupies — the window `master_gain` calibrates against — so the render's
-     own loudest moment is somewhere after the fade-in completes, not at the
-     start. Measured with the default fades: **0.8107, −1.82 dB**. That is
-     thirty-five times the sound bed's contribution, in the direction that
-     matters (a preview reading quieter than it should, so *more* decayed).
-     It also means **"the first iteration is the loudest" is an over-claim**:
-     true of `render_window`'s output, which has no fades, and false of the
-     render, which does.
+  1. **The 1.82 dB attributed to fade ordering does not survive a direct
+     measurement, and neither does the transient-at-t=0 hypothesis that
+     replaced it as a first guess.** The figure itself — **0.8107, −1.82
+     dB**, from the RMS method above, fades on versus off — is real and
+     stays recorded. The explanation attached to it was not: 8 seconds of
+     fade across a 20-minute arc decaying to `amp_end_db` = −9 dB attenuates
+     ordinary material by about 0.06 dB, not 1.82, and nobody had checked
+     that arithmetic before writing the entry.
+
+     Measured directly rather than re-inferred (Task 6 of this plan): a
+     render at default config against a throwaway `SLEEPMIX_DATA_DIR`, stems
+     supplied via `sleepmix.separation._write_cache` from this repository's
+     own orphaned separation cache (`.sleepmix_cache/004542e5a96e70ee/`, the
+     real stems of the 2:43 track this document's render-timing figures
+     already use — no Demucs run needed), reporting on the mix immediately
+     before `_apply_fades`. **The global peak is not at t = 0.** It sits at
+     t = 14.657 s of a 1200 s render (sample 646,351 at 44.1 kHz) — roughly
+     one loop-length (11.0 s) past the start, comfortably outside both the
+     8-second fade-in and the last-12-second fade-out. It is **7.12 dB**
+     above the 99th percentile of |sample| across the whole render (1.358 vs.
+     0.598), so it is a real, audible peak rather than a lone outlier in the
+     noise floor. It is **40 samples (0.91 ms) wide** at half its own height,
+     and the raw samples across that width rise and fall smoothly — not a
+     one- or two-sample discontinuity — which reads as a genuine moment in
+     the music (most plausibly the `bass` stem, the most energetic of the
+     three stems enabled by default with `drums` off) rather than a decoder
+     or splice artefact. It survives `cycle_crossfade_ms = 0` bit-for-bit —
+     identical sample index, identical value to the last digit — which rules
+     out the inter-iteration crossfade (item 2, below) as its cause.
+
+     Because the peak sits entirely outside the region either fade touches,
+     `_apply_fades` running before `normalize_peak` provably changes nothing
+     about *this* render: re-running the pipeline with `fade_in_s =
+     fade_out_s = 0` produces the identical pre-`normalize_peak` maximum
+     (1.3577473163604736) and therefore the identical gain factor
+     (0.6564188599586487) that the default 8 s/12 s fades produce.
+     Measured the same way, `preview.master_gain(session, reverb=True)` for
+     this exact render is 0.6564188545205888 — equal to the pipeline's own
+     factor to eight significant figures, a **0.00 dB** gap, not 1.82. The
+     reason "iteration 0 is the loudest window" (`master_gain`'s own
+     docstring) does not hold here: decay is negligible this early in a
+     twenty-minute arc, so which of the first several iterations is loudest
+     is decided by where the source material itself happens to be loudest,
+     not by a monotonic decline.
+
+     Neither explanation survives, and this task's own instructions are
+     explicit that an honestly-labelled unexplained number outranks a tidy
+     wrong one — so the 1.82 dB stays here as exactly that: a real figure
+     from a real (if now unreproduced-by-this-task) RMS-based measurement,
+     with both stories this document has attached to it now shown false by a
+     direct measurement of the same quantities. Whoever next has reason to
+     touch this should re-run the original RMS method against a captured
+     render rather than trust either story. **Why this is not being closed
+     regardless of the true cause:** `preview.render_window` applies one gain
+     factor to every window, computed once per `reverb` setting and memoized
+     on the session (`sleepmix/preview.py:101`), so the ratio between a
+     preview at the start of the arc, the middle and the end is exact
+     whatever the true offset between `master_gain` and `normalize_peak` is.
+     A uniform offset cannot change any comparison the mixer exists to
+     support. See Plan 3e's retirement, in the Plan 3f section below, for
+     the fuller reasoning.
   2. **The inter-iteration `equal_power_crossfade` can sum above a single
      iteration's peak.** Two consecutive decayed iterations overlap for
      `cycle_crossfade_ms`, and their sum in that region can exceed either
@@ -1128,13 +1185,33 @@ by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
      (`reverb.wet = 0.0`, `reverb=False`): **1.0431, +0.37 dB**, which drops
      to 0.9995 with `cycle_crossfade_ms = 0.0` and nothing else changed —
      so the residual is entirely this. With default reverb it is masked to
-     about 0.01 dB, because reverb smears the peak either way.
-  3. **`output.sample_rate` is absent from `RenderSession._master_key`,**
-     although `run_pipeline` resamples before normalizing. The magnitude is
-     small (~0.01 dB at 22050 → 44100 on the test signal), but the *cache*
-     consequence is unconditional: changing the output rate does not
-     invalidate the memoized gain at all, so a session keeps serving a factor
-     measured at the old rate until something else happens to clear it.
+     about 0.01 dB, because reverb smears the peak either way. Still open.
+  3. ~~`output.sample_rate` is absent from `RenderSession._master_key`,
+     although `run_pipeline` resamples before normalizing.~~ **Closed by Task
+     5 of this plan** (`fix: the master-gain cache notices an output-rate
+     change`, commit `1500e39`): `output.sample_rate` is now one of the
+     fields `_master_key` reads (`sleepmix/session.py`), so changing it
+     clears the memoized gain like every other field that feeds one.
+
+     **What that same task found while it was in there is worth recording
+     separately: three more fields are still absent from `_master_key`** —
+     `fade_in_s`/`fade_out_s`, `cycle_crossfade_ms`, and `config.soundbed`.
+     These are the same fields as three of this list's four calibration-
+     window gaps, but the bug is a different one and the two should not be
+     read as one problem stated twice. The calibration-window gap (items 1,
+     2 and 4 in this list) is that `render_window(session, 0.0, ...)` never
+     sees fades, the crossfade, or the sound bed, so the *window it
+     measures* is unrepresentative of what a real render does with those
+     settings turned on. The `_master_key` gap is that **even if that window
+     were made perfectly representative tomorrow, changing any of those four
+     fields would still not invalidate the memoized gain at all** — a
+     session that already computed `master_gain` keeps serving the old
+     factor after the operator moves the fade-in slider, changes the
+     crossfade duration, or turns the sound bed on, because none of those
+     four fields is one `update_config` compares to decide whether to clear
+     `self.master_gain`. Two failures that happen to involve the same
+     fields, not one failure described twice. Neither is fixed here — this
+     task writes no application code.
   4. **The sound bed is never mixed into the calibration window.**
      `render_window` sums only the configured stems and never calls
      `soundbed.build_soundbed`, while `run_pipeline` adds the bed before
@@ -1145,41 +1222,59 @@ by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
      −0.05 dB**. The reason it stays inaudible is that `normalize_peak`
      scales the stems down by very nearly the same factor the bed pushed the
      peak up, so the two mostly cancel. `SoundbedConfig.enabled` defaults to
-     `False` in any case.
+     `False` in any case. Still open — see also the sound bed's absence from
+     *previews entirely*, a different and larger problem, recorded in the
+     Plan 3f section below.
 
-  None of the four is fixed. They are recorded because the sizes are
-  counter-intuitive: the one that was written down was the smallest, and the
-  largest was not written down at all.
+  Three of the four are still not fixed, deliberately — see Plan 3e's
+  retirement below for why closing them was judged not to serve the mixer's
+  actual job. The fourth (`output.sample_rate`) was closed by Task 5 of this
+  plan, which is also where the two-more-fields-and-two-bugs finding above
+  came from. They were recorded in the first place because the sizes were
+  counter-intuitive — the one written down first was the smallest, and the
+  largest had never been measured directly until this task did it and found
+  its own explanation didn't hold either.
 
-- **Nothing is ever reclaimed, and the one that matters is on disk.** Ranked
-  by how much it actually costs:
+- **Nothing is ever reclaimed, and the one that mattered most is now closed
+  halfway.** Ranked by how much it actually costs. Both of the first two were
+  found false, as recorded — closed by the same commit, `feat/render-queue`
+  (Plan 3c), never retired from this document until now.
 
-  **Render output files accumulate forever.** Every completed render writes a
-  WAV under the app-data directory and the row keeps pointing at it. There is
-  no `DELETE /api/renders/{id}`, no pruning, no size cap and no retention
-  policy — the only way to reclaim the space is to delete the files by hand
-  and leave the rows dangling (which then 404 on download, the same as a moved
-  source file). At the default 20-minute duration, 44.1 kHz stereo float32,
-  that is roughly **300 MB per render**. A UI whose whole purpose is to make
-  rendering easy to trigger will produce these in quantity; a handful of
-  afternoons of tuning is tens of gigabytes. This is the resource problem on
-  this branch, and it is several orders of magnitude larger than the two
-  below.
+  ~~Render output files accumulate forever. There is no `DELETE
+  /api/renders/{id}`, no pruning, no size cap and no retention policy.~~
+  **Half closed, by Plan 3c.** `DELETE /api/renders/{render_id}`
+  (`sleepmix/server/api/renders.py:125`, commit `16125cc`, `feat: honour
+  cancel before a job starts, bound job retention, delete renders`) exists
+  now — refused with a 409 while the render is still queued or running, and
+  otherwise removing both the database row and the file on disk; it is what
+  the render screen's Delete button calls. What the entry actually named as
+  the resource problem is still true, though, and this document should not be
+  read as having closed it: there is still no *automatic* pruning, no size
+  cap, and no retention policy, so a project that never visits the render
+  screen to clean up after itself still accumulates the same roughly **300 MB
+  per render** (default 20-minute duration, 44.1 kHz stereo float32) it always
+  did. What changed is "no way to reclaim the space at all" becoming
+  "reclaiming it is a manual, per-render click" — a real improvement, not the
+  same thing as the original problem being solved.
 
-  **`JobManager._jobs`, `_tokens` and `_subscribers` are never evicted.** Every
-  job ever submitted — every separation, every render — stays in `_jobs` for
-  the life of the process, keeps its `CancelToken` in `_tokens`, and holds a
-  permanent (if eventually empty) list in `_subscribers`. Kilobytes, not
-  megabytes: fine for a session-length local tool that gets restarted often, a
-  slow leak for a server left running for days. `_tokens` was omitted from
-  this entry when it was first written; it grows in exact lockstep with the
-  other two.
+  ~~`JobManager._jobs`, `_tokens` and `_subscribers` are never evicted.~~
+  **Closed, by Plan 3c.** `JobManager(..., keep_terminal=50)`
+  (`sleepmix/server/jobs.py:63`) and `_evict` (`:220`), called from `_update`
+  whenever a job reaches a terminal status, drop the oldest terminal jobs
+  from all three dicts once more than `keep_terminal` have accumulated, and
+  never drop a queued or running one regardless of how many there are — kept
+  as history rather than deleted because the leak this entry described was
+  real when written, and the reasoning for why live jobs are exempt (the
+  queue screen's whole purpose is to say what is about to happen) is worth a
+  maintainer having on hand.
 
-  **`SessionRegistry._use_locks` is only cleared in `clear()`.** One `RLock`
-  per song id ever previewed, deliberately kept past eviction so a thread
-  holding one cannot have it swapped out from under it. A few dozen bytes
-  each, bounded by distinct songs previewed in a process — the smallest of the
-  three, and noted only so it is not mistaken for an oversight.
+  **`SessionRegistry._use_locks` is only cleared in `clear()`.** Still true,
+  still open — nothing in Plan 3c or any later plan touched
+  `server/sessions.py`'s eviction. One `RLock` per song id ever previewed,
+  deliberately kept past eviction so a thread holding one cannot have it
+  swapped out from under it. A few dozen bytes each, bounded by distinct
+  songs previewed in a process — the smallest of the three, and noted only so
+  it is not mistaken for an oversight.
 
 - **A `BaseException` escaping a job leaves it stuck at `"running"` forever.**
   `JobManager._run` catches `Cancelled` and `Exception`, but a `SystemExit` or
@@ -1197,9 +1292,17 @@ by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
   branch, reached when `_HEARTBEAT_SECONDS` (15s) elapses with no event, is
   likewise never driven by any test.
 
-- **`separation.invalidate_cache` imports `shutil` inside the function,** while
-  the module imports `os` and `hashlib` at the top. Harmless, just inconsistent
-  with the rest of the file.
+- ~~`separation.invalidate_cache` imports `shutil` inside the function, while
+  the module imports `os` and `hashlib` at the top.~~ **Closed by Plan 3c, as
+  a side effect rather than a deliberate fix.** `fix: publish the stem cache
+  atomically` (commit `f87632b`) moved `import shutil` to the top of
+  `sleepmix/separation.py`, alongside `hashlib`, `os`, `tempfile` and
+  `warnings`, because the new atomic `_write_cache` needed `shutil.rmtree` at
+  module scope for its staging-directory sweep and its rename-then-remove
+  dance — the local import inside `invalidate_cache` became redundant in the
+  same commit and is gone. Nobody was checking this document against that
+  diff at the time, which is exactly the kind of drift this pass exists to
+  catch.
 
 - **`encode_wav` has no test with a mono buffer.** `tests/test_audio_encode.py`
   only ever builds stereo (and empty-stereo) buffers; a single-channel
@@ -1440,3 +1543,79 @@ by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
   `Page.Song`'s `needsForce`/`buttonLabel`, `Page.Library`, and
   `Waveform.barFor`. No view is tested — deliberately — and `routeFor`, which
   is one `case` over a `Maybe`, is reached only through them.
+
+**Plan 3f (`feat/legibility`) items, found during this plan's own final task.**
+Every entry above this point was checked against the code it describes as
+part of this pass; the two marked closed above (the render-file/JobManager
+resource entry and the `shutil` import) were found false and retired here.
+What follows is new — found while making that check, not a correction of an
+existing claim.
+
+- **Plan 3e (level-matching) was retired before implementation, and the gap
+  in plan numbering between 3d and this one is not a mistake.**
+  `docs/superpowers/specs/2026-08-05-level-matching-design.md` records why. It
+  was going to fix the fade-ordering entry above by reordering
+  `pipeline.py`'s normalize-then-fade steps, on the strength of the same
+  attribution this task's own measurement has since shown does not hold. The
+  retirement reasoning does not depend on which explanation is right, though,
+  which is why it survives that correction: `preview.render_window` "applies
+  one gain factor to every window… computed once per `reverb` setting via
+  `master_gain` and memoized" (`sleepmix/preview.py:101`), so the ratio
+  between a preview at the start of the arc, the middle and the end is exact
+  regardless of what the true offset between `master_gain` and
+  `normalize_peak` is. A uniform offset cannot change any comparison the mixer
+  exists to support — the judgement a preview exists for is "how eroded is
+  this by the middle," not "does this match a render's absolute loudness
+  played back tomorrow on a different device." Two small pieces survived into
+  this plan instead of the level-matching rewrite: correcting the 1.82 dB
+  entry above (this task) and giving `output.sample_rate` to `_master_key`
+  (Task 5, also above).
+
+- **The sound bed's absence from previews is a character gap, not a level
+  one, and it is still open.** `render_window` sums only the configured
+  stems and never calls `soundbed.build_soundbed`, so turning on binaural
+  beats or pink noise changes nothing audible in the mixer — unlike the four
+  calibration-window items above, which are all inaudible-by-design offsets
+  in level, this one changes what the judgement previews exist to support
+  actually hears: it touches character, not loudness. It is currently handled
+  by disclosure alone, and disclosure got more careful during this branch
+  rather than less: `sectionNote` used to carry a line about this under
+  "Output," until commit `e6357cf` (`fix: two things the mixer said twice,
+  and one it contradicted`) deleted it rather than let it repeat what
+  `SoundbedConfig`'s own server-sent description now says immediately above
+  the section — see the comment at the `"output"` case of `sectionNote` in
+  `ui/src/Page/Mixer.elm`. Checked this task, as asked: the two do not
+  duplicate each other on screen. The section description says the bed is
+  mixed in at render time and never appears in a preview; nothing else on the
+  section repeats that sentence. Whether disclosure is enough, versus
+  actually mixing the bed into `render_window`, is left unrevisited on
+  purpose — that is an audio change with its own design, not a documentation
+  one, and this task writes no application code.
+
+- **Help lines are siblings of their controls, not attached to them for a
+  screen reader.** `Page.Mixer.helpLine` renders `p [ class "field-help" ]`
+  (`ui/src/Page/Mixer.elm:1677`) as a sibling of the control it explains, with
+  no `aria-describedby` on the control pointing at it — a screen reader
+  announces the control and its label on focus and says nothing about the
+  help text sitting right below it on screen. Larger than it looks, because
+  the same gap exists one level up: every field label is `span [ class
+  "field-label" ]` (four call sites in `ui/src/Page/Mixer.elm`), never
+  `<label for=…>`, so there is no accessible name/description association to
+  hang `aria-describedby` off in the first place without also giving every
+  control a real `id` and every label a `for`. Not fixed here — this task
+  writes no application code — but worth flagging now, since the help text
+  this plan added across five tasks is exactly the content that needs the
+  association to reach anyone using a screen reader.
+
+- **The top-level description's missing-key fallback has no test.**
+  `ui/tests/SchemaTest.elm`'s `"a section without a description decodes to
+  \"\" rather than failing"` test, added alongside the schema's description
+  decoding earlier in this plan, exercises `decodeSection` only — the
+  section-level decoder. Nothing decodes a top-level `/api/schema` response
+  with no `"description"` key at all and asserts `schema.description == ""`;
+  `Page.Mixer`'s own `sectionDescription` tests (`ui/tests/MixerTest.elm`)
+  construct the `Schema.Schema` value directly with `description = ""` rather
+  than decoding JSON that omits the key, so they exercise the fallback's
+  *use*, not its *decode*. Same pattern, same low risk as the section-level
+  version it sits beside — recorded so the asymmetry isn't mistaken for the
+  top-level case being untested by design.
