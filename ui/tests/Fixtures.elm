@@ -16,6 +16,15 @@ against the one case where there is nothing to render. They are shortened, but
 they keep the shape the real ones have — a summary line, a blank line, and the
 detail under it — because that shape is what `paragraphsOf` splits on.
 
+**Shortening the text is fine; changing whether there IS text is not.** Every
+`"help": null` here must be `null` in a live `GET /api/schema` too. This
+fixture once said `null` for `loop.bars` and `loop.beats_per_bar` while
+`tests/test_config.py`'s `NEEDS_HELP` *required* both to carry a line — so two
+tests in `MixerTest` asserted the opposite of what the mixer does, one of them
+anchored on `Beats per bar` as an example of a field with nothing to say. The
+Python suite is the authority on which fields carry help; check against it,
+not against what this file happened to say last.
+
 `suite` exists so this module earns its place in `elm-test`'s run: it asserts
 the fixture still decodes through the real decoder, so a change to `Schema.elm`
 that this JSON no longer satisfies fails here rather than quietly leaving every
@@ -66,7 +75,7 @@ json : String
 json =
     """
 {
-  "description": "Everything that decides what a finished mix sounds like.\\n\\nOne of these has a control in the mixer, under Mix: the seed, which fixes the random parts of the decay. The other is the model the song is split into stems with, which is a fact about the separation rather than about the mix.",
+  "description": "Everything that decides what a finished mix sounds like.\\n\\nJust one of these gets a control in the mixer, under Mix: the seed. The other is the model the song is split into stems with, which is a fact about the separation rather than about the mix.",
   "fields": {
     "seed": {"type": "int", "default": 0, "label": "Seed",
              "help": "Fixes the random parts of the decay.", "min": 0, "step": 1},
@@ -76,10 +85,12 @@ json =
   "sections": {
     "loop": {"description": "Which fragment of the song gets repeated, and how the repeats are joined.\\n\\nLeave the start and end empty and a beat-aligned loop is found for you; set them and that region is used exactly.",
               "fields": {
-      "bars": {"type": "int", "default": 8, "label": "Bars", "help": null,
+      "bars": {"type": "int", "default": 8, "label": "Bars",
+               "help": "Together with beats per bar, decides how long the repeated fragment is.",
                "min": 1, "max": 64, "step": 1},
       "beats_per_bar": {"type": "int", "default": 4, "label": "Beats per bar",
-                        "help": null, "min": 1, "max": 16, "step": 1},
+                        "help": "Together with bars, decides how long the repeated fragment is.",
+                        "min": 1, "max": 16, "step": 1},
       "crossfade_ms": {"type": "float", "default": 120.0, "label": "Seam crossfade",
                        "help": null, "min": 0.0, "max": 2000.0, "step": 10.0,
                        "unit": "ms"},
@@ -95,16 +106,19 @@ json =
     }},
     "tempo": {"description": "How fast and how low the loop plays, before any of it erodes.",
                "fields": {
-      "speed": {"type": "float", "default": 0.7, "label": "Speed", "help": null,
+      "speed": {"type": "float", "default": 0.7, "label": "Speed",
+                "help": "Playback speed as a fraction of the original.",
                 "min": 0.05, "max": 1.0, "step": 0.01, "unit": "\\u00d7"},
       "pitch_semitones": {"type": "float", "default": -2.0, "label": "Pitch",
-                          "help": null, "min": -12.0, "max": 12.0, "step": 0.5,
+                          "help": "Semitones to shift, independent of speed.",
+                          "min": -12.0, "max": 12.0, "step": 0.5,
                           "unit": "st"}
     }},
     "output": {"description": "The shape of the finished file: how long, how loud, and how it starts and ends.",
                 "fields": {
       "duration_min": {"type": "float", "default": 20.0, "label": "Duration",
-                       "help": null, "min": 1.0, "max": 480.0, "step": 1.0,
+                       "help": "Length of the finished mix.",
+                       "min": 1.0, "max": 480.0, "step": 1.0,
                        "unit": "min"},
       "sample_rate": {"type": "int", "default": 44100, "label": "Sample rate",
                       "help": null, "unit": "Hz", "choices": [22050, 44100, 48000]},
@@ -134,10 +148,13 @@ json =
                 "help": "linear \\u00b7 exp \\u00b7 log",
                 "choices": ["linear", "exp", "log"]},
       "lowpass_start_hz": {"type": "float", "default": 18000.0,
-                           "label": "Lowpass start", "help": null, "min": 20.0,
+                           "label": "Lowpass start",
+                           "help": "How much treble the stem still has at the beginning.",
+                           "min": 20.0,
                            "max": 20000.0, "step": 100.0, "unit": "Hz"},
       "amp_end_db": {"type": "float", "default": -9.0, "label": "Amplitude end",
-                     "help": null, "min": -60.0, "max": 0.0, "step": 0.5,
+                     "help": "How loud the stem is by the end of the decay.",
+                     "min": -60.0, "max": 0.0, "step": 0.5,
                      "unit": "dB"}
     }}
   }

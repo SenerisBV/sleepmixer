@@ -1181,7 +1181,12 @@ legibilitySuite =
                         |> Expect.equal (Just "Fraction of the track to start searching from.")
             , test "nothing for a field whose label already says it" <|
                 \_ ->
-                    fieldIn "loop" "bars"
+                    -- `Seam crossfade`, not `Bars`. `loop.bars` carried help
+                    -- from this branch onward — `tests/test_config.py`'s
+                    -- `NEEDS_HELP` requires it — and this assertion only ever
+                    -- passed because the fixture had not caught up with the
+                    -- schema it claims to be copied from.
+                    fieldIn "loop" "crossfade_ms"
                         |> Maybe.map Mixer.fieldHelp
                         |> Expect.equal (Just Nothing)
             , test "every kind of field is asked the same question" <|
@@ -1274,14 +1279,32 @@ legibilitySuite =
                         |> Query.has [ Selector.text "Fraction of the track to start searching from." ]
             , test "and a field the schema says nothing about carries no line" <|
                 \_ ->
-                    warm
-                        |> screen
-                        |> Query.find
-                            [ Selector.class "field-group"
-                            , Selector.containing [ Selector.text "Beats per bar" ]
-                            ]
-                        |> Query.findAll [ Selector.class "field-help" ]
-                        |> Query.count (Expect.equal 0)
+                    -- Two halves, deliberately in one test. A bare "count 0"
+                    -- cannot fail for the reason this test exists: delete help
+                    -- rendering from the view altogether and an assertion that
+                    -- there is no help line stays green. Pairing it with a
+                    -- field that must have one makes the test bite in both
+                    -- directions — nothing rendered, and everything rendered.
+                    --
+                    -- Anchored on `Sample rate`, which carries no help in the
+                    -- real schema. It used to be anchored on `Beats per bar`,
+                    -- which does — the fixture said otherwise, so this test
+                    -- asserted the opposite of what the mixer shows.
+                    let
+                        helpLinesUnder label =
+                            warm
+                                |> screen
+                                |> Query.find
+                                    [ Selector.class "field-group"
+                                    , Selector.containing [ Selector.text label ]
+                                    ]
+                                |> Query.findAll [ Selector.class "field-help" ]
+                    in
+                    Expect.all
+                        [ \_ -> helpLinesUnder "Search from" |> Query.count (Expect.equal 1)
+                        , \_ -> helpLinesUnder "Sample rate" |> Query.count (Expect.equal 0)
+                        ]
+                        ()
             , test "the stems are described once, not once per stem" <|
                 \_ ->
                     warm
