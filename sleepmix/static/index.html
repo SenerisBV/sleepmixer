@@ -35,8 +35,12 @@
   /* One rule, not two: an `input:disabled` rule as well would compound with
      this one and render the control at .20 against its own label at .45. The
      whole row dims together, because "inert until the first preview returns"
-     is a statement about the row, not about the widget. */
-  .field:has(:disabled) { opacity: .45; }
+     is a statement about the row, not about the widget — and the row is now
+     `.field-group`, the control *and* the line under it explaining it. Scoped
+     to the group rather than to `.field` for exactly that reason: on `.field`
+     the two would compound wherever they nest, and the help would be the one
+     bright thing on an inert panel. */
+  .field-group:has(:disabled) { opacity: .45; }
   /* The base rule above is for text boxes; a checkbox or a slider wearing a
      border and .4rem of padding is a different control that happens to be an
      <input>. */
@@ -179,15 +183,46 @@
 
   .settings { margin-top: 2rem; border-top: 1px solid var(--line); }
   .section { border-bottom: 1px solid var(--line); }
-  .section-note, .decay p { color: var(--dim); font-size: .9rem;
-                            margin: 0 0 .6rem; max-width: 46rem; }
+  .section-note { color: var(--dim); font-size: .9rem;
+                  margin: 0 0 .6rem; max-width: 46rem; }
   .decay { margin-top: .6rem; }
+
+  /* What a section is *for*, in the server's own words — `config_schema` sends
+     each dataclass's docstring and `Page.Mixer.descriptionBlock` renders it as
+     the paragraphs it was written in. Emitted in two places, so deliberately
+     unscoped: inside `details.section` between the summary and the controls,
+     and inside `.stems` above the stem rows, where the `stem` and `stem_decay`
+     sections are described once each rather than once per row. Read against
+     both, not against the class-coverage test, which proves a rule exists
+     somewhere and not that it applies where the class is emitted.
+     Dim but not smaller: this is the sentence you read to decide whether this
+     is the section you wanted, and it sits above a `.section-note` set at
+     .9rem, so the size difference is what orders the two.
+     `.section-description p` is 0-1-1 and beats the page's own `p` margin; it
+     cannot reach `.field-help`, which is never inside one of these. */
+  .section-description { color: var(--dim); max-width: 46rem;
+                         margin: .1rem 0 .7rem; }
+  .section-description p { margin: .3rem 0; }
 
   /* Two columns where there is room for two, one where there is not. Every
      control is generated from /api/schema, so the number of rows here is
-     whatever the server currently describes. */
+     whatever the server currently describes. What the grid places is
+     `.field-group` — one control with the schema's line about it underneath —
+     rather than `.field` itself, so that line lands under its own control
+     instead of in the next column. */
   .fields { display: grid; gap: .35rem 2rem; margin: .5rem 0 .25rem;
             grid-template-columns: repeat(auto-fit, minmax(21rem, 1fr)); }
+  .field-group { min-width: 0; }
+  /* The schema's own line about one control, under that control. It was an
+     `Attr.title` until this branch: a tooltip, which is nothing at all on a
+     touchscreen, nothing to a keyboard, and nothing to anyone not hovering the
+     exact element. Narrower than the control column is wide, because a line
+     that runs the full width of a two-column grid reads as prose rather than
+     as a caption on the row above it. Sixteen field names have no help at all —
+     `Gain`, `Fade in`, `Room size` and the like, whose labels already say what
+     they do — and those emit no `<p>`, so they gain no height from this. */
+  .field-help { color: var(--dim); font-size: .85rem; line-height: 1.45;
+                margin: .05rem 0 .45rem; max-width: 34rem; }
   .field { display: flex; align-items: center; gap: .6rem; min-width: 0;
            padding: .1rem 0; }
   .field-check { cursor: pointer; }

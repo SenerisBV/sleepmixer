@@ -17,6 +17,7 @@ from the state `Preview` hands back and nothing else.
 
 import Api
 import Config
+import Dict
 import Expect
 import Fixtures
 import Http
@@ -26,6 +27,7 @@ import Main
 import Page.Mixer as Mixer
 import Page.Renders as Renders
 import Preview
+import Schema
 import Test exposing (Test, describe, test)
 import Test.Html.Event as Event
 import Test.Html.Query as Query
@@ -1104,7 +1106,223 @@ suite =
                 ]
             ]
         , presetSuite
+        , legibilitySuite
         ]
+
+
+{-| What the screen says about itself, and where it says it.
+
+Two failure modes, and the tests below are split between them. The first is a
+decision that is right and never called: `sectionDescription` can pick the
+correct paragraph for every section on the screen while `section` renders none
+of them, and both suites stay green — which is exactly how `.progress-fill`
+shipped invisible. So every one of these is asserted through `Main.view`, not
+against a `Page.Mixer.view` called with a record written here.
+
+The second is the one this whole change risks: saying the same thing five
+times. `stem` and `stem_decay` describe the elements of a list, and the mixer
+draws one row per stem — so a description put beside the controls it describes
+would appear once per stem, and the count assertions below are what hold it to
+once. `warm` has three stems, and "the rows are actually there" is asserted
+beside them so that "once" cannot pass by rendering nothing at all.
+-}
+legibilitySuite : Test
+legibilitySuite =
+    describe "what the schema says, as the screen says it"
+        [ describe "which description a section gets"
+            [ test "its own, from the schema" <|
+                \_ ->
+                    Mixer.sectionDescription Fixtures.schema "loop"
+                        |> Maybe.map (String.startsWith "Which fragment of the song gets repeated")
+                        |> Expect.equal (Just True)
+            , test "the mix pseudo-section takes the schema's top-level one" <|
+                \_ ->
+                    -- There is no `mix` entry in `schema.sections` to look up:
+                    -- `settingsPanel` renders the top-level fields under that
+                    -- name, so the top-level description is the one that
+                    -- describes them.
+                    Mixer.sectionDescription Fixtures.schema "mix"
+                        |> Expect.equal (Just Fixtures.schema.description)
+            , test "and that is the config's own description, not a section's" <|
+                \_ ->
+                    Mixer.sectionDescription Fixtures.schema "mix"
+                        |> Maybe.map (String.startsWith "Everything that decides what a finished mix sounds like.")
+                        |> Expect.equal (Just True)
+            , test "a name the schema has never heard of gets nothing" <|
+                \_ ->
+                    Mixer.sectionDescription Fixtures.schema "wobble"
+                        |> Expect.equal Nothing
+            , test "a description the server did not send is nothing to show, not an error" <|
+                \_ ->
+                    [ Mixer.sectionDescription undescribed "mix"
+                    , Mixer.sectionDescription undescribed "loop"
+                    ]
+                        |> Expect.equal [ Nothing, Nothing ]
+            ]
+        , describe "a description as paragraphs"
+            [ test "a blank line is a break, a single newline is not" <|
+                \_ ->
+                    Mixer.paragraphsOf "The summary.\n\nThe detail,\nwrapped."
+                        |> Expect.equal [ "The summary.", "The detail,\nwrapped." ]
+            , test "one paragraph is one paragraph" <|
+                \_ ->
+                    Mixer.paragraphsOf "Just the one."
+                        |> Expect.equal [ "Just the one." ]
+            , test "and nothing produces nothing rather than an empty one" <|
+                \_ ->
+                    Mixer.paragraphsOf "\n\n  \n\n"
+                        |> Expect.equal []
+            ]
+        , describe "whether a field explains itself"
+            [ test "the schema's line, where the schema states one" <|
+                \_ ->
+                    fieldIn "loop" "search_start"
+                        |> Maybe.andThen Mixer.fieldHelp
+                        |> Expect.equal (Just "Fraction of the track to start searching from.")
+            , test "nothing for a field whose label already says it" <|
+                \_ ->
+                    fieldIn "loop" "bars"
+                        |> Maybe.map Mixer.fieldHelp
+                        |> Expect.equal (Just Nothing)
+            , test "every kind of field is asked the same question" <|
+                \_ ->
+                    -- All six `Schema.Field` constructors, since each carries
+                    -- its own spec and a missed case is a control that silently
+                    -- stops explaining itself. `Just`/`Nothing` on the outside
+                    -- is the fixture lookup, so a renamed key fails here rather
+                    -- than passing as "no help".
+                    [ fieldIn "loop" "search_start"
+                    , topFieldIn "seed"
+                    , fieldIn "soundbed" "enabled"
+                    , topFieldIn "separation_model"
+                    , fieldIn "output" "sample_rate"
+                    , fieldIn "stem_decay" "curve"
+                    ]
+                        |> List.map (Maybe.map (Mixer.fieldHelp >> (/=) Nothing))
+                        |> Expect.equal
+                            [ Just True, Just True, Just False, Just False, Just False, Just True ]
+            , test "help that is present but blank is not help" <|
+                \_ ->
+                    Schema.BoolField { label = "Sound bed", help = Just "   ", default = False }
+                        |> Mixer.fieldHelp
+                        |> Expect.equal Nothing
+            ]
+        , describe "the screen as it renders"
+            [ test "a section says what it is for" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.findAll
+                            [ Selector.class "section-description"
+                            , Selector.containing [ Selector.text "Which fragment of the song gets repeated" ]
+                            ]
+                        |> Query.count (Expect.equal 1)
+            , test "including the detail under the summary line" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.has [ Selector.text "set them and that region is used exactly" ]
+            , test "as a paragraph of its own, the way it was written" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "section-description"
+                            , Selector.containing [ Selector.text "Which fragment of the song gets repeated" ]
+                            ]
+                        |> Query.findAll [ Selector.tag "p" ]
+                        |> Query.count (Expect.equal 2)
+            , test "the mix section says what the whole config is" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.findAll
+                            [ Selector.class "section-description"
+                            , Selector.containing [ Selector.text "Everything that decides what a finished mix sounds like" ]
+                            ]
+                        |> Query.count (Expect.equal 1)
+            , test "and the note about what a change costs is still beside it" <|
+                \_ ->
+                    -- `sectionNote` says what changing this will cost; the
+                    -- description says what it is for. Deleting either because
+                    -- the other looks like it covers it is the loss this
+                    -- asserts against, so both are asserted on one section.
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "section"
+                            , Selector.containing [ Selector.text "Which fragment of the song gets repeated" ]
+                            ]
+                        |> Query.has
+                            [ Selector.text "Changing where the loop is means finding and stretching it" ]
+            , test "a field's help is under the field it belongs to" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Search from" ]
+                            ]
+                        |> Query.find [ Selector.class "field-help" ]
+                        |> Query.has [ Selector.text "Fraction of the track to start searching from." ]
+            , test "and a field the schema says nothing about carries no line" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Beats per bar" ]
+                            ]
+                        |> Query.findAll [ Selector.class "field-help" ]
+                        |> Query.count (Expect.equal 0)
+            , test "the stems are described once, not once per stem" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.findAll
+                            [ Selector.class "section-description"
+                            , Selector.containing [ Selector.text "One separated stem and how it should behave" ]
+                            ]
+                        |> Query.count (Expect.equal 1)
+            , test "and so is the decay behind every one of them" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.findAll
+                            [ Selector.class "section-description"
+                            , Selector.containing [ Selector.text "How one stem falls apart across the length of the mix" ]
+                            ]
+                        |> Query.count (Expect.equal 1)
+            , test "with a row on screen for every stem, so once is not none" <|
+                \_ ->
+                    warm
+                        |> screen
+                        |> Query.findAll [ Selector.class "stem-row" ]
+                        |> Query.count (Expect.equal 3)
+            ]
+        ]
+
+
+{-| A schema that describes nothing, which is what an older server sending no
+descriptions decodes to: `""` rather than a failed decode.
+-}
+undescribed : Schema.Schema
+undescribed =
+    { description = ""
+    , fields = Dict.empty
+    , sections = Dict.singleton "loop" { description = "   ", fields = Dict.empty }
+    }
+
+
+fieldIn : String -> String -> Maybe Schema.Field
+fieldIn sectionName key =
+    Dict.get sectionName Fixtures.schema.sections
+        |> Maybe.andThen (.fields >> Dict.get key)
+
+
+topFieldIn : String -> Maybe Schema.Field
+topFieldIn key =
+    Dict.get key Fixtures.schema.fields
 
 
 {-| The preset bar: resolving an id against the list, applying one, and the row

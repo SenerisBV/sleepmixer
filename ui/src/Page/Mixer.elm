@@ -5,6 +5,7 @@ module Page.Mixer exposing
     , applyBlock, applyPreset, armConfirm, lastUsed, newPresetName, presetById
     , presetSaved, saveMessage, saveOverAvailable, selectPreset, selection
     , setPresetName, view
+    , fieldHelp, paragraphsOf, sectionDescription
     )
 
 {-| The mixer: hear one point in the decay arc while you shape it.
@@ -17,6 +18,15 @@ set stays at a default nobody chose. The rule for what a field becomes is the
 schema's own metadata: `min`/`max`/`step` makes a slider, `choices` makes a
 select, a bool makes a checkbox, and anything else falls back to a typed box
 carrying whatever bounds the schema does state.
+
+What the screen *says* is generated from the same place, and for the same
+reason. Every section carries the server's own description of it and every
+control carries whatever the schema states about that control, both rendered as
+visible markup rather than hovered over: a `title` attribute is nothing at all
+on a touchscreen, nothing at all to a keyboard, and nothing at all to anyone
+who does not happen to hover the right element. The one thing written here
+rather than fetched is `sectionNote`, which says what a change *costs* — the
+schema has no way to state that a slider throws away every stretched loop.
 
 The screen is inert until the first preview returns, and says so. That first
 render is the expensive one — the loop is sliced out of every stem and
@@ -1290,10 +1300,28 @@ previewProblem config =
 -- STEMS
 
 
+{-| Every stem the separation produced, and — once, above them — what the two
+sections behind a stem row are for.
+
+`stem` and `stem_decay` are the two sections `settingsPanel` does not render:
+they describe the elements of a list rather than global settings, so their
+fields appear per row instead. Their *descriptions* must not, and this is the
+only place on the screen that is once for both — the decay controls live behind
+a disclosure inside every row, so a description put beside them would be
+repeated as many times as the song has stems. Above the rows is also where the
+question they answer is asked: you arrive at four near-identical rows and want
+to know what a row is before you touch one.
+
+They read in order on purpose. The `stem` description ends on stems eroding
+independently, which is exactly what the `stem_decay` description then
+explains.
+-}
 stemsPanel : Wiring msg -> State -> Schema.Schema -> (String -> msg) -> Html msg
 stemsPanel wiring state schema onSolo =
     div [ class "stems" ]
         (h3 [] [ text "Stems" ]
+            :: descriptionBlock (sectionDescription schema "stem")
+            :: descriptionBlock (sectionDescription schema "stem_decay")
             :: List.indexedMap (stemRow wiring state schema onSolo) state.config.stems
         )
 
@@ -1326,12 +1354,11 @@ stemRow wiring state schema onSolo index stem =
             (controlsFor wiring state (Config.InStem index) (stemFields schema))
         , details [ class "decay" ]
             [ summary [] [ text "Decay" ]
-            , p [ class "dim" ]
-                [ text
-                    ("Each of these is interpolated from its start to its end across "
-                        ++ "the whole mix, so the loop erodes a little more every time round."
-                    )
-                ]
+
+            -- No note here. It used to say that each of these is interpolated
+            -- from its start to its end across the mix, which is what the
+            -- `stem_decay` description now says above the rows — once, rather
+            -- than once per stem, which is what this was.
             , div [ class "fields" ]
                 (controlsFor wiring state (Config.InStemDecay index) (sectionFields "stem_decay" schema))
             ]
@@ -1378,10 +1405,10 @@ sectionFields name schema =
 settingsPanel : Wiring msg -> State -> Schema.Schema -> Html msg
 settingsPanel wiring state schema =
     div [ class "settings" ]
-        (section wiring state Config.Top "mix" (mixFields schema)
+        (section wiring state Config.Top "mix" (sectionDescription schema "mix") (mixFields schema)
             :: List.map
                 (\( name, aSection ) ->
-                    section wiring state (Config.InSection name) name aSection.fields
+                    section wiring state (Config.InSection name) name (sectionDescription schema name) aSection.fields
                 )
                 (List.filter (\( name, _ ) -> not (List.member name [ "stem", "stem_decay" ]))
                     (Dict.toList schema.sections)
@@ -1416,13 +1443,87 @@ mixFields schema =
     Dict.remove "separation_model" schema.fields
 
 
-section : Wiring msg -> State -> (String -> Config.Target) -> String -> Dict String Schema.Field -> Html msg
-section wiring state toTarget name fields =
+{-| One collapsible group of controls, under two lines of a different kind.
+
+The description says what the section is *for* and comes from the server; the
+note says what changing something in it will *cost* and is written here,
+because the schema has no way to state it. Neither substitutes for the other,
+so both are here, in that order: what this is, then what to know before moving
+it. A section the schema does not describe simply opens on its controls.
+-}
+section : Wiring msg -> State -> (String -> Config.Target) -> String -> Maybe String -> Dict String Schema.Field -> Html msg
+section wiring state toTarget name about fields =
     details [ class "section" ]
         [ summary [] [ text (titleOf name) ]
+        , descriptionBlock about
         , sectionNote name
         , div [ class "fields" ] (controlsFor wiring state toTarget fields)
         ]
+
+
+{-| The description a named section gets, or nothing to show.
+
+`"mix"` is the one name that cannot look itself up: `settingsPanel` renders the
+top-level fields as a section by that name and `schema.sections` has no entry
+for it, so the schema's own top-level description — which is `MixConfig`'s
+docstring, and says exactly what the whole config is — is what that one gets.
+It is another name written in Elm, and like the others in this module it
+decides nothing about which controls exist.
+
+A missing description decodes to `""` rather than failing, so `""` is read here
+as "nothing to say" and not as an error: a section renders its controls either
+way, and a server that stopped sending descriptions should cost this screen a
+paragraph rather than the mixer.
+-}
+sectionDescription : Schema.Schema -> String -> Maybe String
+sectionDescription schema name =
+    if name == "mix" then
+        nonBlank schema.description
+
+    else
+        Dict.get name schema.sections
+            |> Maybe.andThen (.description >> nonBlank)
+
+
+{-| A description, as the paragraphs it was written in.
+
+These come from Python docstrings, where a blank line is a paragraph break and
+the first line is a summary of everything under it. Rendered as one string,
+`soundbed`'s "Off by default" would run straight on from the sentence naming
+the three things it can be, and the summary line would stop being a summary you
+can stop reading after.
+-}
+paragraphsOf : String -> List String
+paragraphsOf words =
+    String.split "\n\n" words
+        |> List.filterMap nonBlank
+
+
+descriptionBlock : Maybe String -> Html msg
+descriptionBlock about =
+    case about of
+        Just words ->
+            div [ class "section-description" ]
+                (List.map (\para -> p [] [ text para ]) (paragraphsOf words))
+
+        Nothing ->
+            text ""
+
+
+{-| Text with something in it, or nothing at all.
+
+Every string on this screen that comes from the schema is optional in practice
+— `help` is `null` on sixteen fields, and a description the server did not send
+decodes to `""` — and an empty paragraph is worse than no paragraph: it is a
+gap in a column with nothing to read in it.
+-}
+nonBlank : String -> Maybe String
+nonBlank words =
+    if String.trim words == "" then
+        Nothing
+
+    else
+        Just (String.trim words)
 
 
 titleOf : String -> String
@@ -1497,11 +1598,72 @@ sectionNote name =
 -- CONTROLS
 
 
+{-| Each control the schema describes, with whatever the schema says about it
+underneath it.
+
+The wrapper is what `.fields` places in its grid now, rather than the control
+itself: a line put inside the control's own row would sit *beside* it, in the
+space the value readout uses, and one put after it would land in the next
+column of the grid, under a different control. A field the schema says nothing
+about is a wrapper with a single child and no extra height.
+-}
 controlsFor : Wiring msg -> State -> (String -> Config.Target) -> Dict String Schema.Field -> List (Html msg)
 controlsFor wiring state toTarget fields =
     List.map
-        (\( key, spec ) -> control wiring state (toTarget key) spec)
+        (\( key, spec ) ->
+            div [ class "field-group" ]
+                [ control wiring state (toTarget key) spec
+                , helpLine (fieldHelp spec)
+                ]
+        )
         (Dict.toList fields)
+
+
+{-| What the schema says about one field, if it says anything.
+
+This was an `Attr.title` — a tooltip, which is invisible on a touchscreen,
+unreachable from the keyboard, and invisible to anyone not hovering the exact
+element it hangs off. The eleven fields that carried help were, in practice,
+explained to nobody.
+
+Sixteen field names carry none and want none: `Gain`, `Fade in`, `Room size`
+and the rest of them are labels that already say what they do, so `Nothing` is
+an ordinary answer here rather than a gap somebody should go and fill.
+-}
+fieldHelp : Schema.Field -> Maybe String
+fieldHelp spec =
+    let
+        stated =
+            case spec of
+                Schema.FloatField s ->
+                    s.help
+
+                Schema.IntField s ->
+                    s.help
+
+                Schema.BoolField s ->
+                    s.help
+
+                Schema.TextField s ->
+                    s.help
+
+                Schema.IntChoiceField s ->
+                    s.help
+
+                Schema.StringChoiceField s ->
+                    s.help
+    in
+    Maybe.andThen nonBlank stated
+
+
+helpLine : Maybe String -> Html msg
+helpLine words =
+    case words of
+        Just line ->
+            p [ class "field-help" ] [ text line ]
+
+        Nothing ->
+            text ""
 
 
 control : Wiring msg -> State -> Config.Target -> Schema.Field -> Html msg
@@ -1517,16 +1679,16 @@ control wiring state target spec =
             number wiring state target s
 
         Schema.TextField s ->
-            typedBox wiring state target { label = s.label, help = s.help, unit = Nothing } "text" []
+            typedBox wiring state target { label = s.label, unit = Nothing } "text" []
 
         Schema.StringChoiceField s ->
-            chooser wiring state target { label = s.label, help = s.help } s.choices
+            chooser wiring state target { label = s.label } s.choices
 
         Schema.IntChoiceField s ->
-            chooser wiring state target { label = s.label, help = s.help } (List.map String.fromInt s.choices)
+            chooser wiring state target { label = s.label } (List.map String.fromInt s.choices)
 
 
-checkbox : Wiring msg -> State -> Config.Target -> { a | label : String, help : Maybe String, default : Bool } -> Html msg
+checkbox : Wiring msg -> State -> Config.Target -> { a | label : String, default : Bool } -> Html msg
 checkbox wiring state target spec =
     let
         on =
@@ -1534,7 +1696,7 @@ checkbox wiring state target spec =
                 |> Maybe.andThen Config.asBool
                 |> Maybe.withDefault spec.default
     in
-    label [ class "field field-check", help spec.help ]
+    label [ class "field field-check" ]
         [ input
             [ type_ "checkbox"
             , Attr.checked on
@@ -1562,7 +1724,6 @@ number :
     ->
         { a
             | label : String
-            , help : Maybe String
             , min : Maybe Float
             , max : Maybe Float
             , step : Maybe Float
@@ -1580,7 +1741,7 @@ number wiring state target spec =
     in
     case ( spec.min, spec.max, spec.step ) of
         ( Just _, Just _, Just _ ) ->
-            div [ class "field", help spec.help ]
+            div [ class "field" ]
                 [ span [ class "field-label" ] [ text spec.label ]
                 , input
                     (type_ "range"
@@ -1596,19 +1757,19 @@ number wiring state target spec =
                 ]
 
         _ ->
-            typedBox wiring state target { label = spec.label, help = spec.help, unit = spec.unit } "number" bounds
+            typedBox wiring state target { label = spec.label, unit = spec.unit } "number" bounds
 
 
 typedBox :
     Wiring msg
     -> State
     -> Config.Target
-    -> { label : String, help : Maybe String, unit : Maybe String }
+    -> { label : String, unit : Maybe String }
     -> String
     -> List (Attribute msg)
     -> Html msg
 typedBox wiring state target spec kind bounds =
-    div [ class "field", help spec.help ]
+    div [ class "field" ]
         [ span [ class "field-label" ] [ text (spec.label ++ unitSuffix spec.unit) ]
         , input
             (type_ kind
@@ -1647,7 +1808,7 @@ chooser :
     Wiring msg
     -> State
     -> Config.Target
-    -> { label : String, help : Maybe String }
+    -> { label : String }
     -> List String
     -> Html msg
 chooser wiring state target spec choices =
@@ -1655,7 +1816,7 @@ chooser wiring state target spec choices =
         current =
             reading state target
     in
-    div [ class "field", help spec.help ]
+    div [ class "field" ]
         [ span [ class "field-label" ] [ text spec.label ]
         , Html.select
             [ class "field-select"
@@ -1691,12 +1852,3 @@ unitSuffix unit =
 
         Nothing ->
             ""
-
-
-{-| The schema's `help` as a tooltip. Empty rather than absent when there is
-none: browsers show nothing for an empty `title`, and an attribute that is
-sometimes there and sometimes not costs a conditional at every call site.
--}
-help : Maybe String -> Attribute msg
-help words =
-    Attr.title (Maybe.withDefault "" words)
