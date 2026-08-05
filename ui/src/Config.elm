@@ -1,6 +1,6 @@
 module Config exposing
     ( Config, Stem, Target(..), Value(..)
-    , asBool, asFloat, encode, fromSchema, keyOf, set, specAt, toggle, valueAt, valueString
+    , asBool, asFloat, encode, forPreset, fromSchema, keyOf, overlay, set, specAt, toggle, valueAt, valueString
     )
 
 {-| The config JSON a preview — and one day a render — carries.
@@ -32,6 +32,7 @@ seconds", which is a different instruction entirely.
 -}
 
 import Dict exposing (Dict)
+import Json.Decode as Decode
 import Json.Encode as Encode
 import Schema
 
@@ -371,6 +372,164 @@ clampTo low high value =
 
         Nothing ->
             floored
+
+
+{-| Take a config as JSON — a preset, or the server's own defaults — and lay it
+over a base config.
+
+Every key the JSON carries replaces the base's; every key it does not carries
+the base's through. Callers always pass `fromSchema`'s output as the base, so
+"a field this preset does not mention" means "that field's default" rather than
+"whatever happened to be on screen". Apply means *make it look like this*, not
+*merge this in*: a preset saved before a field existed would otherwise leave
+that field holding a value from a recipe the operator believes they replaced,
+with nothing on screen saying which control came from where.
+
+Keys the schema does not describe are ignored, which is what lets a preset
+written by an older or newer build load rather than fail.
+
+Values go through `parse`, the same function every typed control uses, so the
+schema's bounds and choice lists are enforced in exactly one place. A preset
+saved before a bound was tightened shows a value the mixer will accept, not one
+the server rejects minutes later at render time.
+-}
+overlay : Schema.Schema -> Decode.Value -> Config -> Config
+overlay schema raw base =
+    let
+        incoming =
+            objectOf raw
+
+        incomingStems =
+            Dict.get "stems" incoming
+                |> Maybe.map stemsByName
+                |> Maybe.withDefault Dict.empty
+    in
+    { top = overlayValues schema Top incoming base.top
+    , sections =
+        Dict.map
+            (\name values ->
+                overlayValues schema
+                    (InSection name)
+                    (Dict.get name incoming |> Maybe.map objectOf |> Maybe.withDefault Dict.empty)
+                    values
+            )
+            base.sections
+    , stems = List.indexedMap (overlayStem schema incomingStems) base.stems
+    }
+
+
+objectOf : Decode.Value -> Dict String Decode.Value
+objectOf raw =
+    Decode.decodeValue (Decode.dict Decode.value) raw
+        |> Result.withDefault Dict.empty
+
+
+stemsByName : Decode.Value -> Dict String (Dict String Decode.Value)
+stemsByName raw =
+    Decode.decodeValue (Decode.list (Decode.dict Decode.value)) raw
+        |> Result.withDefault []
+        |> List.filterMap
+            (\entry ->
+                Dict.get "name" entry
+                    |> Maybe.andThen (Decode.decodeValue Decode.string >> Result.toMaybe)
+                    |> Maybe.map (\name -> ( name, entry ))
+            )
+        |> Dict.fromList
+
+
+overlayStem : Schema.Schema -> Dict String (Dict String Decode.Value) -> Int -> Stem -> Stem
+overlayStem schema incoming index stem =
+    case Dict.get stem.name incoming of
+        Nothing ->
+            stem
+
+        Just entry ->
+            { stem
+                | fields = overlayValues schema (InStem index) entry stem.fields
+                , decay =
+                    overlayValues schema
+                        (InStemDecay index)
+                        (Dict.get "decay" entry |> Maybe.map objectOf |> Maybe.withDefault Dict.empty)
+                        stem.decay
+            }
+
+
+overlayValues : Schema.Schema -> (String -> Target) -> Dict String Decode.Value -> Values -> Values
+overlayValues schema toTarget incoming existing =
+    Dict.map
+        (\key current ->
+            Maybe.withDefault current
+                (Maybe.map2 Tuple.pair
+                    (Dict.get key incoming)
+                    (specAt schema (toTarget key))
+                    |> Maybe.andThen (\( rawValue, spec ) -> fromJson spec rawValue)
+                )
+        )
+        existing
+
+
+{-| One JSON value, through the schema's own parser.
+-}
+fromJson : Schema.Field -> Decode.Value -> Maybe Value
+fromJson spec raw =
+    let
+        text decoder =
+            Decode.decodeValue decoder raw |> Result.toMaybe
+    in
+    (case spec of
+        Schema.FloatField _ ->
+            Maybe.map String.fromFloat (text Decode.float)
+
+        Schema.IntField _ ->
+            Maybe.map String.fromInt (text Decode.int)
+
+        Schema.BoolField _ ->
+            Maybe.map
+                (\b ->
+                    if b then
+                        "true"
+
+                    else
+                        "false"
+                )
+                (text Decode.bool)
+
+        Schema.TextField _ ->
+            text Decode.string
+
+        Schema.IntChoiceField _ ->
+            Maybe.map String.fromInt (text Decode.int)
+
+        Schema.StringChoiceField _ ->
+            text Decode.string
+    )
+        |> Maybe.andThen (parse spec)
+
+
+{-| The config as a preset should store it.
+
+Two things are removed, and both are silent when they are wrong.
+
+`loop.start_s` and `loop.end_s` are seconds into one particular song. Carried
+into a preset they would move another song's loop region to a place chosen for
+different audio, and nothing on screen would say why the mix changed.
+
+`separation_model` is not a mix setting at all: changing it nulls the session's
+stems, so the next preview runs a real Demucs separation inside the per-song
+preview lock — minutes, no progress reporting, on a screen that already
+believes itself playable. `Page.Mixer` withholds a control for it by name for
+exactly that reason; a preset must not smuggle one in.
+-}
+forPreset : Config -> Encode.Value
+forPreset config =
+    encode
+        { config
+            | top = Dict.remove "separation_model" config.top
+            , sections =
+                Dict.update "loop"
+                    (Maybe.map (Dict.remove "start_s" >> Dict.remove "end_s"))
+                    config.sections
+        }
 
 
 {-| What an `<input>`'s `value` attribute should read.

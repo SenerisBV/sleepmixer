@@ -15,6 +15,7 @@ import Config
 import Expect exposing (Expectation)
 import Fixtures
 import Json.Decode as Decode
+import Json.Encode as Encode
 import Test exposing (Test, describe, test)
 
 
@@ -110,7 +111,7 @@ suite =
                     -- nothing downstream could tell the two apart.
                     config
                         |> expect (Decode.field "loop" keysOf)
-                            [ "bars", "crossfade_ms", "search_start" ]
+                            [ "bars", "beats_per_bar", "crossfade_ms", "search_start" ]
             ]
         , describe "editing a stem"
             [ test "a gain change lands on that stem and no other" <|
@@ -229,7 +230,7 @@ suite =
                         |> Config.set Fixtures.schema (Config.InSection "loop" "start_s") "12.5"
                         |> Config.set Fixtures.schema (Config.InSection "loop" "start_s") ""
                         |> expect (Decode.field "loop" keysOf)
-                            [ "bars", "crossfade_ms", "search_start" ]
+                            [ "bars", "beats_per_bar", "crossfade_ms", "search_start" ]
             , test "an emptied text field falls back to the server's default" <|
                 \_ ->
                     -- Not the empty string: `separation_model` is a text
@@ -262,4 +263,128 @@ suite =
                         |> Config.set Fixtures.schema (Config.InStem 9 "gain_db") "-6.5"
                         |> Expect.equal config
             ]
+        , overlaySuite
+        , forPresetSuite
         ]
+
+
+overlaySuite : Test
+overlaySuite =
+    describe "Config.overlay"
+        [ test "a value the JSON carries replaces the default" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.overlay Fixtures.schema (json """{"seed": 7}""")
+                    |> Config.valueAt (Config.Top "seed")
+                    |> Expect.equal (Just (Config.IntValue 7))
+        , test "a value the JSON omits keeps the base's" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.overlay Fixtures.schema (json """{"seed": 7}""")
+                    |> Config.valueAt (Config.InSection "tempo" "speed")
+                    |> Expect.equal
+                        (Config.valueAt (Config.InSection "tempo" "speed")
+                            (Config.fromSchema Fixtures.schema [ "vocals" ])
+                        )
+        , test "a key the schema does not describe is ignored, not carried" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.overlay Fixtures.schema (json """{"invented_field": 1}""")
+                    |> Config.valueAt (Config.Top "invented_field")
+                    |> Expect.equal Nothing
+        , test "a value outside the schema's bounds is clamped, not taken" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.overlay Fixtures.schema (json """{"tempo": {"speed": 99.0}}""")
+                    |> Config.valueAt (Config.InSection "tempo" "speed")
+                    |> Expect.equal (Just (Config.FloatValue 1.0))
+        , test "a stem is matched by name, not by position" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "drums", "vocals" ]
+                    |> Config.overlay Fixtures.schema
+                        (json """{"stems": [{"name": "vocals", "gain_db": -6.0}]}""")
+                    |> Config.valueAt (Config.InStem 1 "gain_db")
+                    |> Expect.equal (Just (Config.FloatValue -6.0))
+        , test "a stem the JSON does not mention keeps its defaults" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "drums", "vocals" ]
+                    |> Config.overlay Fixtures.schema
+                        (json """{"stems": [{"name": "vocals", "gain_db": -6.0}]}""")
+                    |> Config.valueAt (Config.InStem 0 "gain_db")
+                    |> Expect.equal
+                        (Config.valueAt (Config.InStem 0 "gain_db")
+                            (Config.fromSchema Fixtures.schema [ "drums", "vocals" ])
+                        )
+        , test "a stem the song does not have is not invented" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.overlay Fixtures.schema
+                        (json """{"stems": [{"name": "tuba", "gain_db": -6.0}]}""")
+                    |> .stems
+                    |> List.map .name
+                    |> Expect.equal [ "vocals" ]
+        , test "per-stem decay is overlaid too" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.overlay Fixtures.schema
+                        (json """{"stems": [{"name": "vocals", "decay": {"curve": "exp"}}]}""")
+                    |> Config.valueAt (Config.InStemDecay 0 "curve")
+                    |> Expect.equal (Just (Config.StringValue "exp"))
+        ]
+
+
+forPresetSuite : Test
+forPresetSuite =
+    describe "Config.forPreset"
+        [ test "the loop region a song is set to does not travel" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.set Fixtures.schema (Config.InSection "loop" "start_s") "12.5"
+                    |> Config.forPreset
+                    |> Encode.encode 0
+                    |> String.contains "start_s"
+                    |> Expect.equal False
+        , test "nor the end of it" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.set Fixtures.schema (Config.InSection "loop" "end_s") "30.0"
+                    |> Config.forPreset
+                    |> Encode.encode 0
+                    |> String.contains "end_s"
+                    |> Expect.equal False
+        , test "the portable half of the loop section does travel" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.forPreset
+                    |> Encode.encode 0
+                    |> String.contains "beats_per_bar"
+                    |> Expect.equal True
+        , test "the separation model does not travel" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.forPreset
+                    |> Encode.encode 0
+                    |> String.contains "separation_model"
+                    |> Expect.equal False
+        , test "everything else still does" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.forPreset
+                    |> Encode.encode 0
+                    |> String.contains "gain_db"
+                    |> Expect.equal True
+        , test "the seed travels, so a preset reproduces the same erosion" <|
+            \_ ->
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.set Fixtures.schema (Config.Top "seed") "42"
+                    |> Config.forPreset
+                    |> Encode.encode 0
+                    |> String.contains "42"
+                    |> Expect.equal True
+        ]
+
+
+json : String -> Decode.Value
+json raw =
+    Decode.decodeString Decode.value raw
+        |> Result.withDefault Encode.null

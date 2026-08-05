@@ -64,6 +64,8 @@ json =
     "loop": {"fields": {
       "bars": {"type": "int", "default": 8, "label": "Bars", "help": null,
                "min": 1, "max": 64, "step": 1},
+      "beats_per_bar": {"type": "int", "default": 4, "label": "Beats per bar",
+                        "help": null, "min": 1, "max": 16, "step": 1},
       "crossfade_ms": {"type": "float", "default": 120.0, "label": "Seam crossfade",
                        "help": null, "min": 0.0, "max": 2000.0, "step": 10.0,
                        "unit": "ms"},
