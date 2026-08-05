@@ -1111,8 +1111,13 @@ found alongside them.
   story attached to it for a whole branch, corrected only once someone
   measured directly instead of inferring. All four were measured the same
   way: RMS of a mid-arc mastered preview over the corresponding crossfade-free
-  region of a real `run_pipeline` output, default config, changing one thing
-  at a time. The baseline — default reverb, `reverb=True`, fades off — is
+  region of a real `run_pipeline` output, changing one thing at a time —
+  **not at default config, but at `tests/test_preview.py`'s `_level_cfg()`**,
+  which deviates from `MixConfig()` in three ways that all matter here:
+  `output.duration_min = 0.5` (a 30-second render), `output.sample_rate =
+  22050` (matched to the working rate so nothing resamples — material,
+  because item 3 below is *about* `output.sample_rate`), and both fades
+  zeroed. The baseline — default reverb, `reverb=True`, fades off — is
   **1.0003, +0.00 dB**, and is what `tests/test_preview.py`'s
   `test_a_mastered_preview_sits_at_the_render_s_level` now asserts.
 
@@ -1131,8 +1136,9 @@ found alongside them.
      taking the docstring's word for it. Re-running
      `_preview_to_render_ratio` (the RMS-of-mid-arc-window method the
      baseline above uses) against `_level_cfg()`'s synthetic stems
-     (`conftest.fake_separate`: three summed sine tones, not a real
-     recording) reproduced both figures this document already carried,
+     (`conftest.fake_separate`: four stems, each one pure sine at
+     `110 × (i+1)` Hz, of which the default config enables three — not a
+     real recording) reproduced both figures this document already carried,
      essentially exactly: fades zeroed gives **1.0003181, +0.0028 dB**
      (matching the recorded baseline "1.0003, +0.00 dB"), and setting fades
      to the real `MixConfig` defaults (8 s in / 12 s out) gives
@@ -1140,8 +1146,13 @@ found alongside them.
      four figures). **The number is exactly right for the config it was
      measured in.** That config is a 30-second render — where an 8 s fade-in
      plus a 12 s fade-out cover 20 of the render's 30 total seconds, two
-     thirds of the whole arc, not the 0.67% of a 20-minute arc the original
-     entry's own arithmetic (correctly) assumed. The entry conflated "this
+     thirds of the whole arc, not the 0.67% of a 20-minute arc that Plan 3f's
+     own design note assumed (`docs/superpowers/specs/2026-08-05-legibility-
+     design.md:147` and the plan at `:495`, which is where the figure comes
+     from — this entry never carried it, and Plan 3e's level-matching design
+     carries the same arithmetic without the percentage, at
+     `docs/superpowers/specs/2026-08-05-level-matching-design.md:21-23`). The
+     entry conflated "this
      number is real" with "this number describes the mixer's actual default
      render" — only the first is true.
 
@@ -1184,15 +1195,33 @@ found alongside them.
      off. **So the arc length is not what makes the difference; the content
      is.**
 
-     **The mechanism, and why both are true at once.** A monotonically
-     decaying pure tone (`_level_cfg()`'s synthetic stems: no dynamics, no
-     transients, decay applied on top of a constant sine) has its own
-     un-faded peak guaranteed to sit at t = 0, because nothing else in the
-     signal can ever exceed it. Fading that region — worth two thirds of the
-     arc at `duration_min = 0.5` — measurably lowers the peak `normalize_peak`
-     finds, raising the gain applied to everything else, exactly as the
-     original entry described: this is not a wrong explanation, it is a
-     correct one for the signal it was measured against. A real 2:43
+     **The mechanism, and why both are true at once.** This paragraph
+     previously said the fixture's un-faded peak was "guaranteed to sit at
+     t = 0, because nothing else in the signal can ever exceed it." **That is
+     false, and it is false about the fixture this entire entry exists to get
+     right.** `conftest.fake_separate` does not build one decaying tone; it
+     builds four separate stems, each a single sine at `110 × (i+1)` Hz —
+     110, 220, 330 and 440 — and `sin(0) = 0`, so every one of them is
+     *exactly zero* at t = 0 and so is their sum. Measured directly, on the
+     mix `run_pipeline` hands to `_apply_fades`: the sample at t = 0 is
+     `0.000000000`, and the un-faded global peak sits at **t = 0.741 s**
+     (sample 16,338 at 22.05 kHz, value 1.106689), where the signal first
+     aligns constructively after the reverb has built up.
+
+     **The conclusion survives; only the mechanism was wrong**, and the real
+     mechanism is stronger. 0.741 s is 9% of the way into an 8-second
+     fade-in, so the fade multiplies the loudest moment in the render by
+     roughly a tenth. With fades zeroed, `normalize_peak` sees 1.106689 at
+     0.741 s. With `MixConfig`'s real 8 s/12 s defaults it sees **0.903449**,
+     relocated to **t = 8.343 s** — just past the end of the fade-in, which
+     is exactly where you would expect the surviving peak to land. That is a
+     peak ratio of 0.8164, or **+1.76 dB of extra gain applied to everything
+     else**, measured by direct comparison of the two `normalize_peak`
+     factors rather than by the RMS method the −1.82 dB above uses. Same
+     effect, same size, arrived at independently. So the original
+     fade-ordering story is a correct explanation for the signal it was
+     measured against; it just does not need the peak to be at t = 0, and
+     it never was. A real 2:43
      recording has no such guarantee — its loudest moment is wherever the
      music happens to be loudest, and at this stem set that turns out to be
      3.65 s into the render's second pass through the loop, nowhere near
