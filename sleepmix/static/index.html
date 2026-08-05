@@ -35,12 +35,23 @@
   /* One rule, not two: an `input:disabled` rule as well would compound with
      this one and render the control at .20 against its own label at .45. The
      whole row dims together, because "inert until the first preview returns"
-     is a statement about the row, not about the widget — and the row is now
-     `.field-group`, the control *and* the line under it explaining it. Scoped
-     to the group rather than to `.field` for exactly that reason: on `.field`
-     the two would compound wherever they nest, and the help would be the one
-     bright thing on an inert panel. */
-  .field-group:has(:disabled) { opacity: .45; }
+     is a statement about the row, not about the widget.
+     Scoped to `.field` — the control and its label — and deliberately NOT to
+     the `.field-group` that also holds the schema's line about the control.
+     `.field-help` is already `--dim` (#8b8f98); at .45 over `--bg` that
+     composites to #4b4e53, **2.13:1** where the undimmed line is 5.48:1, on
+     .85rem (12.75px) text that AA wants at 4.5:1 and AA-large at 3:1. And
+     `Wiring.enabled` is `Preview.isPlayable`, false in `Cold` and `Warming`,
+     so the whole panel is inert until the first preview returns — minutes for
+     a cold song, and the one stretch in which the reader has nothing to do
+     BUT read these lines. Dimming the explanation exactly when it is the only
+     thing on screen worth reading is the trade this rule refuses.
+     What that costs: the help stays at full `--dim` beside a dimmed control,
+     so an inert row is not uniformly grey. That is the intended reading — the
+     control is unavailable, the sentence explaining it is not. There is no
+     compounding to fear either: `.field-help` is a SIBLING of `.field`, not a
+     descendant, so `.field:has(:disabled)` can never reach it. */
+  .field:has(:disabled) { opacity: .45; }
   /* The base rule above is for text boxes; a checkbox or a slider wearing a
      border and .4rem of padding is a different control that happens to be an
      <input>. */
