@@ -115,6 +115,52 @@ failedRenderJson =
     """
 
 
+{- The two cancellation fixtures below are captured from real
+`POST /api/jobs/{id}/cancel` responses against a throwaway `SLEEPMIX_DATA_DIR`,
+byte for byte, with only the JSON re-indented to fit here. The separation they
+cancel ran `tests/stub_separation_worker` rather than Demucs — the worker is
+the one part of that request that is a stand-in, and it is downstream of every
+line this decoder reads. The route, the job manager and `Job.as_event` are all
+the real ones.
+
+Two responses because there are two, behind one 200, and `cancelled` is the
+only thing that tells them apart: a running job genuinely stopped, and a job
+that had already ended before the request arrived.
+-}
+
+
+cancelledJobJson : String
+cancelledJobJson =
+    """
+    { "cancelled": true
+    , "job":
+        { "id": "68ec100df7914346a10bf262f4f8073d"
+        , "kind": "separate", "status": "running"
+        , "fraction": 0.0, "message": "Separating stems\\u2026"
+        , "error": null, "result": null
+        , "song_id": "f2d624a566e344adb4490239b2e4855f"
+        , "render_id": null
+        , "created_at": "2026-08-05T00:35:22.500717+00:00" }
+    }
+    """
+
+
+refusedCancelJson : String
+refusedCancelJson =
+    """
+    { "cancelled": false
+    , "job":
+        { "id": "68ec100df7914346a10bf262f4f8073d"
+        , "kind": "separate", "status": "cancelled"
+        , "fraction": 0.0, "message": "Cancelled"
+        , "error": null, "result": null
+        , "song_id": "f2d624a566e344adb4490239b2e4855f"
+        , "render_id": null
+        , "created_at": "2026-08-05T00:35:22.500717+00:00" }
+    }
+    """
+
+
 suite : Test
 suite =
     describe "Api"
@@ -418,5 +464,48 @@ suite =
                             , Api.RenderCancelled
                             ]
                         )
+            ]
+        , describe "cancellation"
+            [ test "a cancel that stopped something decodes as cancelled" <|
+                \_ ->
+                    case Decode.decodeString Api.cancellation cancelledJobJson of
+                        Ok answer ->
+                            Expect.all
+                                [ .cancelled >> Expect.equal True
+                                , .job >> .id >> Expect.equal "68ec100df7914346a10bf262f4f8073d"
+                                , .job >> .status >> Expect.equal Api.Running
+                                ]
+                                answer
+
+                        Err err ->
+                            Expect.fail (Decode.errorToString err)
+            , test "the job's status is not the answer — a stopped job still reads running" <|
+                \_ ->
+                    -- The route cancels and then re-reads, so a job that was
+                    -- genuinely stopped comes back at whatever status it held
+                    -- at that instant. Deriving "was it refused?" from the
+                    -- status would report "nothing was stopped" about a cancel
+                    -- that worked, so the two fields have to be decoded, and
+                    -- read, separately.
+                    Decode.decodeString Api.cancellation cancelledJobJson
+                        |> Result.map (\a -> ( a.cancelled, a.job.status ))
+                        |> Expect.equal (Ok ( True, Api.Running ))
+            , test "a cancel that was refused decodes as not cancelled" <|
+                \_ ->
+                    Decode.decodeString Api.cancellation refusedCancelJson
+                        |> Result.map .cancelled
+                        |> Expect.equal (Ok False)
+            , test "a response missing `cancelled` fails rather than defaulting" <|
+                \_ ->
+                    -- Defaulting either way is a lie in one direction: to False
+                    -- it claims a working cancel did nothing, to True it stays
+                    -- silent about a Cancel button that did nothing.
+                    let
+                        json =
+                            String.replace "\"cancelled\": true" "\"ignored\": true"
+                                cancelledJobJson
+                    in
+                    Decode.decodeString Api.cancellation json
+                        |> Expect.err
             ]
         ]

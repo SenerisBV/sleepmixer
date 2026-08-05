@@ -1,14 +1,25 @@
 module RendersTest exposing (suite)
 
-{-| The decisions on the renders screen, which are all joins and summaries.
+{-| The decisions on the renders screen, which are mostly joins and summaries.
 
-The view itself is markup and `elm-test` does not look at it — the classes it
-emits are checked from the Python side by
+Most of the view is markup, and the classes it emits are checked from the
+Python side by
 `tests/test_static_bundle.py::test_every_class_the_views_emit_has_a_rule_on_the_page`.
 What is worth testing here is everything the view *asks* before it draws:
 which song a render belongs to, what distinguishes one render of that song from
 another, which job is producing it, and what to say when the answer is not
 recorded anywhere.
+
+One thing on this screen is not a summary, though, and it is the only control
+here that can destroy something: **Cancel**. `jobFor` is tested in isolation
+below and cannot see whether the button is actually given the job it returned —
+swapping `config.onCancel aJob.id` for `liveRenderJob`'s id compiles, and
+reinstates the Critical this screen was rewritten to remove: a dead row's
+Cancel stopping the render that is genuinely in flight, with `abandon_render`
+deleting its file on the way out. So that one wiring is asserted through the
+real view, and through `Main.view` rather than a hand-built page config, for
+the reason `MixerTest` gives — a config written here would prove the markup and
+nothing about what `Main` hands it.
 -}
 
 import Api
@@ -16,8 +27,13 @@ import Expect
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
+import Main
+import Page.Library as Library
 import Page.Renders as Renders
 import Test exposing (Test, describe, test)
+import Test.Html.Event as Event
+import Test.Html.Query as Query
+import Test.Html.Selector as Selector
 
 
 {-| A config as the server stores it: a real JSON object, not a string of JSON.
@@ -415,7 +431,104 @@ suite =
                     Renders.audioUrl "f591fb37"
                         |> Expect.equal "/api/renders/f591fb37/audio"
             ]
+        , describe "the Cancel button, through the whole application"
+            -- The one control on this screen that can destroy something, and
+            -- the one thing `jobFor` cannot vouch for. Two renders in flight at
+            -- once is the only arrangement that can tell a correct wiring from
+            -- a plausible wrong one: with a single render, its own job and "the
+            -- live job" are the same value and every mutation passes.
+            [ test "each row's Cancel carries that row's own job, not the live one" <|
+                \_ ->
+                    -- Reinstating the Critical — `config.onCancel
+                    -- (liveRenderJob …)` — makes the queued row stop the
+                    -- running render instead, and `abandon_render` deletes its
+                    -- partial file. Both rows would look identical while doing
+                    -- it, which is why this is asserted rather than read.
+                    Expect.all
+                        [ \_ ->
+                            cancelOn 0
+                                |> Event.expect (Main.CancelRenderClicked "job-for-queued")
+                        , \_ ->
+                            cancelOn 1
+                                |> Event.expect (Main.CancelRenderClicked "job-for-running")
+                        ]
+                        ()
+            , test "a row whose job the manager has forgotten offers no Cancel at all" <|
+                \_ ->
+                    -- The state a server restart leaves behind: the row is
+                    -- still "running" in SQLite and the job is gone with the
+                    -- process. A button here would have to guess which job it
+                    -- meant, and guessing is what produced the Critical.
+                    screen { twoInFlight | renderJobs = [] }
+                        |> Query.findAll [ Selector.class "cancel" ]
+                        |> Query.count (Expect.equal 0)
+            ]
         ]
+
+
+{-| Two renders genuinely in flight: one running, one waiting behind it.
+
+Timestamps are set so `newestFirst` puts the queued one at index 0 and the
+running one at index 1, which is also the truth — the queued render was asked
+for later.
+-}
+twoInFlight : Main.Model
+twoInFlight =
+    let
+        ( fresh, _ ) =
+            Main.init ()
+
+        running =
+            { base
+                | id = "render-running"
+                , status = Api.RenderRunning
+                , createdAt = "2026-08-04T21:00:00.000000+00:00"
+            }
+
+        queued =
+            { base
+                | id = "render-queued"
+                , status = Api.RenderQueued
+                , createdAt = "2026-08-04T21:05:00.000000+00:00"
+            }
+
+        base =
+            aRender "r" "s1" "{}"
+    in
+    { fresh
+        | library = Library.Loaded [ aSong "s1" "A Song" ]
+        , renders = Just (Renders.Loaded [ running, queued ])
+        , renderJobs =
+            [ { runningJob | id = "job-for-running", renderId = Just "render-running" }
+            , { runningJob
+                | id = "job-for-queued"
+                , renderId = Just "render-queued"
+                , status = Api.Queued
+                , createdAt = "2026-08-04T21:05:00.100000+00:00"
+              }
+            ]
+    }
+
+
+runningJob : Api.Job
+runningJob =
+    aJob "j" "s1" (Just "r") "2026-08-04T21:00:00.100000+00:00"
+
+
+{-| The whole application as it would render, not a hand-built view config.
+-}
+screen : Main.Model -> Query.Single Main.Msg
+screen model =
+    Query.fromHtml (Main.view model)
+
+
+cancelOn : Int -> Event.Event Main.Msg
+cancelOn index =
+    screen twoInFlight
+        |> Query.findAll [ Selector.class "render-row" ]
+        |> Query.index index
+        |> Query.find [ Selector.class "cancel" ]
+        |> Event.simulate Event.click
 
 
 sampleJob : Api.Job

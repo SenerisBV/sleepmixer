@@ -13,6 +13,7 @@ which `JobTest` covers directly.
 
 import Api
 import Expect
+import Http
 import Json.Encode
 import Main
 import Page.Queue as Queue
@@ -300,6 +301,88 @@ suite =
                     Main.isSeparating (Main.Watching (aJob "j1" Api.Running 0.1))
                         |> Expect.equal True
             ]
+        , describe "cancelling a job from the queue"
+            -- Nothing tested this end of the round trip at all. `grep -rn
+            -- "Cancellation\|CancelSent" ui/tests/` came back empty, and the
+            -- Python side asserts `answer["cancelled"] is True` off a
+            -- hand-read dict — so the seam between the two halves was
+            -- unwatched from both sides, which is the shape this project has
+            -- already been bitten by twice.
+            --
+            -- Mutation-proved: inverting the `if answer.cancelled` branch left
+            -- all 311 Elm and 268 Python tests green while every successful
+            -- cancel told the operator "That job had already finished, so
+            -- nothing was stopped" and skipped the re-fetch, leaving the row
+            -- with its Cancel button intact.
+            [ test "a cancel that stopped something says nothing and leaves no complaint" <|
+                \_ ->
+                    -- Starting from a model that already has a complaint, so
+                    -- this cannot pass merely because nothing was written.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        stale =
+                            { fresh | queueProblem = Just "something older" }
+                    in
+                    stale
+                        |> step (Main.JobCancelSent (Ok (cancellationOf True Api.Running)))
+                        |> .queueProblem
+                        |> Expect.equal Nothing
+            , test "a cancel that was refused says so" <|
+                \_ ->
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+                    in
+                    fresh
+                        |> step (Main.JobCancelSent (Ok (cancellationOf False Api.Cancelled)))
+                        |> .queueProblem
+                        |> Expect.notEqual Nothing
+            , test "a stopped job that still reads running is not reported as a refusal" <|
+                \_ ->
+                    -- The whole reason `cancelled` exists as a field of its
+                    -- own. The route cancels and then re-reads, so a genuinely
+                    -- stopped job comes back at whatever status it held that
+                    -- instant — `running` for a separation whose worker has
+                    -- not noticed yet, and `done` for one that finished in the
+                    -- window. Reading the status instead would tell the
+                    -- operator nothing was stopped about a cancel that worked.
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+
+                        answered status =
+                            fresh
+                                |> step (Main.JobCancelSent (Ok (cancellationOf True status)))
+                                |> .queueProblem
+                    in
+                    Expect.all
+                        [ \_ -> Expect.equal Nothing (answered Api.Running)
+                        , \_ -> Expect.equal Nothing (answered Api.Done)
+                        ]
+                        ()
+            , test "clicking Cancel clears whatever the last one said" <|
+                \_ ->
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+                    in
+                    { fresh | queueProblem = Just "the last cancel was refused" }
+                        |> step (Main.CancelJobClicked "j1")
+                        |> .queueProblem
+                        |> Expect.equal Nothing
+            , test "a failed cancel request says something too" <|
+                \_ ->
+                    let
+                        ( fresh, _ ) =
+                            Main.init ()
+                    in
+                    fresh
+                        |> step (Main.JobCancelSent (Err (Http.BadStatus 500)))
+                        |> .queueProblem
+                        |> Expect.notEqual Nothing
+            ]
         , describe "the queue screen's poll"
             -- What these can and cannot see, stated up front. `Cmd` has no
             -- equality in Elm, so none of this observes a request going out or
@@ -450,6 +533,20 @@ suite =
                         ()
             ]
         ]
+
+
+{-| What `POST /api/jobs/{id}/cancel` answers, in the two parts that disagree.
+
+`cancelled` and the job's status are supplied separately on purpose: they are
+independent on the wire, and treating them as one is the mistake these tests
+exist to catch. `ApiTest` holds the captured JSON that proves this shape is the
+server's; this is the value that shape decodes to.
+-}
+cancellationOf : Bool -> Api.JobStatus -> Api.Cancellation
+cancellationOf cancelled status =
+    { cancelled = cancelled
+    , job = aJob "j1" status 0.0
+    }
 
 
 {-| A job as `GET /api/jobs` would list one that has not started yet.
