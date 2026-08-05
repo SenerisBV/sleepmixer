@@ -38,38 +38,62 @@ class StemDecayConfig:
     # Lowpass cutoff sweep — high frequencies erode first, like tape oxide.
     lowpass_start_hz: float = field(default=18000.0, metadata={
         "label": "Lowpass start", "unit": "Hz", "min": 20.0, "max": 20000.0,
-        "step": 100.0})
+        "step": 100.0,
+        "help": "How much treble the stem still has at the beginning. "
+                "Everything above this is filtered away."})
     lowpass_end_hz: float = field(default=1600.0, metadata={
         "label": "Lowpass end", "unit": "Hz", "min": 20.0, "max": 20000.0,
-        "step": 100.0})
+        "step": 100.0,
+        "help": "How much treble is left by the end. This does more than "
+                "anything else here to make a stem recede into the distance."})
 
     # Amplitude fade across the arc.
     amp_start_db: float = field(default=0.0, metadata={
         "label": "Amplitude start", "unit": "dB", "min": -60.0, "max": 0.0,
-        "step": 0.5})
+        "step": 0.5,
+        "help": "How loud the stem is at the beginning of the decay, in dB "
+                "relative to the stem itself (0 dB = unchanged)."})
     amp_end_db: float = field(default=-9.0, metadata={
         "label": "Amplitude end", "unit": "dB", "min": -60.0, "max": 0.0,
-        "step": 0.5})
+        "step": 0.5,
+        "help": "How loud the stem is by the end of the decay, in dB "
+                "relative to the stem itself (0 dB = unchanged)."})
 
     # Probability/density of brief dropouts (0..1).
     dropout_start: float = field(default=0.0, metadata={
-        "label": "Dropouts start", "min": 0.0, "max": 1.0, "step": 0.01})
+        "label": "Dropouts start", "min": 0.0, "max": 1.0, "step": 0.01,
+        "help": "How often brief gaps are dropped into the stem at the "
+                "beginning. They are smoothly ramped, like tape dropouts, "
+                "not hard cuts."})
     dropout_end: float = field(default=0.25, metadata={
-        "label": "Dropouts end", "min": 0.0, "max": 1.0, "step": 0.01})
+        "label": "Dropouts end", "min": 0.0, "max": 1.0, "step": 0.01,
+        "help": "How often brief gaps are dropped into the stem by the end. "
+                "They are smoothly ramped, like tape dropouts, not hard "
+                "cuts."})
 
     # Added noise-floor level (dBFS).
     noise_start_db: float = field(default=-90.0, metadata={
         "label": "Noise floor start", "unit": "dB", "min": -120.0, "max": 0.0,
-        "step": 1.0})
+        "step": 1.0,
+        "help": "How much noise is mixed in underneath at the beginning. "
+                "Added after everything else, so it does not get filtered."})
     noise_end_db: float = field(default=-42.0, metadata={
         "label": "Noise floor end", "unit": "dB", "min": -120.0, "max": 0.0,
-        "step": 1.0})
+        "step": 1.0,
+        "help": "How much noise is mixed in underneath by the end. Added "
+                "after everything else, so it does not get filtered."})
 
     # Fraction of spectral bins zeroed ('holes' in the spectrum), 0..1.
     spectral_hole_start: float = field(default=0.0, metadata={
-        "label": "Spectral holes start", "min": 0.0, "max": 1.0, "step": 0.01})
+        "label": "Spectral holes start", "min": 0.0, "max": 1.0, "step": 0.01,
+        "help": "How much of the stem's frequency range is punched out at "
+                "the beginning. Unlike the lowpass, this scatters gaps "
+                "throughout the spectrum rather than sweeping the top away."})
     spectral_hole_end: float = field(default=0.30, metadata={
-        "label": "Spectral holes end", "min": 0.0, "max": 1.0, "step": 0.01})
+        "label": "Spectral holes end", "min": 0.0, "max": 1.0, "step": 0.01,
+        "help": "How much of the stem's frequency range is punched out by "
+                "the end. Unlike the lowpass, this scatters gaps throughout "
+                "the spectrum rather than sweeping the top away."})
 
 
 @dataclass
@@ -102,9 +126,15 @@ class LoopConfig:
     eroding happens elsewhere."""
 
     bars: int = field(default=8, metadata={
-        "label": "Bars", "min": 1, "max": 64, "step": 1})
+        "label": "Bars", "min": 1, "max": 64, "step": 1,
+        "help": "Together with beats per bar, decides how long the repeated "
+                "fragment is, in musical rather than clock time — eight bars "
+                "of four beats at the detected tempo, by default."})
     beats_per_bar: int = field(default=4, metadata={
-        "label": "Beats per bar", "min": 1, "max": 16, "step": 1})
+        "label": "Beats per bar", "min": 1, "max": 16, "step": 1,
+        "help": "Together with bars, decides how long the repeated fragment "
+                "is, in musical rather than clock time — eight bars of four "
+                "beats at the detected tempo, by default."})
     crossfade_ms: float = field(default=120.0, metadata={
         "label": "Seam crossfade", "unit": "ms", "min": 0.0, "max": 2000.0,
         "step": 10.0})
@@ -187,11 +217,17 @@ class SoundbedConfig:
         "help": "Requires headphones — binaural beats rely on each ear "
                 "receiving a different tone."})
     binaural_carrier_hz: float = field(default=110.0, metadata={
-        "label": "Carrier", "unit": "Hz", "min": 20.0, "max": 500.0, "step": 1.0})
+        "label": "Carrier", "unit": "Hz", "min": 20.0, "max": 500.0, "step": 1.0,
+        "help": "The tone the left ear hears; the right ear gets this plus "
+                "the beat frequency. Requires headphones."})
     binaural_beat_hz: float = field(default=2.5, metadata={
-        "label": "Beat frequency", "unit": "Hz", "min": 0.5, "max": 30.0, "step": 0.1})
+        "label": "Beat frequency", "unit": "Hz", "min": 0.5, "max": 30.0, "step": 0.1,
+        "help": "The difference between the two ears' tones, perceived as a "
+                "slow pulse. Requires headphones."})
     binaural_gain_db: float = field(default=-30.0, metadata={
-        "label": "Binaural level", "unit": "dB", "min": -80.0, "max": 0.0, "step": 1.0})
+        "label": "Binaural level", "unit": "dB", "min": -80.0, "max": 0.0, "step": 1.0,
+        "help": "How loud the binaural tones are under the mix. Requires "
+                "headphones."})
 
 
 @dataclass
@@ -218,7 +254,10 @@ class OutputConfig:
         "label": "Fade out", "unit": "s", "min": 0.0, "max": 120.0, "step": 1.0})
     peak_db: float = field(default=-1.0, metadata={
         "label": "Peak ceiling", "unit": "dBFS", "min": -12.0, "max": 0.0,
-        "step": 0.1})
+        "step": 0.1,
+        "help": "The ceiling the finished file is normalised to. Headroom, "
+                "not loudness: it is how close the loudest moment gets to "
+                "clipping."})
 
 
 @dataclass

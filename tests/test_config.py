@@ -186,3 +186,39 @@ def test_a_generated_dataclass_docstring_is_refused():
 
     with pytest.raises(ValueError, match="Undocumented"):
         cfg._describe_type(Undocumented)
+
+
+NEEDS_HELP = {
+    "stem_decay": [
+        "lowpass_start_hz", "lowpass_end_hz",
+        "amp_start_db", "amp_end_db",
+        "dropout_start", "dropout_end",
+        "spectral_hole_start", "spectral_hole_end",
+        "noise_start_db", "noise_end_db",
+    ],
+    "loop": ["bars", "beats_per_bar"],
+    "output": ["peak_db"],
+    "soundbed": ["binaural_carrier_hz", "binaural_beat_hz", "binaural_gain_db"],
+}
+
+
+def test_the_fields_whose_names_hide_their_effect_carry_help():
+    """These are the controls a newcomer cannot guess from the label. The list
+    is deliberate and short: help on a field whose label already says it
+    teaches readers to skip the ones that matter."""
+    sections = config_schema()["sections"]
+    for section, names in NEEDS_HELP.items():
+        for name in names:
+            assert sections[section]["fields"][name].get("help", "").strip(), \
+                f"{section}.{name}"
+
+
+def test_help_says_something_the_label_does_not():
+    """A help string that restates the label is worse than none — it adds
+    height without information."""
+    sections = config_schema()["sections"]
+    for section, names in NEEDS_HELP.items():
+        for name in names:
+            aField = sections[section]["fields"][name]
+            assert aField["help"].strip().lower() != aField["label"].strip().lower()
+            assert len(aField["help"]) > len(aField["label"])
