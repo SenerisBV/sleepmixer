@@ -365,10 +365,10 @@ elm-test
   describe block is the preset bar's own suite: `presetById`/`lastUsed`
   resolving (and failing to resolve) an id against the current preset list,
   `applyPreset` carrying a song's loop region across while every other field
-  reverts to its default, the 409/400/network-error branches of saving a
-  preset each reading as a different sentence, and — in "the panel as it
-  renders" — every one of the bar's buttons and messages queried directly out
-  of `Main.view`, the same pattern the render panel established.
+  reverts to its default, the 409/400 branches of saving a preset each
+  reading as a different sentence, and — in "the bar as it renders" — every
+  one of the bar's buttons and messages queried directly out of `Main.view`,
+  the same pattern the render panel established.
 - `WarnTest.elm` — `Warn.forSource`, the one sentence shown before a long job
   starts. Every case asserts the sentence carries *this* file's length and the
   single-worker constraint, so a fixed string would fail: the whole reason the

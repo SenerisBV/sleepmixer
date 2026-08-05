@@ -778,8 +778,8 @@ one thing the schema is structurally unable to say: `config_schema()` walks
 label, min, max, step, choices, help — but it has no way to describe a
 *list*, and `MixConfig.stems` is a list of four differently-configured
 entries (`drums` disabled, `bass`'s decay disabled, `vocals` dissolving on an
-`exp` curve to 2200 Hz, `other` to 2400 Hz — see `config.py`'s note on
-`plan_stem_configs` and `ui/src/Config.elm`'s `fromSchema` docstring for the
+`exp` curve to 2200 Hz, `other` on a `linear` one to 2400 Hz — see
+`config.py:191-199` and `ui/src/Config.elm`'s `fromSchema` docstring for the
 full list). A schema can tell a mixer that a stem has an `enabled` field and
 what its bounds are; it cannot tell it that the shipped default has `drums`
 off and the other three on, because that's a value belonging to a specific
@@ -838,8 +838,11 @@ sound of every song that had ever been pointed at it, including ones tuned
 weeks earlier and long since considered finished. `PUT
 /api/songs/{id}/last-preset` only ever records an id for the mixer to show
 as "last used here" beside an Apply button; nothing reads it except that one
-line of UI, and nothing calls it except the save flow that just used a
-preset.
+line of UI. `Request.setLastPreset` has three call sites (`Main.elm`'s
+`PresetApplied`, `PresetSaved`, and `PresetUpdated` handlers) and the first of
+those is the one that matters most: "last used here" only means anything
+because *applying* a preset writes it, not only saving or updating one over
+an existing name. `Main.rememberPreset`'s own docstring says as much.
 
 **That id is intentionally not a foreign key, and deleting the preset it
 names is a normal, unremarkable event.** `PUT .../last-preset`'s own

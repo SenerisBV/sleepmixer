@@ -198,10 +198,11 @@ preset doesn't mention goes back to its default, except the loop region you've
 set for this particular song, which stays put, because a preset holds seconds
 of some other recording, not this one. A song remembers which preset it last
 had applied, and shows it as a line with an Apply button next to it — never
-applied by itself. Opening a song's mixer always starts from the same values
-`sleepmix render` would use, whether or not a preset was ever involved; editing
-a preset that several songs have used should not be able to silently reach
-into any of them.
+applied by itself. Opening a song's mixer starts from the same values
+`sleepmix render` would use, whether or not a preset was ever involved — unless
+the server's own defaults can't be fetched, in which case it opens at the
+schema's bare defaults instead and says so on screen; editing a preset that
+several songs have used should not be able to silently reach into any of them.
 
 What it still doesn't do: there is no screen for browsing or managing presets
 outside the mixer that's currently open, no import/export or sharing a preset
