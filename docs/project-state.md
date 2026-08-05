@@ -28,7 +28,15 @@ saved over instead of only ever created fresh, and closes a gap this document
 used to carry as open by adding `GET /api/config/default`, the route that lets
 a freshly opened mixer start from the same curated per-stem values
 `sleepmix render` does rather than from the schema's one identical setting for
-every stem. Read `docs/architecture.md` first for how the pieces fit
+every stem. Plan 3e (level-matching) was retired before implementation — see
+its entry under "Known weaknesses" — so the branch on top of 3d is Plan 3f
+(`feat/legibility`, 6 tasks), which writes no new feature at all: it makes the
+mixer explain itself. Every section carries a description that comes from the
+`config` dataclass's own docstring, and every control whose *name* states a
+mechanism rather than an outcome carries a line of help underneath it. Both
+were previously either absent or an `Attr.title` — a tooltip, which is nothing
+on a touchscreen, nothing to a keyboard, and nothing to anyone not hovering the
+exact element. Read `docs/architecture.md` first for how the pieces fit
 together; this document is about what's true right now, what was traded off
 to get here, and what's explicitly not done yet.
 
@@ -1748,3 +1756,84 @@ existing claim.
   *use*, not its *decode*. Same pattern, same low risk as the section-level
   version it sits beside — recorded so the asymmetry isn't mistaken for the
   top-level case being untested by design.
+
+**What Plan 3f's final whole-branch review changed.** Seven fixes, none of
+them a feature. Two of them were the branch undermining its own purpose, and
+both had the same shape: *the work was verified by reading it rather than by
+rendering or measuring it.*
+
+1. **The branch's own deliverable was illegible during the one window a
+   newcomer is guaranteed to read it.** Task 4 retargeted the inert-panel
+   opacity rule from `.field:has(:disabled)` to `.field-group:has(:disabled)`,
+   which pulled the new help text inside the dimmed scope for the first time —
+   under the old rule help was an `Attr.title` and there was nothing to dim.
+   `.field-help` is already `--dim` (`#8b8f98`); at `opacity: .45` over
+   `--bg` (`#17181b`) that composites to `#4b4e53`, **2.13:1** against 5.48:1
+   undimmed, on `.85rem` (12.75px) body text where WCAG AA wants 4.5:1 and
+   even AA-large wants 3:1. And `Wiring.enabled` is `Preview.isPlayable`,
+   false in `Cold` and `Warming`, so the whole settings panel is inert until
+   the first preview returns — minutes for a cold song. Reverted to `.field`.
+   The Task 4 comment's stated worry about compounding did not apply:
+   `.field-help` is a **sibling** of `.field`, not a descendant.
+2. **Task 5 was a measured no-op that marked a real gap closed.** Reverted,
+   with the measurement recorded in `_master_key`'s docstring and in item 3 of
+   the calibration-window list above. The same measurement also cleared the
+   three *other* `_master_key` omissions the Task 5 ledger note had recorded
+   as a second bug — they are not one.
+3. **The Mix section said the seed's purpose twice, three lines apart.**
+   `MixConfig.__doc__` explained the seed and so did the seed's own `help`,
+   and Mix renders exactly one control — 100% of the section restating 100%
+   of itself. Third instance of a shape Task 4 already found and fixed twice.
+   The description names the control; the control explains itself.
+4. **The mechanism paragraph of the entry Task 6 exists to get right was
+   false**, and four smaller figures in the same entry were wrong. Corrected
+   above, by direct measurement rather than by re-reasoning.
+5. **Two doc statements reversed or overstated what they described** — a
+   "normalize-then-fade" that is fade-then-normalize in the source, and three
+   summary sentences calling the renders resource entry closed when the entry
+   itself correctly says half.
+6. **The two suites disagreed about which fields carry help.**
+   `ui/tests/Fixtures.elm` gave `loop.bars` and `loop.beats_per_bar`
+   `"help": null` while `tests/test_config.py`'s `NEEDS_HELP` requires both
+   to carry one, so two Elm tests asserted the opposite of production — one of
+   them anchored on `Beats per bar` as an *example* of a field with nothing to
+   say. Five more fields diverged the same way. The fixture header now states
+   the rule: shortening the text is fine, changing whether there is text is
+   not. That test was also vacuous — deleting help rendering from the view
+   left it green — and now asserts both halves, proven by mutation in both
+   directions.
+7. **The decay panel, which the plan calls the heart of the tool, read as
+   three documents.** Three problems in one place, all created by prose
+   meeting a key-sorted grid:
+   - *"Requires headphones" four times running.* `Dict.toList` is key-sorted,
+     so Soundbed renders `binaural_beat_hz`, `binaural_carrier_hz`,
+     `binaural_enabled`, `binaural_gain_db` adjacent — and each of the four
+     help lines this branch added ended in the same two words, with the
+     *reason* arriving third. Said once now, in `SoundbedConfig`'s
+     description, which is read before any of the four; `binaural_enabled`
+     drops its help entirely, since the description now carries what it said.
+   - *Every decay pair renders end-before-start* — `amp_end_db` sorts before
+     `amp_start_db`, and likewise for dropout, lowpass, noise and spectral
+     hole — while `StemDecayConfig`'s description narrated five things "in
+     this order," an order the alphabetical grid does not show. The ordering
+     is pre-existing and **nothing in the audio path moved**; the prose was
+     reconciled to the screen instead, and now says outright that the five-step
+     order is the processing order, that the panel is alphabetical, and that
+     this is why each pair's end sits above its start.
+   - *The description's deictics pointed at nothing.* `stemsPanel` renders it
+     above the stem rows, but the values live behind a **closed**
+     `<details class="decay">` inside each row — so "Every value here has a
+     start and an end" and "Curve decides how that move is paced" were read
+     where there is no value and no Curve control. It was also a second
+     `.section-description` directly under the `stem` one with no heading
+     between them and nearly equal gaps, so the two read as one five-paragraph
+     essay whose second half opened on a headless fragment.
+     **Chosen: head it, and rewrite the deictics.** An `h4` reading `Decay`
+     now sits between the two descriptions — the same word as the `summary`
+     of the disclosure it describes, which is what turns the paragraph from a
+     continuation into a caption for something further down the page — and the
+     description points at "a stem's Decay panel" rather than at "here".
+     Moving it inside the disclosure was rejected because it would then repeat
+     once per stem, which is the reason it lives above the rows at all;
+     splitting it was rejected because the two halves are one thought. The
+     heading is asserted by a view test and verified by deletion.

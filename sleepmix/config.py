@@ -20,15 +20,18 @@ from typing import Any
 class StemDecayConfig:
     """How one stem falls apart across the length of the mix.
 
-    Every value here has a start and an end. A mix is one loop played over and
-    over, and as it plays each of these moves from its start toward its end, so
-    the loop erodes a little more every time round. Curve decides how that move
-    is paced: evenly the whole way, holding close to the start until a late
-    rush, or rushing away early and lingering near the end.
+    Every stem row has a Decay panel, and every value in it has a start and an
+    end. A mix is one loop played over and over, and as it plays each of these
+    moves from its start toward its end, so the loop erodes a little more every
+    time round. The Curve setting in that panel decides how the move is paced:
+    evenly the whole way, holding close to the start until a late rush, or
+    rushing away early and lingering near the end.
 
-    Five things happen to a stem, in this order: treble is filtered away,
-    notches are punched out of what is left, brief gaps are dropped in, the
-    level falls, and noise is mixed in underneath."""
+    Five things happen to a stem, and this is the order they happen in: treble
+    is filtered away, notches are punched out of what is left, brief gaps are
+    dropped in, the level falls, and noise is mixed in underneath. It is not
+    the order the panel lists them in — those controls are alphabetical, which
+    is also why each pair's end sits above its start."""
 
     enabled: bool = field(default=True, metadata={"label": "Enabled"})
     curve: str = field(default="linear", metadata={
@@ -208,29 +211,36 @@ class SoundbedConfig:
     """A continuous bed underneath the mix: noise, binaural tones, or both.
 
     Off by default. Mixed in when you render — previews never include it, so
-    turning it on changes nothing you can hear in the mixer."""
+    turning it on changes nothing you can hear in the mixer.
 
+    The binaural half needs headphones. It works by sending each ear a slightly
+    different tone and letting you hear the difference between them; a speaker
+    adds the two together before they reach you, and there is nothing left to
+    hear."""
+
+    # The four binaural fields sort next to each other in the mixer's
+    # key-ordered grid — beat_hz, carrier_hz, enabled, gain_db — so a
+    # "Requires headphones" tacked onto each help line read as the same two
+    # words four times running, with the *reason* arriving third. Said once
+    # above them instead, where it is read before any of the four.
     enabled: bool = field(default=False, metadata={"label": "Sound bed"})
     noise_type: str = field(default="pink", metadata={
         "label": "Noise type", "choices": ["pink", "brown", "white", "none"]})
     noise_gain_db: float = field(default=-34.0, metadata={
         "label": "Noise level", "unit": "dB", "min": -80.0, "max": 0.0, "step": 1.0})
     binaural_enabled: bool = field(default=False, metadata={
-        "label": "Binaural beats",
-        "help": "Requires headphones — binaural beats rely on each ear "
-                "receiving a different tone."})
+        "label": "Binaural beats"})
     binaural_carrier_hz: float = field(default=110.0, metadata={
         "label": "Carrier", "unit": "Hz", "min": 20.0, "max": 500.0, "step": 1.0,
         "help": "The tone the left ear hears; the right ear gets this plus "
-                "the beat frequency. Requires headphones."})
+                "the beat frequency."})
     binaural_beat_hz: float = field(default=2.5, metadata={
         "label": "Beat frequency", "unit": "Hz", "min": 0.5, "max": 30.0, "step": 0.1,
-        "help": "The difference between the two ears' tones, perceived as a "
-                "slow pulse. Requires headphones."})
+        "help": "The difference between the two ears' tones, which is what "
+                "you perceive as a slow pulse."})
     binaural_gain_db: float = field(default=-30.0, metadata={
         "label": "Binaural level", "unit": "dB", "min": -80.0, "max": 0.0, "step": 1.0,
-        "help": "How loud the binaural tones are under the mix. Requires "
-                "headphones."})
+        "help": "How loud the binaural tones sit under the mix."})
 
 
 @dataclass

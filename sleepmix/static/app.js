@@ -11974,6 +11974,7 @@ var $author$project$Page$Mixer$settingsPanel = F3(
 						$elm$core$Dict$toList(schema.A)))));
 	});
 var $elm$html$Html$h3 = _VirtualDom_node('h3');
+var $elm$html$Html$h4 = _VirtualDom_node('h4');
 var $author$project$Page$Mixer$sectionFields = F2(
 	function (name, schema) {
 		return A2(
@@ -12106,12 +12107,21 @@ var $author$project$Page$Mixer$stemsPanel = F4(
 						A2($author$project$Page$Mixer$sectionDescription, schema, 'stem')),
 					A2(
 						$elm$core$List$cons,
-						$author$project$Page$Mixer$descriptionBlock(
-							A2($author$project$Page$Mixer$sectionDescription, schema, 'stem_decay')),
 						A2(
-							$elm$core$List$indexedMap,
-							A4($author$project$Page$Mixer$stemRow, wiring, state, schema, onSolo),
-							state.bA.dT)))));
+							$elm$html$Html$h4,
+							_List_Nil,
+							_List_fromArray(
+								[
+									$elm$html$Html$text('Decay')
+								])),
+						A2(
+							$elm$core$List$cons,
+							$author$project$Page$Mixer$descriptionBlock(
+								A2($author$project$Page$Mixer$sectionDescription, schema, 'stem_decay')),
+							A2(
+								$elm$core$List$indexedMap,
+								A4($author$project$Page$Mixer$stemRow, wiring, state, schema, onSolo),
+								state.bA.dT))))));
 	});
 var $elm$core$Basics$negate = function (n) {
 	return -n;

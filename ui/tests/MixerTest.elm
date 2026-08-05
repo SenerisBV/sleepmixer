@@ -1323,6 +1323,22 @@ legibilitySuite =
                             , Selector.containing [ Selector.text "How one stem falls apart across the length of the mix" ]
                             ]
                         |> Query.count (Expect.equal 1)
+            , test "under a heading, so it is not read as more of the paragraph above it" <|
+                \_ ->
+                    -- Without this the two descriptions are consecutive
+                    -- `.section-description` blocks with no heading between
+                    -- them, and the decay paragraphs read as the second half
+                    -- of one essay about stems — a headless fragment about
+                    -- values that live behind a closed disclosure further
+                    -- down. Exactly one `h4` on the screen, and it says the
+                    -- same word as the disclosure it describes.
+                    warm
+                        |> screen
+                        |> Query.findAll [ Selector.tag "h4" ]
+                        |> Expect.all
+                            [ Query.count (Expect.equal 1)
+                            , Query.each (Query.has [ Selector.text "Decay" ])
+                            ]
             , test "with a row on screen for every stem, so once is not none" <|
                 \_ ->
                     warm

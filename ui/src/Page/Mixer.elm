@@ -41,7 +41,7 @@ here decides for itself whether it is usable.
 import Api
 import Config
 import Dict exposing (Dict)
-import Html exposing (Attribute, Html, button, details, div, h2, h3, input, label, option, p, span, summary, text)
+import Html exposing (Attribute, Html, button, details, div, h2, h3, h4, input, label, option, p, span, summary, text)
 import Html.Attributes as Attr exposing (class, disabled, type_)
 import Html.Events exposing (onCheck, onClick, onInput)
 import Http
@@ -1315,12 +1315,28 @@ to know what a row is before you touch one.
 They read in order on purpose. The `stem` description ends on stems eroding
 independently, which is exactly what the `stem_decay` description then
 explains.
+
+The `Decay` heading between them is not decoration. Without it the two
+descriptions are consecutive `.section-description` blocks with no heading
+between them and nearly equal gaps, so they read as one five-paragraph essay
+whose second half opens on a headless fragment about values the reader cannot
+see — the decay controls are behind a *closed* disclosure inside each row, so
+"every value in it has a start and an end" is read where there is no value and
+no Curve control. The heading is the same word as the `summary` of the
+disclosure it is describing, which is what turns the paragraph from a
+continuation into a caption for something further down the page.
+
+Moving the description into the disclosure instead was rejected for the reason
+above: it would be repeated once per stem. Splitting it was rejected because
+the two halves are one thought — a loop played over and over, eroding a little
+more each time.
 -}
 stemsPanel : Wiring msg -> State -> Schema.Schema -> (String -> msg) -> Html msg
 stemsPanel wiring state schema onSolo =
     div [ class "stems" ]
         (h3 [] [ text "Stems" ]
             :: descriptionBlock (sectionDescription schema "stem")
+            :: h4 [] [ text "Decay" ]
             :: descriptionBlock (sectionDescription schema "stem_decay")
             :: List.indexedMap (stemRow wiring state schema onSolo) state.config.stems
         )
