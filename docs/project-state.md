@@ -1097,9 +1097,12 @@ listed first, followed by Plan 2a (`feat/server-foundation`) items, followed
 by Plan 2b (`feat/interactive-server`) items, followed by Plan 3a
 (`feat/elm-shell`) items found during this plan's review, followed by Plan 3f
 (`feat/legibility`) items found during this plan's own final task, which is
-also where two long-false entries above (the renders resource problem, the
-`JobManager` leak) were finally retired and a third (the `shutil` import) was
-found alongside them.
+also where two stale entries above were caught up with the code: the
+`JobManager` leak, which is genuinely **closed**, and the renders resource
+problem, which is only **half** closed — there is a delete route now, but
+still no automatic pruning, no size cap and no retention policy, so read that
+entry rather than this sentence. A third (the `shutil` import) was found
+alongside them and is closed.
 
 - **Four things contribute to a render's final peak that `master_gain`'s
   calibration window never sees.** `preview.master_gain` measures one window,
@@ -1354,9 +1357,11 @@ found alongside them.
   test fixture rather than the mixer.
 
 - **Nothing is ever reclaimed, and the one that mattered most is now closed
-  halfway.** Ranked by how much it actually costs. Both of the first two were
-  found false, as recorded — closed by the same commit, `feat/render-queue`
-  (Plan 3c), never retired from this document until now.
+  halfway.** Ranked by how much it actually costs. The first two were both
+  addressed by the same commit, `feat/render-queue` (Plan 3c), and neither was
+  caught up with in this document until now — but they landed differently, and
+  the difference is the point of the heading: the second is closed, the first
+  is not. Read each entry, not this summary.
 
   ~~Render output files accumulate forever. There is no `DELETE
   /api/renders/{id}`, no pruning, no size cap and no retention policy.~~
@@ -1664,8 +1669,10 @@ found alongside them.
 
 **Plan 3f (`feat/legibility`) items, found during this plan's own final task.**
 Every entry above this point was checked against the code it describes as
-part of this pass; the two marked closed above (the render-file/JobManager
-resource entry and the `shutil` import) were found false and retired here.
+part of this pass; the entries marked closed above were caught up with here —
+the `JobManager` eviction leak and the `shutil` import fully, the render-file
+resource entry only halfway, since `DELETE /api/renders/{id}` now exists but
+automatic pruning, a size cap and a retention policy still do not.
 What follows is new — found while making that check, not a correction of an
 existing claim.
 
@@ -1673,7 +1680,10 @@ existing claim.
   in plan numbering between 3d and this one is not a mistake.**
   `docs/superpowers/specs/2026-08-05-level-matching-design.md` records why. It
   was going to fix the fade-ordering entry above by reordering
-  `pipeline.py`'s normalize-then-fade steps, on the strength of the same
+  `pipeline.py`'s fade-then-normalize steps (`sleepmix/pipeline.py:83-84`:
+  `_apply_fades` first, `normalize_peak` second — this sentence said
+  "normalize-then-fade", which is backwards, in the entry explaining the plan
+  to swap them), on the strength of the same
   attribution this task's own measurement has since shown does not hold. The
   retirement reasoning does not depend on which explanation is right, though,
   which is why it survives that correction: `preview.render_window` "applies
