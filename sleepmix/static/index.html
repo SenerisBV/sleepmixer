@@ -47,8 +47,10 @@
      Scoped to `.field` — the control and its label — and deliberately NOT to
      the `.field-group` that also holds the schema's line about the control.
      `.field-help` is already `--dim` (#8b8f98); at .45 over `--bg` that
-     composites to #4b4e53, **2.13:1** where the undimmed line is 5.48:1, on
-     .85rem (12.75px) text that AA wants at 4.5:1 and AA-large at 3:1. And
+     composites to about #4b4e53, **2.12:1** where the undimmed line is
+     5.48:1. `rem` resolves against the root element, not against `body`'s
+     15px, so .85rem here is 13.6px — normal-size text, well under the 24px
+     WCAG counts as large, so the bar is AA's 4.5:1 and not the 3:1. And
      `Wiring.enabled` is `Preview.isPlayable`, false in `Cold` and `Warming`,
      so the whole panel is inert until the first preview returns — minutes for
      a cold song, and the one stretch in which the reader has nothing to do

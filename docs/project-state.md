@@ -1158,12 +1158,14 @@ alongside them and is closed.
      measured in.** That config is a 30-second render — where an 8 s fade-in
      plus a 12 s fade-out cover 20 of the render's 30 total seconds, two
      thirds of the whole arc, not the 0.67% of a 20-minute arc that Plan 3f's
-     own design note assumed (`docs/superpowers/specs/2026-08-05-legibility-
-     design.md:147` and the plan at `:495`, which is where the figure comes
-     from — this entry never carried it, and Plan 3e's level-matching design
-     carries the same arithmetic without the percentage, at
-     `docs/superpowers/specs/2026-08-05-level-matching-design.md:21-23`). The
-     entry conflated "this
+     own design note assumed. That figure is not from this entry, which never
+     carried it; it is in
+     `docs/superpowers/specs/2026-08-05-legibility-design.md` (line 147) and
+     restated in `docs/superpowers/plans/2026-08-05-legibility.md` (line 495).
+     Plan 3e's level-matching design carries the same arithmetic without the
+     percentage, in
+     `docs/superpowers/specs/2026-08-05-level-matching-design.md` (lines
+     21-23). The entry conflated "this
      number is real" with "this number describes the mixer's actual default
      render" — only the first is true.
 
@@ -1223,16 +1225,39 @@ alongside them and is closed.
      mechanism is stronger. 0.741 s is 9% of the way into an 8-second
      fade-in, so the fade multiplies the loudest moment in the render by
      roughly a tenth. With fades zeroed, `normalize_peak` sees 1.106689 at
-     0.741 s. With `MixConfig`'s real 8 s/12 s defaults it sees **0.903449**,
-     relocated to **t = 8.343 s** — just past the end of the fade-in, which
-     is exactly where you would expect the surviving peak to land. That is a
-     peak ratio of 0.8164, or **+1.76 dB of extra gain applied to everything
-     else**, measured by direct comparison of the two `normalize_peak`
-     factors rather than by the RMS method the −1.82 dB above uses. Same
-     effect, same size, arrived at independently. So the original
-     fade-ordering story is a correct explanation for the signal it was
-     measured against; it just does not need the peak to be at t = 0, and
-     it never was. A real 2:43
+     0.741 s. With `MixConfig`'s real 8 s/12 s defaults it sees **0.896959**,
+     relocated to **t = 10.443 s** — not "just past the fade-in", which is
+     the tidy answer and the wrong one, but simply the loudest moment in the
+     un-attenuated middle of the arc, anywhere in the 8 s–18 s window where
+     neither fade reaches. (The signal at 8.343 s, where an earlier draft of
+     this paragraph put the surviving peak, is 0.109321 — not a peak at all.
+     That draft was measured against a 6-second source song's stand-in that
+     happened to be 8 seconds long; `conftest.fake_separate` derives its
+     sines from the source file's *length*, so a different-length input is a
+     different signal. It reproduced the pre-fade peak exactly, which is what
+     hid the error.) The peak ratio is 0.810489, or **1.83 dB of extra gain
+     applied to everything else.**
+
+     **That 1.83 dB is the same quantity as the −1.82 dB above, computed a
+     second way — not a second measurement of it.** It is worth being exact
+     about this, because the whole entry is about a number that was believed
+     for a branch on the strength of a story rather than an arithmetic check.
+     `_preview_to_render_ratio` divides a mastered preview's RMS by the
+     render's over the same region; the preview carries `master_gain` =
+     target ÷ peak-of-window and the render carries `normalize_peak`'s factor
+     = target ÷ peak-of-render, so the RMS ratio *is* peak-of-render ÷
+     peak-of-window. Dividing the recorded fades-on figure by the recorded
+     baseline therefore recovers the peak ratio directly:
+     0.8107466 ÷ 1.0003181 = 0.8104888, against 0.896959 ÷ 1.106689 =
+     0.8104888 measured — agreeing to nine significant figures because they
+     are one quantity expressed twice, and in dB because −1.8251 + 0.0028 =
+     −1.8223, the recorded figure exactly. **This confirms the arithmetic,
+     not the hypothesis.** What it rules out is a transcription or
+     methodology error in the recorded number; what it cannot do is tell you
+     *why* the peak moves, which is what the paragraph above had to measure.
+     So the original fade-ordering story is a correct explanation for the
+     signal it was measured against; it just does not need the peak to be at
+     t = 0, and it never was. A real 2:43
      recording has no such guarantee — its loudest moment is wherever the
      music happens to be loudest, and at this stem set that turns out to be
      3.65 s into the render's second pass through the loop, nowhere near
@@ -1328,11 +1353,31 @@ alongside them and is closed.
      and Plan 3f's Task 5 recorded that as a second real defect — that even
      with a perfect calibration window, a session would keep serving a stale
      gain after the operator moved the fade-in slider. **Measured, it does
-     not.** `render_window` at progress 0.0 gets `iteration = 0` and takes
-     the empty-context branch (`sleepmix/preview.py:196-199`), so it never
-     reaches the crossfade, the fades or the bed at all; the gain is
-     bit-identical with `cycle_crossfade_ms = 0`, with both fades zeroed,
-     with `soundbed.enabled = True`, and with `duration_min = 40`. **The
+     not:** the gain is bit-identical with `cycle_crossfade_ms = 0`, with
+     both fades zeroed, with `soundbed.enabled = True`, and with
+     `duration_min = 40`.
+
+     **Two different reasons, and an earlier draft of this paragraph got
+     both wrong** — in the entry whose whole lesson is *measure, do not
+     trace*. It said `render_window` "takes the empty-context branch
+     (`sleepmix/preview.py:196-199`), so it never reaches the crossfade, the
+     fades or the bed." Those lines are `_reverbed_window`'s reverb-context
+     branch, which has nothing to do with fades or the bed, and
+     `cycle_crossfade_ms` **is** read on the preview path. The real reasons:
+     - *The fades and the bed.* `sleepmix/preview.py` imports no fade
+       function, no `normalize_peak` and no `build_soundbed` at all. Those
+       three stages exist only in `pipeline.run_pipeline`, so
+       `render_window` cannot see them at any progress, not merely at 0.
+     - *The crossfade.* `preview_iteration_index` does pass
+       `cfg.output.cycle_crossfade_ms` to `plan_iterations`
+       (`sleepmix/preview.py:38-39`), so changing it genuinely changes
+       `n_iterations`. It still cannot move the calibration window, because
+       `decayed_iteration` computes `progress = iteration / max(n_iterations
+       - 1, 1)` (`sleepmix/disintegration.py:145`) — which is 0 at iteration
+       0 for every `n_iterations`. The window is the undecayed loop either
+       way.
+
+     **The
      memo is sound as written and these four fields must not be added to
      `_master_key`** — doing so would buy nothing and cost a calibration
      window each, which is how item 3 got closed wrongly the first time.
@@ -1768,9 +1813,11 @@ rendering or measuring it.*
    which pulled the new help text inside the dimmed scope for the first time —
    under the old rule help was an `Attr.title` and there was nothing to dim.
    `.field-help` is already `--dim` (`#8b8f98`); at `opacity: .45` over
-   `--bg` (`#17181b`) that composites to `#4b4e53`, **2.13:1** against 5.48:1
-   undimmed, on `.85rem` (12.75px) body text where WCAG AA wants 4.5:1 and
-   even AA-large wants 3:1. And `Wiring.enabled` is `Preview.isPlayable`,
+   `--bg` (`#17181b`) that composites to about `#4b4e53`, **2.12:1** against
+   5.48:1 undimmed. `rem` resolves against the root element, not against
+   `body`'s 15px, so `.85rem` is 13.6px — normal-size text, well under the
+   24px WCAG counts as large, so the bar is AA's 4.5:1, not the 3:1.
+   And `Wiring.enabled` is `Preview.isPlayable`,
    false in `Cold` and `Warming`, so the whole settings panel is inert until
    the first preview returns — minutes for a cold song. Reverted to `.field`.
    The Task 4 comment's stated worry about compounding did not apply:
@@ -1786,7 +1833,13 @@ rendering or measuring it.*
    of itself. Third instance of a shape Task 4 already found and fixed twice.
    The description names the control; the control explains itself.
 4. **The mechanism paragraph of the entry Task 6 exists to get right was
-   false**, and four smaller figures in the same entry were wrong. Corrected
+   false**, and four smaller figures in the same entry were wrong. The fix
+   wave's own first attempt at this then got the post-fade half wrong as well
+   — it measured against a stand-in song of the wrong length, reproduced the
+   *pre*-fade peak exactly, and took that as confirmation — and claimed the
+   peak comparison corroborated the RMS one independently when the two are
+   algebraically the same quantity. Both were caught in re-review and are
+   corrected
    above, by direct measurement rather than by re-reasoning.
 5. **Two doc statements reversed or overstated what they described** — a
    "normalize-then-fade" that is fade-then-normalize in the source, and three

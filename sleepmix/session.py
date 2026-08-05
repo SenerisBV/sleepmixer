@@ -164,9 +164,18 @@ class RenderSession:
         a whole extra calibration window on a rate change, which is the exact
         cost this docstring exists to avoid. The same measurement clears
         ``fade_in_s``/``fade_out_s``, ``cycle_crossfade_ms`` and
-        ``config.soundbed`` for the same reason — ``render_window`` at progress
-        0 takes the iteration-0 branch and touches none of them. See the
-        level-matching entry in ``docs/project-state.md``."""
+        ``config.soundbed`` — all three are bit-identical too — but for two
+        different reasons, and it is worth stating them properly rather than
+        waving at a branch. The fades and the bed: ``preview.py`` imports no
+        fade function, no ``normalize_peak`` and no ``build_soundbed`` at all,
+        so ``render_window`` cannot see any of them at any progress. The
+        crossfade: ``cycle_crossfade_ms`` *is* read on the preview path —
+        ``preview_iteration_index`` passes it to ``plan_iterations`` — but it
+        only changes ``n_iterations``, and ``decayed_iteration`` computes
+        ``progress = iteration / max(n_iterations - 1, 1)``
+        (``disintegration.py:145``), which is 0 at iteration 0 whatever
+        ``n_iterations`` turns out to be. See the level-matching entry in
+        ``docs/project-state.md``."""
         return (
             tuple(sorted(asdict(config.reverb).items())),
             config.output.peak_db,

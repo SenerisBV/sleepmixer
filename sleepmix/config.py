@@ -214,9 +214,10 @@ class SoundbedConfig:
     turning it on changes nothing you can hear in the mixer.
 
     The binaural half needs headphones. It works by sending each ear a slightly
-    different tone and letting you hear the difference between them; a speaker
-    adds the two together before they reach you, and there is nothing left to
-    hear."""
+    different tone and letting your hearing find the difference between them.
+    Over speakers the two tones reach both ears and simply add up, which you
+    hear as an ordinary throbbing chord — audible, but not the effect this is
+    for."""
 
     # The four binaural fields sort next to each other in the mixer's
     # key-ordered grid — beat_hz, carrier_hz, enabled, gain_db — so a
