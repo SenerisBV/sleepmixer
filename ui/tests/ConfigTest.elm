@@ -277,6 +277,17 @@ overlaySuite =
                     |> Config.overlay Fixtures.schema (json """{"seed": 7}""")
                     |> Config.valueAt (Config.Top "seed")
                     |> Expect.equal (Just (Config.IntValue 7))
+        , test "a value lands even where the base has no key to overwrite" <|
+            \_ ->
+                -- `loop.start_s`'s schema default is `null`, so `fromSchema`
+                -- never gives the base a key for it at all — there is nothing
+                -- for a `Dict.map` over the base to replace. The schema, not
+                -- the base's current shape, has to be what decides this key
+                -- may exist.
+                Config.fromSchema Fixtures.schema [ "vocals" ]
+                    |> Config.overlay Fixtures.schema (json """{"loop": {"start_s": 12.5}}""")
+                    |> Config.valueAt (Config.InSection "loop" "start_s")
+                    |> Expect.equal (Just (Config.FloatValue 12.5))
         , test "a value the JSON omits keeps the base's" <|
             \_ ->
                 Config.fromSchema Fixtures.schema [ "vocals" ]

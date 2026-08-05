@@ -377,16 +377,28 @@ clampTo low high value =
 {-| Take a config as JSON — a preset, or the server's own defaults — and lay it
 over a base config.
 
-Every key the JSON carries replaces the base's; every key it does not carries
-the base's through. Callers always pass `fromSchema`'s output as the base, so
-"a field this preset does not mention" means "that field's default" rather than
-"whatever happened to be on screen". Apply means *make it look like this*, not
-*merge this in*: a preset saved before a field existed would otherwise leave
-that field holding a value from a recipe the operator believes they replaced,
-with nothing on screen saying which control came from where.
+Every key the JSON carries *and the schema describes* replaces the base's —
+inserting it if the base did not already have it, not merely overwriting a key
+that was there. That distinction matters because `fromSchema` leaves a field
+absent whenever the schema's own default is `null` (`loop.start_s` and
+`loop.end_s`, today): the base genuinely has no key for them, so a `Dict.map`
+over the base's existing keys could never introduce one, and a preset or a
+server default carrying a concrete value for one of those fields would land
+silently as a no-op. The schema, not the base's current shape, is what decides
+which keys may exist; the base only decides what they hold when the JSON is
+silent.
 
-Keys the schema does not describe are ignored, which is what lets a preset
-written by an older or newer build load rather than fail.
+Every key the JSON does not carry keeps the base's value untouched. Callers
+always pass `fromSchema`'s output as the base, so "a field this preset does
+not mention" means "that field's default" rather than "whatever happened to be
+on screen". Apply means *make it look like this*, not *merge this in*: a
+preset saved before a field existed would otherwise leave that field holding a
+value from a recipe the operator believes they replaced, with nothing on
+screen saying which control came from where.
+
+A key the schema does not describe is ignored regardless of which side has
+it, which is what lets a preset written by an older or newer build load rather
+than fail.
 
 Values go through `parse`, the same function every typed control uses, so the
 schema's bounds and choice lists are enforced in exactly one place. A preset
@@ -445,7 +457,14 @@ overlayStem schema incoming index stem =
 
         Just entry ->
             { stem
-                | fields = overlayValues schema (InStem index) entry stem.fields
+                | fields =
+                    -- `name` identifies the stem rather than being something
+                    -- you pick, so it is stripped before overlaying — the
+                    -- same reason `stemFor` never puts it in `fields` to begin
+                    -- with. Left in, the schema-authority insert below would
+                    -- happily add it back, and `encode` would then write
+                    -- `name` twice.
+                    overlayValues schema (InStem index) (Dict.remove "name" entry) stem.fields
                 , decay =
                     overlayValues schema
                         (InStemDecay index)
@@ -456,16 +475,29 @@ overlayStem schema incoming index stem =
 
 overlayValues : Schema.Schema -> (String -> Target) -> Dict String Decode.Value -> Values -> Values
 overlayValues schema toTarget incoming existing =
-    Dict.map
-        (\key current ->
-            Maybe.withDefault current
-                (Maybe.map2 Tuple.pair
-                    (Dict.get key incoming)
-                    (specAt schema (toTarget key))
-                    |> Maybe.andThen (\( rawValue, spec ) -> fromJson spec rawValue)
-                )
+    -- Folding over `incoming` rather than mapping over `existing` is the
+    -- whole fix: `existing` can lack a key entirely (a `null`-default field
+    -- is absent from `fromSchema`'s output, not present-and-empty), and a
+    -- `Dict.map` can only ever change a value already there, never introduce
+    -- one. The schema is the authority on which keys may land — a key it
+    -- does not describe is skipped whether or not `existing` already has it,
+    -- which keeps a key the schema does not describe from being carried.
+    Dict.foldl
+        (\key rawValue acc ->
+            case specAt schema (toTarget key) of
+                Nothing ->
+                    acc
+
+                Just spec ->
+                    case fromJson spec rawValue of
+                        Just value ->
+                            Dict.insert key value acc
+
+                        Nothing ->
+                            acc
         )
         existing
+        incoming
 
 
 {-| One JSON value, through the schema's own parser.
