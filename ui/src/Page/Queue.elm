@@ -389,9 +389,11 @@ row config aJob =
 enforces it.
 
 `queue-bad` rather than the page's existing `.error` for the same reason
-`.render-bad` exists: both would be single-class selectors, so whichever the
-stylesheet states last wins, and a failed job would read in the grey of a
-waiting one.
+`.render-bad` exists, and with the same correction: the stylesheet writes
+`.queue .queue-status` (0-2-0) and `.error` is 0-1-0, so `.error` on a status
+span loses on **specificity** wherever it is stated. Order has nothing to do
+with it; a failed job would read in the grey of a waiting one however the file
+were arranged.
 -}
 statusClass : Api.JobStatus -> List (Attribute msg)
 statusClass status =

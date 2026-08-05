@@ -583,9 +583,13 @@ row config render =
 enforces it.
 
 `render-bad` rather than the page's existing `.error`, and that is a selector
-decision rather than a naming one: `.error` and `.render-status` are both
-single-class rules, so whichever the stylesheet states second wins, and a
-failed render would read in the dim of an ordinary one.
+decision rather than a naming one. The stylesheet writes the status rule as
+`.renders .render-status`, which is 0-2-0; `.error` is 0-1-0. So `.error` added
+to a status span loses on **specificity**, not on order — stating it later in
+the file would not rescue it, and a failed render would read in the dim of an
+ordinary one however the stylesheet were arranged. A second class scoped the
+same way the status is, `.renders .render-bad`, ties on specificity and wins on
+order, which is a thing the file can actually control.
 -}
 statusClass : Api.RenderStatus -> List (Attribute msg)
 statusClass status =

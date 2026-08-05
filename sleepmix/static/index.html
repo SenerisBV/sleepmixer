@@ -205,10 +205,13 @@
                            letter-spacing: .02em; overflow: hidden;
                            text-overflow: ellipsis; white-space: nowrap; }
   .renders .render-status { color: var(--dim); }
-  /* Its own class rather than reusing `.error`: both are single-class
-     selectors, so whichever this file states last would win, and a failed
-     render reading in the same grey as a queued one is exactly the kind of
-     silence the rest of this interface is built to avoid. */
+  /* Its own class rather than reusing `.error`, and the reason is specificity
+     rather than order: `.error` is 0-1-0 and `.renders .render-status` is
+     0-2-0, so `.error` on a status span loses wherever this file states it —
+     moving it later would not help. A failed render reading in the same grey
+     as a queued one is exactly the kind of silence the rest of this interface
+     is built to avoid, so the colour is carried by a class scoped the same way
+     the status is. */
   .renders .render-bad { color: #f7768e; }
   .renders .render-when { color: var(--dim); font-variant-numeric: tabular-nums;
                           font-size: .9rem; white-space: nowrap; }
@@ -263,8 +266,9 @@
                         text-overflow: ellipsis; white-space: nowrap; }
   .queue .queue-status { color: var(--dim); white-space: nowrap; }
   /* Its own class rather than reusing `.error`, for the reason `.render-bad`
-     gives: both would be single-class selectors and the last one stated would
-     win, so a failed job would read in the same grey as a waiting one. */
+     gives: `.error` is 0-1-0 and `.queue .queue-status` is 0-2-0, so `.error`
+     on a status span loses on specificity wherever it is stated, and a failed
+     job would read in the same grey as a waiting one. */
   .queue .queue-bad { color: #f7768e; }
   .queue .queue-when { color: var(--dim); font-variant-numeric: tabular-nums;
                        font-size: .9rem; white-space: nowrap; }
