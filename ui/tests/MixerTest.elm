@@ -1261,11 +1261,66 @@ presetSuite =
                         |> Expect.equal (Just (Ok 30))
             , test "an id the list no longer has changes nothing" <|
                 \_ ->
+                    -- The speed is moved off its default first, so that a
+                    -- branch which reset the config wholesale would fail here
+                    -- rather than land back on the value it started at.
                     warm
+                        |> step (Main.FieldChanged (Config.InSection "tempo" "speed") "0.9")
                         |> withPresets
                         |> step (Main.PresetApplied "preset-gone")
                         |> carried (Decode.at [ "tempo", "speed" ] Decode.float)
-                        |> Expect.equal (Just (Ok 0.7))
+                        |> Expect.equal (Just (Ok 0.9))
+            ]
+        , describe "an answer that outlives the mixer that asked for it"
+            -- The window is the same one `PendingRender` exists for: a POST
+            -- from song A's bar answering after song B's mixer has opened. The
+            -- song is named when the request goes out, so none of these can
+            -- land on whichever screen happens to be up.
+            [ test "a save does not move another song's select" <|
+                \_ ->
+                    warm
+                        |> step (Main.PresetNameChanged "Gentle")
+                        |> step Main.SavePresetAs
+                        |> openSong songB
+                        |> step (Main.PresetSaved "song-1" (Ok gentle))
+                        |> withPresets
+                        |> .mixer
+                        |> Maybe.andThen (Mixer.selection presets)
+                        |> Expect.equal Nothing
+            , test "and does move the select of the song that asked" <|
+                \_ ->
+                    -- The control for the assertion above: same answer, same
+                    -- song, nobody having navigated away.
+                    warm
+                        |> step (Main.PresetNameChanged "Gentle")
+                        |> step Main.SavePresetAs
+                        |> step (Main.PresetSaved "song-1" (Ok gentle))
+                        |> withPresets
+                        |> .mixer
+                        |> Maybe.andThen (Mixer.selection presets)
+                        |> Maybe.map .name
+                        |> Expect.equal (Just "Gentle")
+            , test "a refused save is not reported on another song's bar" <|
+                \_ ->
+                    warm
+                        |> step Main.SavePresetAs
+                        |> openSong songB
+                        |> step (Main.PresetSaved "song-1" (Err (Http.BadStatus 409)))
+                        |> .presetProblem
+                        |> Expect.equal Nothing
+            , test "nor is a failure to remember which preset was applied" <|
+                \_ ->
+                    warm
+                        |> openSong songB
+                        |> step (Main.LastPresetSet "song-1" (Err Http.NetworkError))
+                        |> .presetProblem
+                        |> Expect.equal Nothing
+            , test "though the song it happened on is told" <|
+                \_ ->
+                    warm
+                        |> step (Main.LastPresetSet "song-1" (Err Http.NetworkError))
+                        |> .presetProblem
+                        |> Expect.notEqual Nothing
             ]
         , describe "saving one"
             [ test "a name with nothing but spaces in it is not a name" <|
@@ -1280,21 +1335,21 @@ presetSuite =
             , test "a name already taken says so rather than failing silently" <|
                 \_ ->
                     warm
-                        |> step (Main.PresetSaved (Err (Http.BadStatus 409)))
+                        |> step (Main.PresetSaved "song-1" (Err (Http.BadStatus 409)))
                         |> .presetProblem
                         |> Maybe.map (String.contains "already a preset")
                         |> Expect.equal (Just True)
             , test "a config the server refuses says that instead" <|
                 \_ ->
                     warm
-                        |> step (Main.PresetSaved (Err (Http.BadStatus 400)))
+                        |> step (Main.PresetSaved "song-1" (Err (Http.BadStatus 400)))
                         |> .presetProblem
                         |> Maybe.map (String.contains "refused")
                         |> Expect.equal (Just True)
             , test "a preset that saved becomes the selected one" <|
                 \_ ->
                     warm
-                        |> step (Main.PresetSaved (Ok gentle))
+                        |> step (Main.PresetSaved "song-1" (Ok gentle))
                         |> withPresets
                         |> .mixer
                         |> Maybe.andThen (Mixer.selection presets)
@@ -1304,7 +1359,7 @@ presetSuite =
                 \_ ->
                     warm
                         |> step (Main.PresetNameChanged "Gentle")
-                        |> step (Main.PresetSaved (Ok gentle))
+                        |> step (Main.PresetSaved "song-1" (Ok gentle))
                         |> .mixer
                         |> Maybe.andThen Mixer.newPresetName
                         |> Expect.equal Nothing
@@ -1337,14 +1392,14 @@ presetSuite =
                     -- `GotPresets` that cleared the message would wipe the
                     -- sentence in the same breath as writing it.
                     chosen
-                        |> step (Main.PresetDeleted (Err (Http.BadStatus 500)))
+                        |> step (Main.PresetDeleted "song-1" (Err (Http.BadStatus 500)))
                         |> withPresets
                         |> .presetProblem
                         |> Expect.notEqual Nothing
             , test "and a message from one visit to the bar does not survive into the next" <|
                 \_ ->
                     warm
-                        |> step (Main.PresetSaved (Err (Http.BadStatus 409)))
+                        |> step (Main.PresetSaved "song-1" (Err (Http.BadStatus 409)))
                         |> step Main.CloseMixer
                         |> step Main.OpenMixer
                         |> .presetProblem
@@ -1352,7 +1407,7 @@ presetSuite =
             , test "a preset deleted leaves nothing selected" <|
                 \_ ->
                     chosen
-                        |> step (Main.PresetDeleted (Ok ()))
+                        |> step (Main.PresetDeleted "song-1" (Ok ()))
                         |> .mixer
                         |> Maybe.andThen (Mixer.selection presets)
                         |> Expect.equal Nothing
@@ -1371,6 +1426,22 @@ presetSuite =
                     onDefaults
                         |> carried (Decode.field "seed" Decode.int)
                         |> Expect.equal (Just (Ok 7))
+            , test "a fetch that failed at startup does not doom every later mixer" <|
+                \_ ->
+                    -- The half of the retry a test can reach. `Cmd` has no
+                    -- equality in Elm, so nothing here can observe that
+                    -- `OpenMixer` re-issues `Request.defaultConfig`; what it
+                    -- can observe is that an answer arriving later is adopted
+                    -- and the *next* mixer opens on it, which is what the note
+                    -- on screen promises when it says to leave and come back.
+                    onSong song
+                        |> step (Main.GotDefaultConfig (Err Http.NetworkError))
+                        |> step Main.OpenMixer
+                        |> step Main.CloseMixer
+                        |> step (Main.GotDefaultConfig (Ok serverDefaults))
+                        |> step Main.OpenMixer
+                        |> carried (stemField 1 "enabled" Decode.bool)
+                        |> Expect.equal (Just (Ok False))
             , test "and a fetch that failed falls back to the schema's" <|
                 \_ ->
                     onSong song
@@ -1512,7 +1583,7 @@ presetSuite =
             , test "a failed save says so where the buttons are" <|
                 \_ ->
                     warm
-                        |> step (Main.PresetSaved (Err (Http.BadStatus 409)))
+                        |> step (Main.PresetSaved "song-1" (Err (Http.BadStatus 409)))
                         |> screen
                         |> Query.find [ Selector.class "presets" ]
                         |> Query.has [ Selector.text "already a preset" ]
@@ -1522,6 +1593,35 @@ presetSuite =
                         |> screen
                         |> Query.find [ Selector.class "mixer-defaults" ]
                         |> Query.has [ Selector.text "schema" ]
+            , test "and says why the server's own could not be fetched" <|
+                \_ ->
+                    -- The bar says *that* it fell back; this is the only thing
+                    -- that says why, and without it "hasn't arrived yet" and
+                    -- "the fetch failed" read identically on screen.
+                    onSong song
+                        |> step (Main.GotDefaultConfig (Err (Http.BadStatus 500)))
+                        |> step Main.OpenMixer
+                        |> screen
+                        |> Query.has [ Selector.text "default config could not be fetched" ]
+            , test "a mixer still preparing says so rather than only asking for a choice" <|
+                \_ ->
+                    -- Readiness before selection: with nothing chosen and the
+                    -- first preview still out, both Apply buttons are inert for
+                    -- the same reason, and it is that reason the screen owes an
+                    -- explanation for.
+                    opened
+                        |> withPresets
+                        |> screen
+                        |> Query.find [ Selector.class "presets" ]
+                        |> Query.has [ Selector.text "still preparing" ]
+            , test "and the last used line's Apply is inert then too" <|
+                \_ ->
+                    onSong { song | lastPresetId = Just "preset-2" }
+                        |> step Main.OpenMixer
+                        |> withPresets
+                        |> screen
+                        |> Query.find [ Selector.class "preset-last-apply" ]
+                        |> Query.has [ Selector.disabled True ]
             , test "and one opened with them says nothing" <|
                 \_ ->
                     onDefaults

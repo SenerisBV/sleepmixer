@@ -6667,7 +6667,7 @@ var $author$project$Request$songs = function (toMsg) {
 };
 var $author$project$Main$init = function (_v0) {
 	return _Utils_Tuple2(
-		{X: $elm$core$Maybe$Nothing, aw: $author$project$Main$DefaultsLoading, P: $elm$core$Maybe$Nothing, aK: $author$project$Main$Checking, aL: $elm$core$Maybe$Nothing, Z: false, am: $author$project$Page$Library$Loading, _: $elm$core$Maybe$Nothing, an: $elm$core$Maybe$Nothing, aN: 0, aa: $elm$core$Maybe$Nothing, f: $elm$core$Maybe$Nothing, aP: 1, ac: '', ad: _List_Nil, az: $elm$core$Maybe$Nothing, a1: 0, k: $elm$core$Maybe$Nothing, af: _List_Nil, q: $author$project$Preview$Cold, R: $elm$core$Maybe$Nothing, J: $elm$core$Maybe$Nothing, E: $elm$core$Maybe$Nothing, a2: 0, ag: $elm$core$Maybe$Nothing, S: _List_Nil, T: $elm$core$Maybe$Nothing, r: $elm$core$Maybe$Nothing, K: $elm$core$Maybe$Nothing, aC: $elm$core$Maybe$Nothing, c: $author$project$Main$Idle, U: $author$project$Main$SettingsLoading, ar: $elm$core$Maybe$Nothing, aR: 0, as: $elm$core$Maybe$Nothing, m: $elm$core$Maybe$Nothing},
+		{X: $elm$core$Maybe$Nothing, aw: $author$project$Main$DefaultsLoading, P: $elm$core$Maybe$Nothing, aK: $author$project$Main$Checking, aL: $elm$core$Maybe$Nothing, Z: false, am: $author$project$Page$Library$Loading, _: $elm$core$Maybe$Nothing, an: $elm$core$Maybe$Nothing, aN: 0, aa: $elm$core$Maybe$Nothing, g: $elm$core$Maybe$Nothing, aP: 1, ac: '', ad: _List_Nil, az: $elm$core$Maybe$Nothing, a1: 0, l: $elm$core$Maybe$Nothing, af: _List_Nil, q: $author$project$Preview$Cold, R: $elm$core$Maybe$Nothing, J: $elm$core$Maybe$Nothing, E: $elm$core$Maybe$Nothing, a2: 0, ag: $elm$core$Maybe$Nothing, S: _List_Nil, T: $elm$core$Maybe$Nothing, r: $elm$core$Maybe$Nothing, K: $elm$core$Maybe$Nothing, aC: $elm$core$Maybe$Nothing, c: $author$project$Main$Idle, U: $author$project$Main$SettingsLoading, ar: $elm$core$Maybe$Nothing, aR: 0, as: $elm$core$Maybe$Nothing, m: $elm$core$Maybe$Nothing},
 		$elm$core$Platform$Cmd$batch(
 			_List_fromArray(
 				[
@@ -6857,6 +6857,10 @@ var $author$project$Main$Imported = function (a) {
 var $author$project$Main$JobCancelSent = function (a) {
 	return {$: 39, a: a};
 };
+var $author$project$Main$LastPresetSet = F2(
+	function (a, b) {
+		return {$: 52, a: a, b: b};
+	});
 var $author$project$Page$Library$Loaded = function (a) {
 	return {$: 1, a: a};
 };
@@ -6867,15 +6871,18 @@ var $author$project$Page$Renders$Loaded = function (a) {
 	return {$: 1, a: a};
 };
 var $author$project$Page$Queue$Loading = {$: 0};
-var $author$project$Main$PresetDeleted = function (a) {
-	return {$: 51, a: a};
-};
-var $author$project$Main$PresetSaved = function (a) {
-	return {$: 46, a: a};
-};
-var $author$project$Main$PresetUpdated = function (a) {
-	return {$: 49, a: a};
-};
+var $author$project$Main$PresetDeleted = F2(
+	function (a, b) {
+		return {$: 51, a: a, b: b};
+	});
+var $author$project$Main$PresetSaved = F2(
+	function (a, b) {
+		return {$: 46, a: a, b: b};
+	});
+var $author$project$Main$PresetUpdated = F2(
+	function (a, b) {
+		return {$: 49, a: a, b: b};
+	});
 var $author$project$Main$Ready = function (a) {
 	return {$: 1, a: a};
 };
@@ -8267,14 +8274,14 @@ var $author$project$Main$stopPreview = _Platform_outgoingPort(
 		return $elm$json$Json$Encode$null;
 	});
 var $author$project$Main$leaveMixer = function (model) {
-	var _v0 = model.f;
+	var _v0 = model.g;
 	if (_v0.$ === 1) {
 		return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 	} else {
 		return _Utils_Tuple2(
 			_Utils_update(
 				model,
-				{aa: $elm$core$Maybe$Nothing, f: $elm$core$Maybe$Nothing, k: $elm$core$Maybe$Nothing, q: $author$project$Preview$Cold, R: $elm$core$Maybe$Nothing, ag: $elm$core$Maybe$Nothing}),
+				{aa: $elm$core$Maybe$Nothing, g: $elm$core$Maybe$Nothing, l: $elm$core$Maybe$Nothing, q: $author$project$Preview$Cold, R: $elm$core$Maybe$Nothing, ag: $elm$core$Maybe$Nothing}),
 			$author$project$Main$stopPreview(0));
 	}
 };
@@ -8336,8 +8343,19 @@ var $author$project$Main$mapMixer = F2(
 		return _Utils_update(
 			model,
 			{
-				f: A2($elm$core$Maybe$map, change, model.f)
+				g: A2($elm$core$Maybe$map, change, model.g)
 			});
+	});
+var $author$project$Main$mixerOpenFor = F2(
+	function (songId, model) {
+		return _Utils_eq(
+			A2(
+				$elm$core$Maybe$map,
+				function ($) {
+					return $.ci;
+				},
+				model.g),
+			$elm$core$Maybe$Just(songId));
 	});
 var $author$project$Page$Mixer$newPresetName = function (state) {
 	var _v0 = $elm$core$String$trim(state.aA);
@@ -8613,7 +8631,7 @@ var $author$project$Main$refetchLoopFor = F2(
 		var _v0 = _Utils_Tuple3(
 			$author$project$Main$isLoopRegion(target),
 			model.K,
-			model.f);
+			model.g);
 		if ((_v0.a && (!_v0.b.$)) && (!_v0.c.$)) {
 			var songId = _v0.b.a;
 			var state = _v0.c.a;
@@ -8633,9 +8651,6 @@ var $author$project$Main$refetchLoopFor = F2(
 			return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 		}
 	});
-var $author$project$Main$LastPresetSet = function (a) {
-	return {$: 52, a: a};
-};
 var $author$project$Request$setLastPreset = F3(
 	function (songId, presetId, toMsg) {
 		return $elm$http$Http$request(
@@ -8663,36 +8678,15 @@ var $author$project$Request$setLastPreset = F3(
 					_List_Nil)
 			});
 	});
-var $author$project$Main$rememberPresetCmd = F2(
-	function (presetId, model) {
-		var _v0 = model.f;
-		if (!_v0.$) {
-			var state = _v0.a;
-			return A3(
-				$author$project$Request$setLastPreset,
-				state.ci,
-				$elm$core$Maybe$Just(presetId),
-				$author$project$Main$LastPresetSet);
-		} else {
-			return $elm$core$Platform$Cmd$none;
-		}
-	});
-var $author$project$Main$rememberPreset = F2(
-	function (presetId, model) {
+var $author$project$Main$rememberPreset = F3(
+	function (songId, presetId, model) {
 		return _Utils_Tuple2(
 			model,
-			A2($author$project$Main$rememberPresetCmd, presetId, model));
-	});
-var $author$project$Main$mixerOpenFor = F2(
-	function (songId, model) {
-		return _Utils_eq(
-			A2(
-				$elm$core$Maybe$map,
-				function ($) {
-					return $.ci;
-				},
-				model.f),
-			$elm$core$Maybe$Just(songId));
+			A3(
+				$author$project$Request$setLastPreset,
+				songId,
+				$elm$core$Maybe$Just(presetId),
+				$author$project$Main$LastPresetSet(songId)));
 	});
 var $author$project$Main$renderAnswered = F3(
 	function (pending, result, model) {
@@ -8828,7 +8822,7 @@ var $author$project$Page$Mixer$saveMessage = F2(
 					case 409:
 						return 'There is already a preset with that name. Pick another, or select ' + 'that one and use Save over to replace what it holds.';
 					case 400:
-						return 'The server refused that config — ' + (detail + ('. It validates a preset before storing it, so that a recipe ' + 'which could never render fails here rather than at render time.'));
+						return 'The server refused that config. It validates a preset before ' + ('storing it, so a recipe that could never render fails here ' + ('rather than at render time — but it says why in its own log ' + 'and not in an answer this screen can read.'));
 					case 404:
 						return 'That preset is no longer there — it was deleted while this screen ' + 'was open.';
 					default:
@@ -9164,7 +9158,7 @@ var $author$project$Preview$warmed = function (state) {
 };
 var $author$project$Main$withMixer = F2(
 	function (change, model) {
-		var _v0 = model.f;
+		var _v0 = model.g;
 		if (_v0.$ === 1) {
 			return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 		} else {
@@ -9175,7 +9169,7 @@ var $author$project$Main$withMixer = F2(
 					_Utils_update(
 						model,
 						{
-							f: $elm$core$Maybe$Just(updated)
+							g: $elm$core$Maybe$Just(updated)
 						}),
 					$elm$core$Platform$Cmd$none);
 			} else {
@@ -9189,7 +9183,7 @@ var $author$project$Main$withMixer = F2(
 					_Utils_update(
 						model,
 						{
-							f: $elm$core$Maybe$Just(updated),
+							g: $elm$core$Maybe$Just(updated),
 							q: preview
 						}),
 					$author$project$Main$sendPreview(toSend));
@@ -9585,8 +9579,8 @@ var $author$project$Main$update = F2(
 								model,
 								{
 									aa: $elm$core$Maybe$Nothing,
-									f: $elm$core$Maybe$Just(state),
-									k: $elm$core$Maybe$Nothing,
+									g: $elm$core$Maybe$Just(state),
+									l: $elm$core$Maybe$Nothing,
 									q: preview,
 									R: $elm$core$Maybe$Nothing,
 									ag: $elm$core$Maybe$Nothing
@@ -9595,7 +9589,8 @@ var $author$project$Main$update = F2(
 								_List_fromArray(
 									[
 										$author$project$Main$sendPreview(toSend),
-										$author$project$Request$presets($author$project$Main$GotPresets)
+										$author$project$Request$presets($author$project$Main$GotPresets),
+										$author$project$Request$defaultConfig($author$project$Main$GotDefaultConfig)
 									])));
 					}
 				} else {
@@ -9639,7 +9634,7 @@ var $author$project$Main$update = F2(
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				}
 			case 21:
-				var _v19 = model.f;
+				var _v19 = model.g;
 				if (_v19.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -9682,7 +9677,7 @@ var $author$project$Main$update = F2(
 						}),
 					$author$project$Main$sendPreview(toSend));
 			case 24:
-				var _v23 = model.f;
+				var _v23 = model.g;
 				if (_v23.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -9958,7 +9953,7 @@ var $author$project$Main$update = F2(
 						_Utils_update(
 							model,
 							{
-								k: $elm$core$Maybe$Just(
+								l: $elm$core$Maybe$Just(
 									'Could not load your presets — ' + ($author$project$Main$httpErrorToString(err) + '. Leave the mixer and open it again to try that fetch once more.'))
 							}),
 						$elm$core$Platform$Cmd$none);
@@ -10010,8 +10005,9 @@ var $author$project$Main$update = F2(
 					$elm$core$Platform$Cmd$none);
 			case 43:
 				var presetId = msg.a;
-				var _v31 = _Utils_Tuple2(model.f, model.U);
+				var _v31 = _Utils_Tuple2(model.g, model.U);
 				if ((!_v31.a.$) && (_v31.b.$ === 1)) {
+					var state = _v31.a.a;
 					var schema = _v31.b.a;
 					var _v32 = A2(
 						$author$project$Page$Mixer$presetById,
@@ -10021,13 +10017,13 @@ var $author$project$Main$update = F2(
 						var preset = _v32.a;
 						return A2(
 							$author$project$Main$andThen,
-							$author$project$Main$rememberPreset(preset.aZ),
+							A2($author$project$Main$rememberPreset, state.ci, preset.aZ),
 							A2(
 								$author$project$Main$withMixer,
 								A2($author$project$Page$Mixer$applyPreset, schema, preset),
 								_Utils_update(
 									model,
-									{k: $elm$core$Maybe$Nothing})));
+									{l: $elm$core$Maybe$Nothing})));
 					} else {
 						return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 					}
@@ -10035,7 +10031,7 @@ var $author$project$Main$update = F2(
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				}
 			case 45:
-				var _v33 = model.f;
+				var _v33 = model.g;
 				if (_v33.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -10048,46 +10044,52 @@ var $author$project$Main$update = F2(
 						return _Utils_Tuple2(
 							_Utils_update(
 								model,
-								{k: $elm$core$Maybe$Nothing}),
+								{l: $elm$core$Maybe$Nothing}),
 							A3(
 								$author$project$Request$createPreset,
 								name,
 								$author$project$Config$forPreset(state.bB),
-								$author$project$Main$PresetSaved));
+								$author$project$Main$PresetSaved(state.ci)));
 					}
 				}
 			case 46:
-				if (!msg.a.$) {
-					var preset = msg.a.a;
+				if (!msg.b.$) {
+					var songId = msg.a;
+					var preset = msg.b.a;
 					return _Utils_Tuple2(
-						A2(
+						A2($author$project$Main$mixerOpenFor, songId, model) ? A2(
 							$author$project$Main$mapMixer,
 							$author$project$Page$Mixer$presetSaved(preset),
 							_Utils_update(
 								model,
-								{k: $elm$core$Maybe$Nothing})),
+								{l: $elm$core$Maybe$Nothing})) : model,
 						$elm$core$Platform$Cmd$batch(
 							_List_fromArray(
 								[
 									$author$project$Request$presets($author$project$Main$GotPresets),
-									A2($author$project$Main$rememberPresetCmd, preset.aZ, model)
+									A3(
+									$author$project$Request$setLastPreset,
+									songId,
+									$elm$core$Maybe$Just(preset.aZ),
+									$author$project$Main$LastPresetSet(songId))
 								])));
 				} else {
-					var err = msg.a.a;
-					return _Utils_Tuple2(
+					var songId = msg.a;
+					var err = msg.b.a;
+					return A2($author$project$Main$mixerOpenFor, songId, model) ? _Utils_Tuple2(
 						_Utils_update(
 							model,
 							{
-								k: $elm$core$Maybe$Just(
+								l: $elm$core$Maybe$Just(
 									A2(
 										$author$project$Page$Mixer$saveMessage,
 										err,
 										$author$project$Main$httpErrorToString(err)))
 							}),
-						$elm$core$Platform$Cmd$none);
+						$elm$core$Platform$Cmd$none) : _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				}
 			case 48:
-				var _v35 = model.f;
+				var _v35 = model.g;
 				if (_v35.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -10103,44 +10105,48 @@ var $author$project$Main$update = F2(
 								$author$project$Page$Mixer$armConfirm($elm$core$Maybe$Nothing),
 								_Utils_update(
 									model,
-									{k: $elm$core$Maybe$Nothing})),
+									{l: $elm$core$Maybe$Nothing})),
 							A4(
 								$author$project$Request$updatePreset,
 								preset.aZ,
 								preset.c7,
 								$author$project$Config$forPreset(state.bB),
-								$author$project$Main$PresetUpdated));
+								$author$project$Main$PresetUpdated(state.ci)));
 					}
 				}
 			case 49:
-				if (!msg.a.$) {
-					var preset = msg.a.a;
+				if (!msg.b.$) {
+					var songId = msg.a;
+					var preset = msg.b.a;
 					return _Utils_Tuple2(
-						_Utils_update(
-							model,
-							{k: $elm$core$Maybe$Nothing}),
+						model,
 						$elm$core$Platform$Cmd$batch(
 							_List_fromArray(
 								[
 									$author$project$Request$presets($author$project$Main$GotPresets),
-									A2($author$project$Main$rememberPresetCmd, preset.aZ, model)
+									A3(
+									$author$project$Request$setLastPreset,
+									songId,
+									$elm$core$Maybe$Just(preset.aZ),
+									$author$project$Main$LastPresetSet(songId))
 								])));
 				} else {
-					var err = msg.a.a;
-					return _Utils_Tuple2(
+					var songId = msg.a;
+					var err = msg.b.a;
+					return A2($author$project$Main$mixerOpenFor, songId, model) ? _Utils_Tuple2(
 						_Utils_update(
 							model,
 							{
-								k: $elm$core$Maybe$Just(
+								l: $elm$core$Maybe$Just(
 									A2(
 										$author$project$Page$Mixer$saveMessage,
 										err,
 										$author$project$Main$httpErrorToString(err)))
 							}),
-						$elm$core$Platform$Cmd$none);
+						$elm$core$Platform$Cmd$none) : _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				}
 			case 50:
-				var _v37 = model.f;
+				var _v37 = model.g;
 				if (_v37.$ === 1) {
 					return _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
@@ -10156,32 +10162,39 @@ var $author$project$Main$update = F2(
 								$author$project$Page$Mixer$armConfirm($elm$core$Maybe$Nothing),
 								_Utils_update(
 									model,
-									{k: $elm$core$Maybe$Nothing})),
-							A2($author$project$Request$deletePreset, preset.aZ, $author$project$Main$PresetDeleted));
+									{l: $elm$core$Maybe$Nothing})),
+							A2(
+								$author$project$Request$deletePreset,
+								preset.aZ,
+								$author$project$Main$PresetDeleted(state.ci)));
 					}
 				}
 			case 51:
-				if (!msg.a.$) {
+				if (!msg.b.$) {
+					var songId = msg.a;
 					return _Utils_Tuple2(
-						A2(
+						A2($author$project$Main$mixerOpenFor, songId, model) ? A2(
 							$author$project$Main$mapMixer,
 							$author$project$Page$Mixer$selectPreset(''),
-							model),
+							model) : model,
 						$author$project$Request$presets($author$project$Main$GotPresets));
 				} else {
-					var err = msg.a.a;
-					return _Utils_Tuple2(
+					var songId = msg.a;
+					var err = msg.b.a;
+					return A2($author$project$Main$mixerOpenFor, songId, model) ? _Utils_Tuple2(
 						_Utils_update(
 							model,
 							{
-								k: $elm$core$Maybe$Just(
+								l: $elm$core$Maybe$Just(
 									'Could not delete that preset — ' + $author$project$Main$httpErrorToString(err))
 							}),
+						$author$project$Request$presets($author$project$Main$GotPresets)) : _Utils_Tuple2(
+						model,
 						$author$project$Request$presets($author$project$Main$GotPresets));
 				}
 			default:
-				if (!msg.a.$) {
-					var updated = msg.a.a;
+				if (!msg.b.$) {
+					var updated = msg.b.a;
 					return _Utils_eq(
 						model.K,
 						$elm$core$Maybe$Just(updated.aZ)) ? _Utils_Tuple2(
@@ -10192,15 +10205,16 @@ var $author$project$Main$update = F2(
 							}),
 						$elm$core$Platform$Cmd$none) : _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				} else {
-					var err = msg.a.a;
-					return _Utils_Tuple2(
+					var songId = msg.a;
+					var err = msg.b.a;
+					return A2($author$project$Main$mixerOpenFor, songId, model) ? _Utils_Tuple2(
 						_Utils_update(
 							model,
 							{
-								k: $elm$core$Maybe$Just(
+								l: $elm$core$Maybe$Just(
 									'That preset is applied, but this song could not be made to ' + ('remember it — ' + ($author$project$Main$httpErrorToString(err) + '. The mix on screen is unaffected.')))
 							}),
-						$elm$core$Platform$Cmd$none);
+						$elm$core$Platform$Cmd$none) : _Utils_Tuple2(model, $elm$core$Platform$Cmd$none);
 				}
 		}
 	});
@@ -10860,10 +10874,14 @@ var $author$project$Page$Mixer$Delete = 1;
 var $author$project$Page$Mixer$SaveOver = 0;
 var $author$project$Page$Mixer$applyBlock = F2(
 	function (preview, chosen) {
-		if (chosen.$ === 1) {
-			return $elm$core$Maybe$Just('Choose a preset to apply. Applying replaces every setting below, ' + ('including the ones the preset does not mention — it is ' + '\u0022make it look like this\u0022, not \u0022merge this in\u0022.'));
+		if (!$author$project$Preview$isPlayable(preview)) {
+			return $elm$core$Maybe$Just('The mixer is still preparing, so nothing can be applied yet — ' + ('doing it now would move every control without changing what ' + ('you hear. Both Apply buttons become live as soon as the first ' + 'preview plays.')));
 		} else {
-			return $author$project$Preview$isPlayable(preview) ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just('The mixer is still preparing, so applying now would move ' + ('every control without changing what you hear. It becomes ' + 'live as soon as the first preview plays.'));
+			if (chosen.$ === 1) {
+				return $elm$core$Maybe$Just('Choose a preset to apply. Applying replaces every setting below, ' + ('including the ones the preset does not mention — it is ' + '\u0022make it look like this\u0022, not \u0022merge this in\u0022.'));
+			} else {
+				return $elm$core$Maybe$Nothing;
+			}
 		}
 	});
 var $author$project$Page$Mixer$confirmRow = F4(
@@ -11217,7 +11235,7 @@ var $author$project$Page$Mixer$presetBar = function (config) {
 				A2($author$project$Page$Mixer$confirmLine, config, chosen),
 				$author$project$Page$Mixer$lastUsedLine(config),
 				function () {
-				var _v1 = config.k;
+				var _v1 = config.l;
 				if (!_v1.$) {
 					var words = _v1.a;
 					return A2(
@@ -12177,7 +12195,7 @@ var $author$project$Main$mixerView = F2(
 							dx: $author$project$Main$SoloToggled,
 							dy: $author$project$Main$FieldToggled,
 							ad: model.ad,
-							k: model.k,
+							l: model.l,
 							af: model.af,
 							q: model.q,
 							R: model.R,
@@ -13465,7 +13483,7 @@ var $author$project$Main$routeFor = function (model) {
 			var state = _v1.a;
 			return $author$project$Main$RendersView(state);
 		} else {
-			var _v2 = model.f;
+			var _v2 = model.g;
 			if (!_v2.$) {
 				var state = _v2.a;
 				return $author$project$Main$MixerView(state);

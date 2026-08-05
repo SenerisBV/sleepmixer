@@ -565,13 +565,13 @@ type Msg
     | PresetApplied String
     | PresetNameChanged String
     | SavePresetAs
-    | PresetSaved (Result Http.Error Api.Preset)
+    | PresetSaved String (Result Http.Error Api.Preset)
     | PresetPending (Maybe Mixer.Pending)
     | SaveOverConfirmed
-    | PresetUpdated (Result Http.Error Api.Preset)
+    | PresetUpdated String (Result Http.Error Api.Preset)
     | DeletePresetConfirmed
-    | PresetDeleted (Result Http.Error ())
-    | LastPresetSet (Result Http.Error Api.Song)
+    | PresetDeleted String (Result Http.Error ())
+    | LastPresetSet String (Result Http.Error Api.Song)
 
 
 main : Program () Model Msg
@@ -1040,6 +1040,19 @@ update msg model =
                             -- current — and the only retry there is for a
                             -- startup fetch that failed.
                             , Request.presets GotPresets
+
+                            -- And the defaults, for the second half of that
+                            -- reason alone. They do not change for the life of
+                            -- the process, so this is not a refresh — it is the
+                            -- retry, and without it a blip during page load
+                            -- left every mixer for the rest of the session
+                            -- starting every stem eroding identically, under a
+                            -- note telling the operator to leave and come back.
+                            -- That instruction is only true because of this
+                            -- line. The answer lands after this mixer has
+                            -- opened, so it is the *next* one that benefits,
+                            -- which is exactly what the note promises.
+                            , Request.defaultConfig GotDefaultConfig
                             ]
                         )
 
@@ -1439,7 +1452,7 @@ update msg model =
 
         PresetApplied presetId ->
             case ( model.mixer, model.settings ) of
-                ( Just _, SettingsReady schema ) ->
+                ( Just state, SettingsReady schema ) ->
                     case Mixer.presetById model.presets (Just presetId) of
                         Just preset ->
                             -- Through `withMixer`, which is the same door
@@ -1450,7 +1463,7 @@ update msg model =
                             -- one control change — a large one.
                             withMixer (Mixer.applyPreset schema preset)
                                 { model | presetProblem = Nothing }
-                                |> andThen (rememberPreset preset.id)
+                                |> andThen (rememberPreset state.songId preset.id)
 
                         Nothing ->
                             -- Unreachable from the bar: the select is built
@@ -1483,18 +1496,42 @@ update msg model =
                               -- when they are wrong.
                             , Request.createPreset name
                                 (Config.forPreset state.config)
-                                PresetSaved
+                                -- Tagged with the song whose mixer is saving,
+                                -- because the answer lands at a model that may
+                                -- have moved on. See `PresetSaved`.
+                                (PresetSaved state.songId)
                             )
 
-        PresetSaved (Ok preset) ->
-            ( mapMixer (Mixer.presetSaved preset) { model | presetProblem = Nothing }
-            , Cmd.batch [ Request.presets GotPresets, rememberPresetCmd preset.id model ]
+        PresetSaved songId (Ok preset) ->
+            -- The preset exists whatever screen is now open, so the *song* half
+            -- of this is unconditional: the save came from that song's mixer,
+            -- and that is the song which last used it. The *screen* half is
+            -- not. A save issued on song A that answers after song B's mixer
+            -- has opened must not move B's select to a preset nobody applied
+            -- there — the same call `renderAnswered` makes one panel along, and
+            -- the same window: a POST outlives the screen that sent it.
+            ( if mixerOpenFor songId model then
+                mapMixer (Mixer.presetSaved preset) { model | presetProblem = Nothing }
+
+              else
+                model
+            , Cmd.batch
+                [ Request.presets GotPresets
+                , Request.setLastPreset songId (Just preset.id) (LastPresetSet songId)
+                ]
             )
 
-        PresetSaved (Err err) ->
-            ( { model | presetProblem = Just (Mixer.saveMessage err (httpErrorToString err)) }
-            , Cmd.none
-            )
+        PresetSaved songId (Err err) ->
+            -- Written only where it can be read, exactly as `renderError` is: a
+            -- failure reported on a different song's mixer is not a lost
+            -- message but a planted one.
+            if mixerOpenFor songId model then
+                ( { model | presetProblem = Just (Mixer.saveMessage err (httpErrorToString err)) }
+                , Cmd.none
+                )
+
+            else
+                ( model, Cmd.none )
 
         SaveOverConfirmed ->
             case model.mixer of
@@ -1516,18 +1553,25 @@ update msg model =
                             , Request.updatePreset preset.id
                                 preset.name
                                 (Config.forPreset state.config)
-                                PresetUpdated
+                                (PresetUpdated state.songId)
                             )
 
-        PresetUpdated (Ok preset) ->
-            ( { model | presetProblem = Nothing }
-            , Cmd.batch [ Request.presets GotPresets, rememberPresetCmd preset.id model ]
+        PresetUpdated songId (Ok preset) ->
+            ( model
+            , Cmd.batch
+                [ Request.presets GotPresets
+                , Request.setLastPreset songId (Just preset.id) (LastPresetSet songId)
+                ]
             )
 
-        PresetUpdated (Err err) ->
-            ( { model | presetProblem = Just (Mixer.saveMessage err (httpErrorToString err)) }
-            , Cmd.none
-            )
+        PresetUpdated songId (Err err) ->
+            if mixerOpenFor songId model then
+                ( { model | presetProblem = Just (Mixer.saveMessage err (httpErrorToString err)) }
+                , Cmd.none
+                )
+
+            else
+                ( model, Cmd.none )
 
         DeletePresetConfirmed ->
             case model.mixer of
@@ -1542,55 +1586,75 @@ update msg model =
                         Just preset ->
                             ( mapMixer (Mixer.armConfirm Nothing)
                                 { model | presetProblem = Nothing }
-                            , Request.deletePreset preset.id PresetDeleted
+                            , Request.deletePreset preset.id (PresetDeleted state.songId)
                             )
 
-        PresetDeleted (Ok ()) ->
+        PresetDeleted songId (Ok ()) ->
             -- The selection is dropped by the re-fetch rather than here: it is
             -- an id resolved against the list every time it is read, so a list
             -- without that preset in it is already a bar with nothing
             -- selected. Clearing it explicitly as well, because a select whose
             -- value names a row that no longer exists is a browser deciding
             -- for itself which option to show.
-            ( mapMixer (Mixer.selectPreset "") model, Request.presets GotPresets )
+            ( if mixerOpenFor songId model then
+                mapMixer (Mixer.selectPreset "") model
 
-        PresetDeleted (Err err) ->
-            ( { model
-                | presetProblem =
-                    Just ("Could not delete that preset — " ++ httpErrorToString err)
-              }
+              else
+                model
             , Request.presets GotPresets
             )
 
-        LastPresetSet (Ok updated) ->
+        PresetDeleted songId (Err err) ->
+            if mixerOpenFor songId model then
+                ( { model
+                    | presetProblem =
+                        Just ("Could not delete that preset — " ++ httpErrorToString err)
+                  }
+                , Request.presets GotPresets
+                )
+
+            else
+                ( model, Request.presets GotPresets )
+
+        LastPresetSet _ (Ok updated) ->
             -- The song row comes back with its new `last_preset_id`, which is
             -- what the "Last used here" line reads. Adopted only while that
             -- song is still the one on screen: this answers after a round trip
             -- and the operator may have moved on, and writing it then would
-            -- put another song's row under an open mixer.
+            -- put another song's row under an open mixer. Asked of the returned
+            -- row's own id, which is the song this was issued for.
             if model.selectedSongId == Just updated.id then
                 ( { model | currentSong = Just updated }, Cmd.none )
 
             else
                 ( model, Cmd.none )
 
-        LastPresetSet (Err err) ->
+        LastPresetSet songId (Err err) ->
             -- The preset *was* applied — this is only the note of which one,
             -- and the note failing is not the apply failing. Said anyway,
             -- because the "Last used here" line silently not appearing next
             -- time is the kind of small unexplained absence this interface
             -- keeps deciding against.
-            ( { model
-                | presetProblem =
-                    Just
-                        ("That preset is applied, but this song could not be made to "
-                            ++ "remember it — "
-                            ++ httpErrorToString err
-                            ++ ". The mix on screen is unaffected."
-                        )
-              }
-            , Cmd.none
-            )
+            --
+            -- And said only to the screen it happened on, which its `Ok`
+            -- sibling has always been careful about and this was not: the write
+            -- can land after a close and a reopen, and would then greet the
+            -- next session with a complaint about the previous one.
+            if mixerOpenFor songId model then
+                ( { model
+                    | presetProblem =
+                        Just
+                            ("That preset is applied, but this song could not be made to "
+                                ++ "remember it — "
+                                ++ httpErrorToString err
+                                ++ ". The mix on screen is unaffected."
+                            )
+                  }
+                , Cmd.none
+                )
+
+            else
+                ( model, Cmd.none )
 
 
 {-| An unreadable frame, charged to whichever stream sent it and to no other.
@@ -2005,20 +2069,18 @@ mapMixer change model =
 here" — and is never applied on its own. Written when a preset is applied and
 when one is saved from this song's mixer, which are the two moments the song
 and the preset were last the same thing.
+
+Takes the song rather than reading it off whatever mixer is open. An apply is
+synchronous and could have read it, but a save answers after a round trip, and
+this used to be the same function for both: the song was read at *answer* time,
+so a "Save as…" in song A's mixer that came back after song B's had opened
+wrote A's preset onto B's row, and B then offered to re-apply a preset never
+used on it. Naming the song at the moment the request is issued is what
+`Separation.Starting` and `PendingRender` both do, for this exact window.
 -}
-rememberPreset : String -> Model -> ( Model, Cmd Msg )
-rememberPreset presetId model =
-    ( model, rememberPresetCmd presetId model )
-
-
-rememberPresetCmd : String -> Model -> Cmd Msg
-rememberPresetCmd presetId model =
-    case model.mixer of
-        Just state ->
-            Request.setLastPreset state.songId (Just presetId) LastPresetSet
-
-        Nothing ->
-            Cmd.none
+rememberPreset : String -> String -> Model -> ( Model, Cmd Msg )
+rememberPreset songId presetId model =
+    ( model, Request.setLastPreset songId (Just presetId) (LastPresetSet songId) )
 
 
 sendPreview : Maybe Preview.Params -> Cmd msg

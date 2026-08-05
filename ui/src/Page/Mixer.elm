@@ -457,8 +457,17 @@ Both statuses are reachable by ordinary use and neither may fail silently. The
 409 is the one the operator causes: two setups saved under one name, where the
 server refuses the second rather than replacing the first — Save over is the
 button for that, and the sentence points at it. The 400 is the server's own
-validation, which runs `MixConfig.from_dict` before storing anything, and the
-detail it answers with is the only description of what was wrong.
+validation, which runs `MixConfig.from_dict` before storing anything.
+
+**The server's own `detail` does not reach this side.** `Http.expectJson`
+discards the body of a non-2xx response, so an `Http.BadStatus` carries a
+number and nothing else — the `detail` argument here is
+`Main.httpErrorToString`'s "the server answered 400", not the sentence the
+route raised. So the 400 branch says where the reason is rather than pretending
+to quote it. Carrying it would mean `expectStringResponse` in `Request.elm` and
+a decode of the error body, which is a change to an interface this task
+consumes rather than owns; what is not acceptable is a message that claims to
+explain and does not.
 
 Takes the generic wording rather than deriving it, exactly as
 `Page.Renders.deleteMessage` does, so `Main.httpErrorToString` stays the one
@@ -472,10 +481,10 @@ saveMessage err detail =
                 ++ "that one and use Save over to replace what it holds."
 
         Http.BadStatus 400 ->
-            "The server refused that config — "
-                ++ detail
-                ++ ". It validates a preset before storing it, so that a recipe "
-                ++ "which could never render fails here rather than at render time."
+            "The server refused that config. It validates a preset before "
+                ++ "storing it, so a recipe that could never render fails here "
+                ++ "rather than at render time — but it says why in its own log "
+                ++ "and not in an answer this screen can read."
 
         Http.BadStatus 404 ->
             "That preset is no longer there — it was deleted while this screen "
@@ -836,7 +845,14 @@ presetSelect config chosen =
 {-| Why Apply cannot be pressed, if it cannot — the sentence rather than a
 `Bool`, for the reason `renderBlock` gives about the Render button.
 
-The second case is the one worth stating. Applying while the opening preview is
+Readiness is asked *first*, and that ordering is the fix to a screen that
+refused to explain itself: with the selection asked first, a mixer still
+preparing with nothing chosen said only "choose a preset", and the "Last used
+here" line's Apply — which needs no selection at all — sat greyed out with
+nothing on screen accounting for it. Both buttons are inert for the same
+reason at that moment, so the same sentence has to be the one showing.
+
+Why they are inert is worth the sentence. Applying while the opening preview is
 still in flight would move every control on the screen and change nothing about
 what you are about to hear: `Preview.request` refuses while `Warming`, and the
 preview already in flight is of the config from before the apply. The mixer
@@ -845,24 +861,25 @@ this screen must never do.
 -}
 applyBlock : Preview.State -> Maybe Api.Preset -> Maybe String
 applyBlock preview chosen =
-    case chosen of
-        Nothing ->
-            Just
-                ("Choose a preset to apply. Applying replaces every setting below, "
-                    ++ "including the ones the preset does not mention — it is "
-                    ++ "\"make it look like this\", not \"merge this in\"."
-                )
+    if not (Preview.isPlayable preview) then
+        Just
+            ("The mixer is still preparing, so nothing can be applied yet — "
+                ++ "doing it now would move every control without changing what "
+                ++ "you hear. Both Apply buttons become live as soon as the first "
+                ++ "preview plays."
+            )
 
-        Just _ ->
-            if Preview.isPlayable preview then
-                Nothing
-
-            else
+    else
+        case chosen of
+            Nothing ->
                 Just
-                    ("The mixer is still preparing, so applying now would move "
-                        ++ "every control without changing what you hear. It becomes "
-                        ++ "live as soon as the first preview plays."
+                    ("Choose a preset to apply. Applying replaces every setting below, "
+                        ++ "including the ones the preset does not mention — it is "
+                        ++ "\"make it look like this\", not \"merge this in\"."
                     )
+
+            Just _ ->
+                Nothing
 
 
 {-| A destructive button, pressed once, asking to be meant.
