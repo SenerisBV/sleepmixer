@@ -58,6 +58,16 @@ def test_changing_decay_invalidates_nothing_cached(tmp_path, stub_separation):
     assert s.prepared_loop(name) is loop_before, "decay must not touch the loop"
 
 
+def test_changing_the_output_rate_changes_the_master_key():
+    """run_pipeline resamples before normalizing, so a gain measured at one
+    output rate does not describe a render at another. Without this the
+    memoized factor survives the change and the session keeps serving it."""
+    base = MixConfig()
+    other = MixConfig()
+    other.output.sample_rate = 22050
+    assert RenderSession._master_key(base) != RenderSession._master_key(other)
+
+
 def test_loop_point_respects_explicit_config(tmp_path, stub_separation):
     song = tmp_path / "s.wav"
     _song(song)

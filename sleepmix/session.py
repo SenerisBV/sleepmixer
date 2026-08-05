@@ -153,6 +153,7 @@ class RenderSession:
             tuple(sorted(asdict(config.reverb).items())),
             config.output.peak_db,
             config.output.channels,
+            config.output.sample_rate,
             tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send)
                   for sc in config.stems),
         )
