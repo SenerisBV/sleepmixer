@@ -27,7 +27,8 @@ from typing import Any
 from ..paths import data_dir
 
 _SONG_COLUMNS = {"path", "title", "duration_s", "sample_rate",
-                 "separation_status", "separation_reason", "stems"}
+                 "separation_status", "separation_reason", "stems",
+                 "last_preset_id"}
 _RENDER_COLUMNS = {"song_id", "config", "path", "status", "duration_min"}
 
 # The vocabulary for songs.separation_status. Written here rather than left
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS songs (
     separation_status  TEXT NOT NULL DEFAULT 'pending',
     separation_reason  TEXT,
     stems              TEXT,
+    last_preset_id     TEXT,
     added_at           TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS presets (
@@ -110,7 +112,21 @@ class Store:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate_last_preset_id()
         self._conn.commit()
+
+    def _migrate_last_preset_id(self) -> None:
+        """Add ``songs.last_preset_id`` to a database that predates it.
+
+        ``CREATE TABLE IF NOT EXISTS`` in ``_SCHEMA`` only shapes a table that
+        does not exist yet — it will not add a column to the operator's real,
+        already-existing library. ``PRAGMA table_info`` is how sqlite answers
+        "does this column already exist" without an exception-driven check, so
+        the ``ALTER TABLE`` only runs once, on the first startup after this
+        column was introduced."""
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(songs)")}
+        if "last_preset_id" not in cols:
+            self._conn.execute("ALTER TABLE songs ADD COLUMN last_preset_id TEXT")
 
     def close(self) -> None:
         with self._lock:

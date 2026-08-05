@@ -30,6 +30,10 @@ class ImportRequest(BaseModel):
     path: str
 
 
+class LastPresetRequest(BaseModel):
+    preset_id: str | None = None
+
+
 @router.post("", status_code=201)
 def import_song(body: ImportRequest, request: Request) -> dict:
     path = os.path.abspath(os.path.expanduser(body.path))
@@ -56,6 +60,25 @@ def get_song(song_id: str, request: Request) -> dict:
     if song is None:
         raise HTTPException(status_code=404, detail="No such song")
     return song
+
+
+@router.put("/{song_id}/last-preset")
+def set_last_preset(song_id: str, body: LastPresetRequest, request: Request) -> dict:
+    """Remember which preset was last applied here, as a hint and nothing more.
+
+    Never applied automatically — the mixer shows it as a line with an Apply
+    button beside it. A preset that re-applied itself would mean editing one
+    silently changes songs tuned weeks ago.
+
+    The id is not checked against the presets table. A preset deleted while a
+    song points at it leaves a dangling id, which the mixer resolves against
+    the preset list and simply does not show. Enforcing it would need a
+    foreign key and a migration for a hint."""
+    updated = request.app.state.store.update_song(
+        song_id, last_preset_id=body.preset_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="No such song")
+    return updated
 
 
 @router.get("/{song_id}/peaks")

@@ -96,6 +96,24 @@ def test_get_song_404s_when_absent(client):
     assert client.get("/api/songs/nope").status_code == 404
 
 
+def test_setting_and_clearing_a_songs_last_preset(client, tmp_path):
+    song = client.post("/api/songs", json={"path": _song_file(tmp_path / "a.wav")}).json()
+    answer = client.put(f"/api/songs/{song['id']}/last-preset",
+                        json={"preset_id": "p1"})
+    assert answer.status_code == 200
+    assert answer.json()["last_preset_id"] == "p1"
+    assert client.get(f"/api/songs/{song['id']}").json()["last_preset_id"] == "p1"
+
+    cleared = client.put(f"/api/songs/{song['id']}/last-preset",
+                         json={"preset_id": None})
+    assert cleared.json()["last_preset_id"] is None
+
+
+def test_setting_the_last_preset_of_an_unknown_song_is_a_404(client):
+    assert client.put("/api/songs/nope/last-preset",
+                      json={"preset_id": "p1"}).status_code == 404
+
+
 def test_peaks_endpoint_returns_the_requested_bucket_count(client, tmp_path):
     song = client.post("/api/songs", json={"path": _song_file(tmp_path / "a.wav")}).json()
     r = client.get(f"/api/songs/{song['id']}/peaks?buckets=64")

@@ -124,6 +124,64 @@ def test_opening_a_database_with_duplicate_paths_migrates_it(tmp_path, monkeypat
         reopened.close()
 
 
+def test_a_song_remembers_a_preset_and_can_forget_it(store):
+    song = store.add_song(path="/tmp/a.wav", title="a", duration_s=1.0, sample_rate=44100)
+    assert store.get_song(song["id"])["last_preset_id"] is None
+    store.update_song(song["id"], last_preset_id="p1")
+    assert store.get_song(song["id"])["last_preset_id"] == "p1"
+    store.update_song(song["id"], last_preset_id=None)
+    assert store.get_song(song["id"])["last_preset_id"] is None
+
+
+def test_opening_a_database_from_before_last_preset_id_gains_the_column(
+        tmp_path, monkeypatch):
+    """The operator has a real library on disk that predates this column.
+
+    ``CREATE TABLE IF NOT EXISTS`` does nothing to a table that already
+    exists, so without an explicit migration the server would crash on
+    startup — or silently fail to persist a song's last-used preset — against
+    every database created before this change. Built by hand with the
+    pre-migration column set (no ``ALTER TABLE ... DROP COLUMN``, which not
+    every sqlite build supports) rather than by opening a ``Store`` first,
+    since that would already carry the column this test is simulating the
+    absence of."""
+    import sqlite3
+
+    from sleepmix.paths import data_dir
+
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    db_path = str(data_dir() / "library.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE songs (
+            id                 TEXT PRIMARY KEY,
+            path               TEXT NOT NULL,
+            title              TEXT NOT NULL,
+            duration_s         REAL NOT NULL,
+            sample_rate        INTEGER NOT NULL,
+            separation_status  TEXT NOT NULL DEFAULT 'pending',
+            separation_reason  TEXT,
+            stems              TEXT,
+            added_at           TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "INSERT INTO songs (id, path, title, duration_s, sample_rate, added_at)"
+        " VALUES ('pre1', '/tmp/pre.wav', 'A', 1.0, 44100, '2020-01-01T00:00:00+00:00')")
+    conn.commit()
+    conn.close()
+
+    store = Store()          # must not raise
+    try:
+        cols = {row[1] for row in store._conn.execute("PRAGMA table_info(songs)")}
+        assert "last_preset_id" in cols
+        assert store.get_song("pre1")["last_preset_id"] is None
+        updated = store.update_song("pre1", last_preset_id="p1")
+        assert updated["last_preset_id"] == "p1"
+    finally:
+        store.close()
+
+
 def test_add_song_twice_with_the_same_path_returns_the_existing_row(store):
     """Importing the same file twice must not create a second library entry
     with its own, separate render history."""

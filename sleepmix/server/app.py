@@ -21,6 +21,7 @@ from starlette.responses import PlainTextResponse
 import sleepmix
 
 from ..config import MixConfig
+from .api import config as config_api
 from .api import jobs as jobs_api
 from .api import presets, preview, renders, schema, songs
 from .jobs import JobManager
@@ -153,6 +154,7 @@ def create_app(store: Store | None = None,
         return {"status": "ok", "version": sleepmix.__version__, "warm": is_warm()}
 
     app.include_router(schema.router)
+    app.include_router(config_api.router)
     app.include_router(songs.router)
     app.include_router(jobs_api.router)
     app.include_router(preview.router)
