@@ -26,6 +26,11 @@ The second half of this plan is unrelated in subject and identical in spirit:
 `docs/project-state.md` has grown to roughly 1,300 lines across five plans and
 has begun carrying claims that were true when written and are false now.
 
+Two small items arrive here from a retired Plan 3e — a measurement that corrects
+one of those false claims, and a one-line cache fix. Both are described under
+"Two survivors from Plan 3e" below; the reasoning for the retirement is in
+`docs/superpowers/specs/2026-08-05-level-matching-design.md`.
+
 ## The shape the help takes
 
 **Sections explained; fields only where it earns its place.**
@@ -126,6 +131,52 @@ The pass covers `docs/project-state.md` only. `docs/architecture.md`, `README.md
 and `ui/README.md` are checked for claims this plan's own changes make false,
 and otherwise left alone.
 
+## Two survivors from Plan 3e
+
+Plan 3e was going to reorder `pipeline.py`'s fade and normalize steps to close a
+recorded 1.82 dB gap between previews and renders. It was retired before
+implementation: `preview.render_window` "applies one gain factor to every
+window" (`sleepmix/preview.py:101`), so the ratio between previews at the start,
+middle and end of the arc is already exact, and a uniform offset does not change
+any comparison the mixer exists to support. Two pieces of it belong here.
+
+### Correct the 1.82 dB entry rather than acting on it
+
+`docs/project-state.md` attributes that gap to the fade ordering. **The
+arithmetic does not support it.** The default mix is 20 minutes, the default
+fade-in is 8 seconds — 0.67% of an arc that decays to `amp_end_db` = −9 dB — so
+ordinary material decays about **0.06 dB** across the faded region. The recorded
+figure is thirty times larger, which means something other than the decay is
+setting the un-faded peak. The likeliest candidate is a transient at t = 0, the
+loop's first sample, before any crossfade has smoothed anything.
+
+A wrong explanation in the documentation is worse than a known gap, because the
+next person builds on it — and this plan is about documentation that has stopped
+being true.
+
+**The measurement, which changes no audio:** render once at default config and
+report where the un-faded global peak sits in time; its height above the 99th
+percentile of absolute sample values, which is high enough to ignore a lone
+spike and low enough to represent what is audible; its width in samples, since
+one or two samples is a discontinuity and tens of milliseconds is music; and
+whether it survives `cycle_crossfade_ms = 0`, which separates a loop-boundary
+artefact from something in the source.
+
+The entry is then rewritten to say what the number **is**, with the evidence.
+If the measurement shows something the transient hypothesis does not explain,
+that is worth reporting prominently rather than smoothing over — it would mean
+the model of the pipeline in both this document and `docs/architecture.md` is
+wrong.
+
+### `output.sample_rate` joins `RenderSession._master_key`
+
+One line, and not really about level. `run_pipeline` resamples before
+normalizing, but `_master_key` omits the output rate — so changing it does not
+invalidate the memoized gain at all, and a session keeps serving a factor
+measured at the old rate until something else happens to clear it. The level
+magnitude is about 0.01 dB; the cache consequence is unconditional. A test
+should pin that changing `output.sample_rate` produces a different key.
+
 ## Failure modes the plan must handle
 
 - **A section description that describes behaviour the code does not have.**
@@ -163,5 +214,16 @@ them a thing that could be deleted from a screen with both suites green.
 - **A glossary or primer page.** The help belongs beside the control.
 - Rewriting `docs/architecture.md` or the READMEs beyond claims this plan
   falsifies.
-- Anything in Plan 3e: the fade ordering, `_master_key`, the crossfade summing,
-  the sound bed's absence from the calibration window.
+- **Any change to the audio path.** The fade ordering stays as it is, the
+  crossfade summing and the sound bed's absence from the calibration window stay
+  recorded with their measurements, and nothing in `pipeline.py` moves. The
+  measurement above produces a sentence, not a diff.
+- **The sound bed's absence from previews** — `render_window` sums only the
+  configured stems and never calls `build_soundbed`, so enabling binaural beats
+  or pink noise changes nothing you can hear in the mixer. Unlike the level
+  items, this is a *character* difference, and it touches the judgement previews
+  exist to support. It is currently handled by a note beside the section.
+  **Whether that disclosure is enough is worth revisiting once this plan's help
+  text exists**, since the two are the same kind of problem — but revisiting it
+  means deciding whether to put the bed into `render_window`, which is an audio
+  change and belongs to its own design.
