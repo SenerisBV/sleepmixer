@@ -20,13 +20,10 @@ from typing import Any
 class StemDecayConfig:
     """How one stem falls apart across the length of the mix.
 
-    Every value here is a pair: where the stem starts and where it ends up.
-    Progress through the mix is reshaped by ``curve`` before any of these are
-    interpolated — linear moves from start to end in a straight line, exp
-    stays close to the start values longer then collapses, log moves early
-    and lingers near the end ones — so how close the first minute sounds to
-    the start values depends on the curve chosen, not just on how much of the
-    mix has played.
+    Every value here has a start and an end. As the mix plays, each one moves
+    from its start toward its end, and curve decides how: evenly the whole
+    way, holding close to the start until a late rush, or rushing away early
+    and lingering near the end.
 
     Five things happen to a stem, in this order: treble is filtered away,
     notches are punched out of what is left, brief gaps are dropped in, the
@@ -152,12 +149,12 @@ class TempoConfig:
 class ReverbConfig:
     """The space the stems sit in.
 
-    One shared set of room, damping and wet/dry settings for every stem — but
-    reverb is run once per stem rather than once on the summed mix, because it
-    does not distribute over a sum of signals that were each sent into it by a
-    different amount. Each stem's own send decides how much of itself reaches
-    it. Larger and wetter pushes the mix further away, which is usually what
-    you want for something you intend to fall asleep to."""
+    One shared room — the same size, damping, and wet/dry balance for every
+    stem. Each stem's own send decides how much of itself goes into it, and
+    each stem passes through the reverb on its own rather than after
+    everything is mixed together. Larger and wetter pushes the mix further
+    away, which is usually what you want for something you intend to fall
+    asleep to."""
 
     room_size: float = field(default=0.85, metadata={
         "label": "Room size", "min": 0.0, "max": 1.0, "step": 0.01})

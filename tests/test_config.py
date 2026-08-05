@@ -174,7 +174,7 @@ def test_the_top_level_carries_a_description():
     assert config_schema()["description"].strip()
 
 
-def test_a_generated_dataclass_docstring_is_refused(monkeypatch):
+def test_a_generated_dataclass_docstring_is_refused():
     """dataclass writes a __doc__ that is just the constructor signature.
     Publishing that would put 'LoopConfig(bars: int = 8, ...)' on screen as
     though it explained something."""
