@@ -127,6 +127,7 @@ suite =
                             , sampleRate = 44100
                             , separationStatus = Api.Separated
                             , stems = [ "drums" ]
+                            , lastPresetId = Nothing
                             , addedAt = "2026-08-04"
                             }
                     in

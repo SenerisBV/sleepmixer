@@ -1,6 +1,6 @@
 module Api exposing
-    ( Cancellation, Job, JobStatus(..), LoopRegion, Render, RenderStatus(..), Song, SeparationStatus(..)
-    , cancellation, isFinished, isRenderFinished, job, loopRegion, render, renderStatusLabel, song, statusLabel
+    ( Cancellation, Job, JobStatus(..), LoopRegion, Preset, Render, RenderStatus(..), Song, SeparationStatus(..)
+    , cancellation, isFinished, isRenderFinished, job, loopRegion, preset, render, renderStatusLabel, song, statusLabel
     )
 
 {-| Types and decoders for the sleepmix API.
@@ -31,6 +31,7 @@ type alias Song =
     , sampleRate : Int
     , separationStatus : SeparationStatus
     , stems : List String
+    , lastPresetId : Maybe String
     , addedAt : String
     }
 
@@ -138,6 +139,24 @@ type alias Render =
     }
 
 
+{-| A named config snapshot, as `GET /api/presets`, `POST /api/presets` and
+`PUT /api/presets/{id}` return it.
+
+`config` stays an opaque `Decode.Value`, exactly as `Render.config` does and
+for the same reason: the server round-trips it through `json.loads` before the
+route ever sees it (`store._preset_from_row` mirrors `_render_from_row`), so it
+arrives as a real JSON object, not a string of JSON to parse again. Nothing
+here needs to read inside it — the preset bar shows `name`, and whatever
+consumes `config` decodes it for its own purposes.
+-}
+type alias Preset =
+    { id : String
+    , name : String
+    , config : Decode.Value
+    , createdAt : String
+    }
+
+
 isFinished : JobStatus -> Bool
 isFinished status =
     case status of
@@ -224,6 +243,11 @@ song =
         |> Pipeline.required "sample_rate" Decode.int
         |> Pipeline.custom separationStatus
         |> Pipeline.optional "stems" (Decode.nullable (Decode.list Decode.string) |> Decode.map (Maybe.withDefault [])) []
+        -- Required-and-nullable: the server always sends the key (defaulting
+        -- to `null` itself when nothing has been applied yet), so a missing
+        -- key means a route that stopped sending it, not "no preset" —
+        -- exactly the distinction `render_id` on `Job` already draws.
+        |> Pipeline.required "last_preset_id" (Decode.nullable Decode.string)
         |> Pipeline.required "added_at" Decode.string
 
 
@@ -324,6 +348,15 @@ render =
         |> Pipeline.custom renderStatus
         |> Pipeline.required "path" Decode.string
         |> Pipeline.required "duration_min" (Decode.nullable Decode.float)
+        |> Pipeline.required "config" Decode.value
+        |> Pipeline.required "created_at" Decode.string
+
+
+preset : Decoder Preset
+preset =
+    Decode.succeed Preset
+        |> Pipeline.required "id" Decode.string
+        |> Pipeline.required "name" Decode.string
         |> Pipeline.required "config" Decode.value
         |> Pipeline.required "created_at" Decode.string
 

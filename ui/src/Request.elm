@@ -1,6 +1,7 @@
 module Request exposing
-    ( cancelJob, deleteRender, importSong, jobs, loop, peaks, renders
-    , schema, song, songs, startRender, startSeparation
+    ( cancelJob, createPreset, defaultConfig, deletePreset, deleteRender, importSong
+    , jobs, loop, peaks, presets, renders, schema, setLastPreset, song, songs
+    , startRender, startSeparation, updatePreset
     )
 
 {-| Every HTTP call the application makes, in one place.
@@ -197,4 +198,104 @@ cancelJob jobId toMsg =
         { url = Url.Builder.absolute [ "api", "jobs", jobId, "cancel" ] []
         , body = Http.emptyBody
         , expect = Http.expectJson toMsg Api.cancellation
+        }
+
+
+presets : (Result Http.Error (List Api.Preset) -> msg) -> Cmd msg
+presets toMsg =
+    Http.get
+        { url = Url.Builder.absolute [ "api", "presets" ] []
+        , expect = Http.expectJson toMsg (Decode.field "presets" (Decode.list Api.preset))
+        }
+
+
+createPreset : String -> Encode.Value -> (Result Http.Error Api.Preset -> msg) -> Cmd msg
+createPreset name config toMsg =
+    Http.post
+        { url = Url.Builder.absolute [ "api", "presets" ] []
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "name", Encode.string name )
+                    , ( "config", config )
+                    ]
+                )
+        , expect = Http.expectJson toMsg Api.preset
+        }
+
+
+updatePreset : String -> String -> Encode.Value -> (Result Http.Error Api.Preset -> msg) -> Cmd msg
+updatePreset presetId name config toMsg =
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = Url.Builder.absolute [ "api", "presets", presetId ] []
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "name", Encode.string name )
+                    , ( "config", config )
+                    ]
+                )
+        , expect = Http.expectJson toMsg Api.preset
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| Remove a preset.
+
+`DELETE /api/presets/{id}` answers 204 with no body, exactly like
+`deleteRender`, so this goes through `Http.request` with `Http.expectWhatever`
+rather than `Http.post` with `expectJson` — `expectJson` would report a
+successful delete as an error trying to parse the empty body as JSON.
+-}
+deletePreset : String -> (Result Http.Error () -> msg) -> Cmd msg
+deletePreset presetId toMsg =
+    Http.request
+        { method = "DELETE"
+        , headers = []
+        , url = Url.Builder.absolute [ "api", "presets", presetId ] []
+        , body = Http.emptyBody
+        , expect = Http.expectWhatever toMsg
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| The full default `MixConfig`, as a plain value — the starting point for a
+new preset, and for "reset to defaults" in the mixer. Nothing here needs a
+typed record: it is handed straight back to the server as a `config` on the
+next save or render, never read field-by-field on this side.
+-}
+defaultConfig : (Result Http.Error Decode.Value -> msg) -> Cmd msg
+defaultConfig toMsg =
+    Http.get
+        { url = Url.Builder.absolute [ "api", "config", "default" ] []
+        , expect = Http.expectJson toMsg Decode.value
+        }
+
+
+{-| Remember (or clear) which preset a song last had applied.
+
+`Nothing` encodes as a JSON `null`, not as an omitted `preset_id` key — the
+route's model defaults a missing key to `None` today, so both happen to
+arrive the same way, but sending `null` says what is meant instead of leaning
+on that default.
+-}
+setLastPreset : String -> Maybe String -> (Result Http.Error Api.Song -> msg) -> Cmd msg
+setLastPreset songId presetId toMsg =
+    Http.request
+        { method = "PUT"
+        , headers = []
+        , url = Url.Builder.absolute [ "api", "songs", songId, "last-preset" ] []
+        , body =
+            Http.jsonBody
+                (Encode.object
+                    [ ( "preset_id", Maybe.withDefault Encode.null (Maybe.map Encode.string presetId) )
+                    ]
+                )
+        , expect = Http.expectJson toMsg Api.song
+        , timeout = Nothing
+        , tracker = Nothing
         }

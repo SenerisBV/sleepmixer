@@ -13,7 +13,65 @@ songJson =
     , "duration_s": 214.5, "sample_rate": 44100
     , "separation_status": "done", "separation_reason": null
     , "stems": ["bass", "drums", "other", "vocals"]
+    , "last_preset_id": null
     , "added_at": "2026-08-04T10:00:00+00:00" }
+    """
+
+
+{- The four fragments below are captured verbatim from a live server on a
+throwaway `SLEEPMIX_DATA_DIR`
+(`SLEEPMIX_DATA_DIR=$(mktemp -d) pipenv run sleepmix ui --no-open --port 8765`):
+`POST /api/presets` with `{"name":"gentle","config":{"seed":3}}`, then
+`POST /api/songs` importing this repo's own `mix.wav`, then
+`PUT /api/songs/{id}/last-preset` with that preset's id and then with
+`null`. Nothing here is hand-edited.
+-}
+
+
+{-| The row `POST /api/presets` creates, echoed straight back. `config` comes
+back as a real JSON object, not a string of JSON to parse again —
+`store._preset_from_row` runs `json.loads` on the column before the route
+ever sees it, mirroring `_render_from_row` for `Render`.
+-}
+createdPresetJson : String
+createdPresetJson =
+    """
+    { "id": "092a953426af4d72bc04c75aaf0b1d66", "name": "gentle"
+    , "config": {"seed": 3}
+    , "created_at": "2026-08-05T09:18:52.961228+00:00" }
+    """
+
+
+{-| A freshly-imported song, captured from `POST /api/songs`. `last_preset_id`
+is `null` — nothing has ever set it.
+-}
+importedSongJson : String
+importedSongJson =
+    """
+    { "id": "fdae948472924dacbf0a1af044e70823"
+    , "path": "/Users/moopius/projects/sleepmixer/mix.wav", "title": "mix"
+    , "duration_s": 1200.0, "sample_rate": 44100
+    , "separation_status": "pending", "separation_reason": null
+    , "stems": null, "last_preset_id": null
+    , "added_at": "2026-08-05T09:19:01.920481+00:00" }
+    """
+
+
+{-| The same song, captured again after
+`PUT /api/songs/{id}/last-preset` was called with the created preset's id —
+everything unchanged except `last_preset_id`, which is exactly the field that
+route exists to update.
+-}
+songWithLastPresetJson : String
+songWithLastPresetJson =
+    """
+    { "id": "fdae948472924dacbf0a1af044e70823"
+    , "path": "/Users/moopius/projects/sleepmixer/mix.wav", "title": "mix"
+    , "duration_s": 1200.0, "sample_rate": 44100
+    , "separation_status": "pending", "separation_reason": null
+    , "stems": null
+    , "last_preset_id": "092a953426af4d72bc04c75aaf0b1d66"
+    , "added_at": "2026-08-05T09:19:01.920481+00:00" }
     """
 
 
@@ -189,6 +247,7 @@ suite =
                             , "duration_s": 10.0, "sample_rate": 44100
                             , "separation_status": "pending", "separation_reason": null
                             , "stems": null
+                            , "last_preset_id": null
                             , "added_at": "2026-08-04T10:00:00+00:00" }
                             """
                     in
@@ -212,6 +271,7 @@ suite =
                             , "separation_status": "fallback"
                             , "separation_reason": "Demucs unavailable (no torch)"
                             , "stems": ["mix"]
+                            , "last_preset_id": null
                             , "added_at": "2026-08-04T10:00:00+00:00" }
                             """
                     in
@@ -237,6 +297,52 @@ suite =
                     in
                     Decode.decodeString Api.song json
                         |> Expect.err
+            , test "a freshly-imported song has no last preset, captured live from POST /api/songs" <|
+                \_ ->
+                    Decode.decodeString Api.song importedSongJson
+                        |> Result.map .lastPresetId
+                        |> Expect.equal (Ok Nothing)
+            , test "a song with a last preset decodes it as Just, captured live from PUT .../last-preset" <|
+                \_ ->
+                    Decode.decodeString Api.song songWithLastPresetJson
+                        |> Result.map .lastPresetId
+                        |> Expect.equal (Ok (Just "092a953426af4d72bc04c75aaf0b1d66"))
+            , test "a song missing last_preset_id fails the decode rather than defaulting to none" <|
+                \_ ->
+                    -- The server always sends the key (defaulting to `null`
+                    -- itself when nothing has been applied yet), so treating
+                    -- a missing key as `Nothing` would hide a route that
+                    -- stopped sending it, silently.
+                    let
+                        json =
+                            """
+                            { "id": "x", "path": "/m/b.wav", "title": "B"
+                            , "duration_s": 10.0, "sample_rate": 44100
+                            , "separation_status": "pending", "separation_reason": null
+                            , "stems": null
+                            , "added_at": "2026-08-04T10:00:00+00:00" }
+                            """
+                    in
+                    Decode.decodeString Api.song json
+                        |> Expect.err
+            ]
+        , describe "preset"
+            [ test "decodes a preset with its config as a value that can itself be decoded, captured live from POST /api/presets" <|
+                \_ ->
+                    case Decode.decodeString Api.preset createdPresetJson of
+                        Ok p ->
+                            Expect.all
+                                [ .id >> Expect.equal "092a953426af4d72bc04c75aaf0b1d66"
+                                , .name >> Expect.equal "gentle"
+                                , .createdAt >> Expect.equal "2026-08-05T09:18:52.961228+00:00"
+                                , .config
+                                    >> Decode.decodeValue (Decode.field "seed" Decode.int)
+                                    >> Expect.equal (Ok 3)
+                                ]
+                                p
+
+                        Err err ->
+                            Expect.fail (Decode.errorToString err)
             ]
         , describe "job"
             [ test "decodes a running job" <|

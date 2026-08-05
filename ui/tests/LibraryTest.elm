@@ -15,6 +15,7 @@ aSong id title status =
     , sampleRate = 44100
     , separationStatus = status
     , stems = []
+    , lastPresetId = Nothing
     , addedAt = "2026-08-04T10:00:00+00:00"
     }
 

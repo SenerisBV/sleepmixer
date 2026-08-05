@@ -40,6 +40,7 @@ song =
     , sampleRate = 44100
     , separationStatus = Api.Separated
     , stems = [ "vocals", "drums", "bass" ]
+    , lastPresetId = Nothing
     , addedAt = "2026-08-04"
     }
 
