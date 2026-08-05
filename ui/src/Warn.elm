@@ -28,10 +28,15 @@ album cut is nowhere near it and the file that caused the original incident —
 seventy minutes, imported by accident, with no way to get at it except killing
 the server from a terminal — is nowhere near it either, from the other side.
 
-There is no cost model behind the number. Separation and rendering both scale
-with track length, but nothing in this project measures the ratio, and picking
-a threshold that *looked* derived would be inventing precision the same way a
-fabricated time estimate would.
+There is no cost model behind the number, and one measurement does not make
+one. What has been measured is a single render — a 246.6 s source to a
+20-minute mix in 13.6 s once its stems were cached — which says the expensive
+term is separation rather than output length, and so says this warning is at
+least watching the right *number*. It says nothing about where the threshold
+should sit: nothing has been timed cold, or on a long source, or on other
+hardware. Picking a threshold that *looked* derived from one warm run would be
+inventing precision the same way a fabricated time estimate would.
+See `docs/project-state.md` for the case this warning still misses.
 -}
 thresholdS : Float
 thresholdS =
