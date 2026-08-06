@@ -23,6 +23,7 @@ from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
 from .disintegration import decayed_iteration, plan_iterations
 from .effects import apply_reverb, reverb_dry_offset
 from .session import RenderSession
+from .soundbed import build_soundbed
 from .util import db_to_amp
 
 
@@ -98,6 +99,12 @@ def render_window(
     across differing wet scales, so summing dry and reverbing once would not
     match the render.
 
+    When ``cfg.soundbed.enabled`` and ``stems is None``, a bed is mixed in
+    after the stems are summed — the same position ``run_pipeline`` mixes it
+    in, before mastering. Omitted for a solo (see the comment at the call
+    site) and generated fresh per window rather than sliced from a
+    full-length one; both are deliberate, not gaps.
+
     ``master=True`` (the default) applies one gain factor to every window,
     computed once per ``reverb`` setting via ``master_gain`` and memoized on
     the session — see that function's docstring for why a preview needs this
@@ -151,6 +158,31 @@ def render_window(
         raise NothingToRender("Nothing to preview — no stem produced any audio.")
 
     out = AudioBuffer(acc, sr)
+
+    # Where run_pipeline puts it: after the stems are summed, before mastering.
+    #
+    # Generated for this window rather than sliced out of a full-length bed.
+    # The noise is stationary and the binaural beat is periodic, so a window's
+    # worth is perceptually the same as the matching slice of twenty minutes —
+    # and building twenty minutes to take twenty seconds would be absurd.
+    #
+    # Seeded from the config rather than left freshly random, because
+    # ``master_gain`` memoises a factor measured from one window and a random
+    # window would make that factor depend on which draw happened. Note this
+    # does *not* reproduce the render's own bed sample for sample:
+    # ``run_pipeline``'s generator has advanced by the time it reaches the bed.
+    # Noise is noise, so that is inaudible — but it is not the same signal.
+    #
+    # Skipped for a solo, which already does not match the render (the render
+    # has every enabled stem). A bed over an isolated stem masks the thing it
+    # was isolated to hear.
+    if stems is None and cfg.soundbed.enabled:
+        bed = build_soundbed(out.data.shape[0] / sr, sr, cfg.soundbed,
+                             np.random.default_rng(cfg.seed))
+        wide = bed.with_channels(cfg.output.channels).data
+        n = min(out.data.shape[0], wide.shape[0])
+        out = AudioBuffer(out.data[:n] + wide[:n], sr)
+
     if master:
         # One factor for every window, never per-window normalization: the arc
         # survives only because later windows stay genuinely quieter.

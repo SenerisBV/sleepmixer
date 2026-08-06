@@ -210,8 +210,9 @@ class ReverbConfig:
 class SoundbedConfig:
     """A continuous bed underneath the mix: noise, binaural tones, or both.
 
-    Off by default. Mixed in when you render — previews never include it, so
-    turning it on changes nothing you can hear in the mixer.
+    Off by default. Mixed in when you render, and into a preview window too
+    (``preview.render_window``, unless a solo is in effect) — generated fresh
+    per window from the same seed rather than sliced from a render-length one.
 
     The binaural half needs headphones. It works by sending each ear a slightly
     different tone and letting your hearing find the difference between them.

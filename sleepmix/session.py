@@ -163,23 +163,43 @@ class RenderSession:
         cannot change the value this key guards; it only makes the operator pay
         a whole extra calibration window on a rate change, which is the exact
         cost this docstring exists to avoid. The same measurement clears
-        ``fade_in_s``/``fade_out_s``, ``cycle_crossfade_ms`` and
-        ``config.soundbed`` — all three are bit-identical too — but for two
-        different reasons, and it is worth stating them properly rather than
-        waving at a branch. The fades and the bed: ``preview.py`` imports no
-        fade function, no ``normalize_peak`` and no ``build_soundbed`` at all,
-        so ``render_window`` cannot see any of them at any progress. The
-        crossfade: ``cycle_crossfade_ms`` *is* read on the preview path —
-        ``preview_iteration_index`` passes it to ``plan_iterations`` — but it
-        only changes ``n_iterations``, and ``decayed_iteration`` computes
+        ``fade_in_s``/``fade_out_s`` and ``cycle_crossfade_ms`` — both are
+        bit-identical too, but for two different reasons worth stating rather
+        than waving at a branch. The fades: ``preview.py`` imports no fade
+        function and no ``normalize_peak`` at all, so ``render_window`` cannot
+        see them at any progress. The crossfade: ``cycle_crossfade_ms`` *is*
+        read on the preview path — ``preview_iteration_index`` passes it to
+        ``plan_iterations`` — but it only changes ``n_iterations``, and
+        ``decayed_iteration`` computes
         ``progress = iteration / max(n_iterations - 1, 1)``
         (``disintegration.py:145``), which is 0 at iteration 0 whatever
         ``n_iterations`` turns out to be. See the level-matching entry in
-        ``docs/project-state.md``."""
+        ``docs/project-state.md``.
+
+        ``config.soundbed`` *is* here, and that is the opposite case from
+        ``output.sample_rate`` above, not an exception to it. The test is the
+        same one that field failed: does the calibration window actually read
+        this value. As of this plan ``render_window`` imports
+        ``build_soundbed`` and mixes a bed into the same iteration-0 window
+        ``master_gain`` measures — whenever ``config.soundbed.enabled`` and no
+        solo is in effect, which is exactly when the render carries a bed too.
+        A window with the bed on has a different peak than one with it off, so
+        this field moves the value this key guards, the same test
+        ``output.sample_rate`` was measured against and failed. What decides
+        membership in this tuple was never whether a field is *read* by
+        ``render_window`` in the abstract — ``cycle_crossfade_ms`` is read and
+        still excluded, ``output.sample_rate`` is not read at all — it is
+        whether the calibration window's own output depends on it. Confirmed
+        by reverting only this line while leaving the bed in
+        ``render_window``: ``test_toggling_the_bed_clears_the_memoised_gain``
+        fails, because a toggled bed no longer clears the stale factor. See
+        ``docs/project-state.md`` for the ``output.sample_rate`` measurement
+        this reasoning mirrors."""
         return (
             tuple(sorted(asdict(config.reverb).items())),
             config.output.peak_db,
             config.output.channels,
             tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send)
                   for sc in config.stems),
+            tuple(sorted(asdict(config.soundbed).items())),
         )
