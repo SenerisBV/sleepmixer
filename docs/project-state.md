@@ -36,9 +36,24 @@ mixer explain itself. Every section carries a description that comes from the
 mechanism rather than an outcome carries a line of help underneath it. Both
 were previously either absent or an `Attr.title` — a tooltip, which is nothing
 on a touchscreen, nothing to a keyboard, and nothing to anyone not hovering the
-exact element. Read `docs/architecture.md` first for how the pieces fit
-together; this document is about what's true right now, what was traded off
-to get here, and what's explicitly not done yet.
+exact element.
+
+Plan 3g (`feat/finishing-touches`, 3 tasks) is the top of the branch and closes
+the last two gaps this document carried as open and worth closing. **The sound
+bed now reaches previews**: `render_window` mixes it in where `run_pipeline`
+does, so turning on binaural beats or pink noise finally changes something you
+can hear in the mixer — the one recorded preview-versus-render difference that
+was about *character* rather than level, and therefore the one that touched the
+judgement a preview exists to support. That forced `config.soundbed` into
+`RenderSession._master_key` in the same commit, because the calibration window
+began reading a field the memoized gain had been allowed to ignore. And **the
+help text Plan 3f made visible is now findable by a screen reader**: every
+control has an `id`, every label a real `for`, and every control with help an
+`aria-describedby` pointing at it.
+
+Read `docs/architecture.md` first for how the pieces fit together; this document
+is about what's true right now, what was traded off to get here, and what's
+explicitly not done yet.
 
 ## Plan 3d: presets, and the server's own defaults
 
@@ -1347,15 +1362,26 @@ alongside them and is closed.
      key can move it. Closing it means changing what the window contains,
      which is items 1, 2 and 4 in this list, not this one.
 
-     **The three other absences from `_master_key` are not bugs, and this
-     entry previously said they were.** `fade_in_s`/`fade_out_s`,
-     `cycle_crossfade_ms` and `config.soundbed` are all absent from the key,
+     **The other absences from `_master_key` were not bugs, and this entry
+     previously said they were.** `fade_in_s`/`fade_out_s`,
+     `cycle_crossfade_ms` and `config.soundbed` were all absent from the key,
      and Plan 3f's Task 5 recorded that as a second real defect — that even
      with a perfect calibration window, a session would keep serving a stale
-     gain after the operator moved the fade-in slider. **Measured, it does
-     not:** the gain is bit-identical with `cycle_crossfade_ms = 0`, with
+     gain after the operator moved the fade-in slider. **Measured, it did
+     not:** the gain was bit-identical with `cycle_crossfade_ms = 0`, with
      both fades zeroed, with `soundbed.enabled = True`, and with
      `duration_min = 40`.
+
+     **`config.soundbed` is the exception, as of Plan 3g, and it is the
+     cleanest illustration of what the rule actually is.** That plan put the
+     bed into `render_window` — so the calibration window began reading the
+     field, the absence stopped being correct, and `soundbed` joined the key
+     in the same commit. Nothing about the *render's* dependence on the bed
+     changed; it always had one. What changed is what the window measures.
+     Membership of this key has never been about whether the render depends
+     on a field. `output.sample_rate` is the same lesson pointing the other
+     way: the render genuinely resamples before normalizing, and the field
+     still does not belong here, because the window does not.
 
      **Two different reasons, and an earlier draft of this paragraph got
      both wrong** — in the entry whose whole lesson is *measure, do not
@@ -1364,10 +1390,12 @@ alongside them and is closed.
      fades or the bed." Those lines are `_reverbed_window`'s reverb-context
      branch, which has nothing to do with fades or the bed, and
      `cycle_crossfade_ms` **is** read on the preview path. The real reasons:
-     - *The fades and the bed.* `sleepmix/preview.py` imports no fade
-       function, no `normalize_peak` and no `build_soundbed` at all. Those
-       three stages exist only in `pipeline.run_pipeline`, so
-       `render_window` cannot see them at any progress, not merely at 0.
+     - *The fades.* `sleepmix/preview.py` imports no fade function and no
+       `normalize_peak`. Those two stages exist only in
+       `pipeline.run_pipeline`, so `render_window` cannot see them at any
+       progress, not merely at 0. (**This said "and no `build_soundbed`"
+       until Plan 3g**, which imported exactly that — which is why the bed is
+       now in the key and the fades still are not.)
      - *The crossfade.* `preview_iteration_index` does pass
        `cfg.output.cycle_crossfade_ms` to `plan_iterations`
        (`sleepmix/preview.py:38-39`), so changing it genuinely changes
@@ -1384,22 +1412,30 @@ alongside them and is closed.
      The calibration-window gaps those same fields *do* cause are items 1, 2
      and 4; that they name the same fields is a coincidence of which stage
      the window skips, not evidence of a second bug.
-  4. **The sound bed is never mixed into the calibration window.**
-     `render_window` sums only the configured stems and never calls
-     `soundbed.build_soundbed`, while `run_pipeline` adds the bed before
-     normalizing. This was previously recorded here as "the most important
-     gap left in the level-matching" — measurement says otherwise, and by a
-     wide margin. At the default `noise_gain_db = -34` it moves the ratio to
-     **1.0031, +0.03 dB**; even at `-6 dB` it only reaches **0.9947,
-     −0.05 dB**. The reason it stays inaudible is that `normalize_peak`
-     scales the stems down by very nearly the same factor the bed pushed the
-     peak up, so the two mostly cancel. `SoundbedConfig.enabled` defaults to
-     `False` in any case. Still open — see also the sound bed's absence from
-     *previews entirely*, a different and larger problem, recorded in the
-     Plan 3f section below.
+  4. **The sound bed was never mixed into the calibration window. CLOSED by
+     Plan 3g.** `render_window` summed only the configured stems and never
+     called `soundbed.build_soundbed`, while `run_pipeline` adds the bed
+     before normalizing. This was previously recorded here as "the most
+     important gap left in the level-matching" — measurement said otherwise,
+     and by a wide margin. At the default `noise_gain_db = -34` it moved the
+     ratio to **1.0031, +0.03 dB**; even at `-6 dB` it only reached **0.9947,
+     −0.05 dB**, because `normalize_peak` scales the stems down by very
+     nearly the same factor the bed pushed the peak up, so the two mostly
+     cancel. `SoundbedConfig.enabled` defaults to `False` in any case.
 
-  All four are still open, deliberately — see Plan 3e's retirement below for
-  why closing them was judged not to serve the mixer's actual job. Item 3 was
+     **It was not closed for the +0.03 dB.** Plan 3g put the bed into
+     `render_window` because its absence from *previews* was a gap in
+     character rather than level — turning on binaural beats changed nothing
+     you could hear in the mixer — and closing that incidentally closed this.
+     The level correction is a side effect of fixing the audible problem, not
+     the reason anyone touched it.
+
+  **One of the four is still open: item 2, the crossfade.** Item 1's figure
+  turned out to describe a synthetic test fixture rather than the mixer's
+  default; item 3's cache half was disproved and its level half is a
+  calibration-window difference of about 0.01 dB; item 4 closed with Plan 3g.
+  The remaining one stays open deliberately — see Plan 3e's retirement below
+  for why closing these was judged not to serve the mixer's actual job. Item 3 was
   briefly marked closed by Task 5 of this plan and reopened by the same plan's
   final review, on a measurement; the entry itself records the round trip,
   because "the invalidation chain is sound" was true and beside the point.
@@ -1753,41 +1789,66 @@ existing claim.
   (Task 5), was reverted by this plan's final review once the memoized gain
   was measured at three output rates and found identical — see item 3 above.
 
-- **The sound bed's absence from previews is a character gap, not a level
-  one, and it is still open.** `render_window` sums only the configured
-  stems and never calls `soundbed.build_soundbed`, so turning on binaural
-  beats or pink noise changes nothing audible in the mixer — unlike the four
-  calibration-window items above, which are all inaudible-by-design offsets
-  in level, this one changes what the judgement previews exist to support
-  actually hears: it touches character, not loudness. It is currently handled
-  by disclosure alone, and disclosure got more careful during this branch
-  rather than less: `sectionNote` used to carry a line about this under
-  "Output," until commit `e6357cf` (`fix: two things the mixer said twice,
-  and one it contradicted`) deleted it rather than let it repeat what
-  `SoundbedConfig`'s own server-sent description now says immediately above
-  the section — see the comment at the `"output"` case of `sectionNote` in
-  `ui/src/Page/Mixer.elm`. Checked this task, as asked: the two do not
-  duplicate each other on screen. The section description says the bed is
-  mixed in at render time and never appears in a preview; nothing else on the
-  section repeats that sentence. Whether disclosure is enough, versus
-  actually mixing the bed into `render_window`, is left unrevisited on
-  purpose — that is an audio change with its own design, not a documentation
-  one, and this task writes no application code.
+- **The sound bed's absence from previews was a character gap, not a level
+  one. CLOSED by Plan 3g.** `render_window` summed only the configured stems
+  and never called `soundbed.build_soundbed`, so turning on binaural beats or
+  pink noise changed nothing audible in the mixer. Unlike the four
+  calibration-window items above, which are inaudible-by-design offsets in
+  level, this one changed what the judgement previews exist to support
+  actually hears — character, not loudness — which is why it outranked every
+  level item on the list and why it was closed while they were not.
 
-- **Help lines are siblings of their controls, not attached to them for a
-  screen reader.** `Page.Mixer.helpLine` renders `p [ class "field-help" ]`
-  (`ui/src/Page/Mixer.elm:1677`) as a sibling of the control it explains, with
-  no `aria-describedby` on the control pointing at it — a screen reader
-  announces the control and its label on focus and says nothing about the
-  help text sitting right below it on screen. Larger than it looks, because
-  the same gap exists one level up: every field label is `span [ class
-  "field-label" ]` (four call sites in `ui/src/Page/Mixer.elm`), never
-  `<label for=…>`, so there is no accessible name/description association to
-  hang `aria-describedby` off in the first place without also giving every
-  control a real `id` and every label a `for`. Not fixed here — this task
-  writes no application code — but worth flagging now, since the help text
-  this plan added across five tasks is exactly the content that needs the
-  association to reach anyone using a screen reader.
+  It was handled by disclosure until then, and disclosure got more careful
+  rather than less: `sectionNote` carried a line about it until commit
+  `e6357cf` deleted the duplicate, leaving `SoundbedConfig`'s own server-sent
+  description as the single statement. **That made the docstring the only
+  place the claim lived, and Plan 3g's Task 1 caught it going false in the
+  same commit that falsified it** — a claim with one home is easier to keep
+  true than one with two, but only if somebody looks.
+
+  **What is true now, and is easy to assume otherwise:**
+  - The bed is **absent from a soloed preview**, deliberately. A solo already
+    does not match the render, which has every enabled stem, and a bed over an
+    isolated stem masks the thing it was isolated to hear.
+  - The preview's bed is **not the render's bed sample for sample.** Both are
+    seeded from `config.seed`, but `run_pipeline`'s generator has advanced by
+    the time it reaches the bed. Seeding exists so the memoized `master_gain`
+    cannot depend on which random draw occurred, not to reproduce the render's
+    noise. Inaudible — noise is noise — and not identical.
+  - The bed is **built for the window, not sliced from a full-length one.**
+    The noise is stationary and the binaural beat is periodic, so a window's
+    worth is perceptually the matching slice; generating twenty minutes to
+    take twenty seconds would be absurd.
+
+- **Help lines were siblings of their controls, not attached to them for a
+  screen reader. CLOSED by Plan 3g.** `helpLine` rendered `p [ class
+  "field-help" ]` as a sibling of the control it explained, with no
+  `aria-describedby` pointing at it — a screen reader announced the control
+  and its label and said nothing about the help sitting right below it. The
+  gap ran one level deeper: every field label was `span [ class
+  "field-label" ]`, never `<label for=…>`, so there was no association to
+  hang `aria-describedby` off without first giving every control an `id`.
+
+  Plan 3g gave each control `Config.domId target` as its `id`, made every
+  label a real `<label for=…>`, and added `aria-describedby` **only where help
+  exists** — sixteen fields deliberately carry none, and pointing at an
+  element that is not there is worse than pointing at nothing.
+
+  **Two things worth knowing before touching this again:**
+  - **`Config.keyOf` is not usable as a DOM id** and `domId` exists because of
+    it. `keyOf` returns the bare field name, since that is what indexes the
+    per-section dictionaries — so every stem's `enabled` would collide with
+    every other stem's, and with `stem_decay`'s. An id that collides points
+    two controls at one label, which is worse for a screen reader than no
+    label.
+  - **`elm-test` cannot check HTML validity**, only attributes, tags and
+    classes. Applying the label change uniformly produced a `<label>` nested
+    inside the checkbox's existing wrapping `<label>` — forbidden by the
+    content model, undefined behaviour across screen readers, and on the
+    control (`Enabled`, on every stem) a user meets most often. The suite was
+    green throughout. `ui/tests/MixerTest.elm` now carries a shape guard —
+    *no `label` wraps another label* — which is the only reason the next
+    occurrence would be caught.
 
 - **The top-level description's missing-key fallback has no test.**
   `ui/tests/SchemaTest.elm`'s `"a section without a description decodes to
