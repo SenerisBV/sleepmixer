@@ -44,12 +44,18 @@ createdPresetJson =
 
 {-| A freshly-imported song, captured from `POST /api/songs`. `last_preset_id`
 is `null` — nothing has ever set it.
+
+The one edit to this capture and to `songWithLastPresetJson`: `path`'s leading
+directories were replaced with `/path/to/sleepmixer` before this repository was
+made public. Nothing asserts on that field, and the redaction is noted here
+rather than left silent because an unmarked edit to a fixture that claims to be
+captured is exactly what this project has had to redo once already.
 -}
 importedSongJson : String
 importedSongJson =
     """
     { "id": "fdae948472924dacbf0a1af044e70823"
-    , "path": "/Users/moopius/projects/sleepmixer/mix.wav", "title": "mix"
+    , "path": "/path/to/sleepmixer/mix.wav", "title": "mix"
     , "duration_s": 1200.0, "sample_rate": 44100
     , "separation_status": "pending", "separation_reason": null
     , "stems": null, "last_preset_id": null
@@ -66,7 +72,7 @@ songWithLastPresetJson : String
 songWithLastPresetJson =
     """
     { "id": "fdae948472924dacbf0a1af044e70823"
-    , "path": "/Users/moopius/projects/sleepmixer/mix.wav", "title": "mix"
+    , "path": "/path/to/sleepmixer/mix.wav", "title": "mix"
     , "duration_s": 1200.0, "sample_rate": 44100
     , "separation_status": "pending", "separation_reason": null
     , "stems": null

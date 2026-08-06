@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **`pipenv` runs only from `/Users/moopius/projects/sleepmixer`. Never `cd` elsewhere first** — pipenv keys its virtualenv to the directory path, and `cd`-ing first silently creates a new empty virtualenv.
+- **`pipenv` runs only from `/path/to/sleepmixer`. Never `cd` elsewhere first** — pipenv keys its virtualenv to the directory path, and `cd`-ing first silently creates a new empty virtualenv.
 - **`elm` and `elm-test` run from `ui/`**, so `cd ui` is correct and necessary for those. These are two different rules; do not conflate them.
 - Elm 0.19.2. **No new Elm packages, no npm dependencies, no CSS framework.**
 - **No new Python dependencies.** `subprocess`, `threading`, `queue`, `shutil`, `tempfile` are all standard library.
@@ -1127,7 +1127,7 @@ Then check something the test cannot: that every class has a rule proves nothing
 
 ```bash
 cd ui && elm-test
-cd /Users/moopius/projects/sleepmixer && make ui && pipenv run pytest -q
+cd /path/to/sleepmixer && make ui && pipenv run pytest -q
 git add ui sleepmix/static && git commit -m "feat: the renders screen"
 ```
 
@@ -1160,7 +1160,7 @@ git add ui sleepmix/static && git commit -m "feat: the renders screen"
 
 ```bash
 cd ui && elm-test
-cd /Users/moopius/projects/sleepmixer && make ui && pipenv run pytest -q
+cd /path/to/sleepmixer && make ui && pipenv run pytest -q
 git add ui sleepmix/static && git commit -m "feat: the queue screen"
 ```
 
@@ -1237,7 +1237,7 @@ The 4188-second case is the actual file that caused the original incident.
 
 ```bash
 cd ui && elm-test
-cd /Users/moopius/projects/sleepmixer && make ui && pipenv run pytest -q
+cd /path/to/sleepmixer && make ui && pipenv run pytest -q
 git add ui sleepmix/static && git commit -m "feat: start a render from the mixer, and warn before long jobs"
 ```
 

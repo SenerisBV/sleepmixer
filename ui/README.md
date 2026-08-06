@@ -241,7 +241,7 @@ default.
 ## Building it
 
 ```bash
-cd /Users/moopius/projects/sleepmixer
+cd /path/to/sleepmixer
 make ui
 ```
 
@@ -288,7 +288,7 @@ byte of content identical wouldn't change the recorded hash.
 ## Developing it
 
 ```bash
-cd /Users/moopius/projects/sleepmixer
+cd /path/to/sleepmixer
 make ui-dev
 ```
 
@@ -309,7 +309,7 @@ compiled bundle. `sleepmix ui` serves whatever is currently at
 ## Testing it
 
 ```bash
-cd /Users/moopius/projects/sleepmixer/ui
+cd /path/to/sleepmixer/ui
 elm-test
 ```
 

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **`pipenv` runs only from `/Users/moopius/projects/sleepmixer`. Never `cd` elsewhere first** — pipenv keys its virtualenv to the directory path, and `cd`-ing first silently creates a new empty virtualenv.
+- **`pipenv` runs only from `/path/to/sleepmixer`. Never `cd` elsewhere first** — pipenv keys its virtualenv to the directory path, and `cd`-ing first silently creates a new empty virtualenv.
 - **`elm` and `elm-test` run from `ui/`**, so `cd ui` is correct for those. These are two different rules; do not conflate them.
 - Elm 0.19.2. **No new Elm packages, no npm dependencies, no CSS framework.** `Test.Html.*` ships with the already-declared `elm-explorations/test`.
 - **No new Python dependencies.**
@@ -388,7 +388,7 @@ and the same treatment for the top level in `decoder`.
 
 ```bash
 cd ui && elm-test
-cd /Users/moopius/projects/sleepmixer && make ui && pipenv run pytest -q -m "not slow"
+cd /path/to/sleepmixer && make ui && pipenv run pytest -q -m "not slow"
 git add ui sleepmix/static && git commit -m "feat: decode the schema's descriptions"
 ```
 
@@ -430,7 +430,7 @@ git add ui sleepmix/static && git commit -m "feat: decode the schema's descripti
 
 ```bash
 cd ui && elm-test
-cd /Users/moopius/projects/sleepmixer && make ui && pipenv run pytest -q -m "not slow"
+cd /path/to/sleepmixer && make ui && pipenv run pytest -q -m "not slow"
 git add ui sleepmix/static && git commit -m "feat: the mixer explains itself"
 ```
 
