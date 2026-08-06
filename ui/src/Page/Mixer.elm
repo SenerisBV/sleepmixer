@@ -1763,7 +1763,7 @@ checkbox wiring state target help spec =
                 |> Maybe.andThen Config.asBool
                 |> Maybe.withDefault spec.default
     in
-    label [ class "field field-check" ]
+    div [ class "field field-check" ]
         [ input
             ([ type_ "checkbox"
              , Attr.id (Config.domId target)

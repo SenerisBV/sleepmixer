@@ -11497,7 +11497,7 @@ var $author$project$Page$Mixer$checkbox = F5(
 				$author$project$Config$asBool,
 				A2($author$project$Config$valueAt, target, state.bA)));
 		return A2(
-			$elm$html$Html$label,
+			$elm$html$Html$div,
 			_List_fromArray(
 				[
 					$elm$html$Html$Attributes$class('field field-check')

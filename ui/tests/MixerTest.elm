@@ -1506,6 +1506,22 @@ accessibilitySuite =
                             ]
                         |> Query.hasNot [ Selector.attribute (Attr.attribute "aria-describedby" wouldBeHelpId) ]
             ]
+        , test "no label wraps another label" <|
+            \_ ->
+                -- The WHATWG content model for `<label>` forbids a descendant
+                -- `<label>` — announcement across a nested pair is undefined,
+                -- worst case "Enabled Enabled" on the one control every stem
+                -- has. `elm-test` cannot check content-model validity
+                -- directly, so this is the nearest thing: no `label` anywhere
+                -- on the page contains another `label`. Guards the shape
+                -- rather than one site — a future control that wraps its
+                -- input in a `label` and then reuses `field-label` the same
+                -- way the checkbox once did would be caught here too.
+                warm
+                    |> screen
+                    |> Query.findAll
+                        [ Selector.tag "label", Selector.containing [ Selector.tag "label" ] ]
+                    |> Query.count (Expect.equal 0)
         , describe "two stems' identically-named fields do not collide"
             [ test "each stem's enabled box keeps a distinct, correctly-scoped id" <|
                 \_ ->
