@@ -1591,10 +1591,14 @@ sectionNote name =
                         )
 
                 -- No `soundbed` here any more. It said the bed is mixed in
-                -- when you render and never appears in a preview, which is
-                -- exactly what `SoundbedConfig`'s own description now says
-                -- immediately above it — the one note that was never about
-                -- cost, and the section that carries it best.
+                -- when you render and never appears in a preview — true when
+                -- it was written, false now that `render_window` mixes the
+                -- bed into every preview window too (except during a solo).
+                -- `SoundbedConfig`'s own description carries the current fact
+                -- (fetched into `sectionDescription`, immediately above this)
+                -- and always has, so the manual note here was redundant with
+                -- it either way — the one note that was never about cost, and
+                -- the section that carries it best.
                 "output" ->
                     Just
                         ("Duration decides how many repetitions the arc is spread over, so "

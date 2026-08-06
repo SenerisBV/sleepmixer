@@ -33,20 +33,29 @@ class RenderSession:
 
     - **Safe to mutate in place on ``session.config``:** each stem's ``decay``
       (curve, lowpass, amplitude, dropout, noise, spectral-hole settings),
-      plus ``soundbed`` and ``seed``. Nothing downstream is cached from these,
-      so ``render_window`` picks the new value up immediately. The existing
+      plus ``seed``. Nothing downstream is cached from these, so
+      ``render_window`` picks the new value up immediately. The existing
       tests rely on exactly this.
 
     - **Must go through :meth:`update_config`:** ``loop``, ``tempo``,
-      ``separation_model``, ``reverb``, ``output``, and each stem's
-      ``enabled``, ``gain_db`` and ``reverb_send``. The first three determine
-      ``loop_point()``, the ``prepared_loop()`` cache, and ``stems()``
-      respectively, as before. The latter four feed ``preview.master_gain``,
-      which is now memoized on this class (see ``self.master_gain``) —
-      mutating them directly leaves that cache holding a gain computed from
-      the *old* values, and there is no error — the preview simply plays at
-      the previous loudness, silently, which is exactly the defect this class
-      exists to prevent.
+      ``separation_model``, ``reverb``, ``output``, ``soundbed``, and each
+      stem's ``enabled``, ``gain_db`` and ``reverb_send``. The first three
+      determine ``loop_point()``, the ``prepared_loop()`` cache, and
+      ``stems()`` respectively, as before. The rest feed
+      ``preview.master_gain``, which is now memoized on this class (see
+      ``self.master_gain``) — mutating them directly leaves that cache holding
+      a gain computed from the *old* values, and there is no error — the
+      preview simply plays at the previous loudness, silently, which is
+      exactly the defect this class exists to prevent.
+
+      ``soundbed`` moved here, not because the *render* newly depends on it —
+      it always did — but because the *calibration window* now does: as of
+      this plan ``render_window`` mixes the bed into the same iteration-0
+      window ``master_gain`` measures, so a bed toggled by direct mutation
+      leaves ``_master_key`` unconsulted and the memo stale. This is the
+      second instance of the distinction ``_master_key``'s own docstring
+      draws for ``output.sample_rate``: what matters is not whether a real
+      render reads the field, but whether the calibration window does.
 
     A server applying config edits to a long-lived session should therefore
     build the new ``MixConfig`` and hand it to :meth:`update_config` rather than
@@ -177,22 +186,28 @@ class RenderSession:
         ``docs/project-state.md``.
 
         ``config.soundbed`` *is* here, and that is the opposite case from
-        ``output.sample_rate`` above, not an exception to it. The test is the
-        same one that field failed: does the calibration window actually read
-        this value. As of this plan ``render_window`` imports
-        ``build_soundbed`` and mixes a bed into the same iteration-0 window
-        ``master_gain`` measures — whenever ``config.soundbed.enabled`` and no
-        solo is in effect, which is exactly when the render carries a bed too.
-        A window with the bed on has a different peak than one with it off, so
-        this field moves the value this key guards, the same test
-        ``output.sample_rate`` was measured against and failed. What decides
-        membership in this tuple was never whether a field is *read* by
-        ``render_window`` in the abstract — ``cycle_crossfade_ms`` is read and
-        still excluded, ``output.sample_rate`` is not read at all — it is
-        whether the calibration window's own output depends on it. Confirmed
-        by reverting only this line while leaving the bed in
+        ``output.sample_rate`` above, not an exception to it. The question is
+        the same one that field was measured against: does the calibration
+        window actually read this value. As of this plan ``render_window``
+        imports ``build_soundbed`` and mixes a bed into the same iteration-0
+        window ``master_gain`` measures — whenever ``config.soundbed.enabled``
+        and no solo is in effect, which is exactly when the render carries a
+        bed too. A window with the bed on has a different peak than one with
+        it off, so this field moves the value this key guards, where
+        ``output.sample_rate`` measurably does not. What decides membership in
+        this tuple was never whether a field is *read* by ``render_window`` in
+        the abstract — ``cycle_crossfade_ms`` is read and still excluded,
+        ``output.sample_rate`` is not read at all — it is whether the
+        calibration window's own output depends on it.
+
+        Confirmed by reverting only this line while leaving the bed in
         ``render_window``: ``test_toggling_the_bed_clears_the_memoised_gain``
-        fails, because a toggled bed no longer clears the stale factor. See
+        (``tests/test_session.py``) fails, because a toggled bed no longer
+        clears the stale factor. Its neighbour,
+        ``test_the_master_gain_notices_the_bed``, is not that proof — it
+        compares two independently-constructed sessions and passes on the
+        ``render_window`` change alone, with or without this key entry; it
+        documents the observable behavior, not the invalidation. See
         ``docs/project-state.md`` for the ``output.sample_rate`` measurement
         this reasoning mirrors."""
         return (
