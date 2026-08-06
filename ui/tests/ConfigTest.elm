@@ -265,6 +265,7 @@ suite =
             ]
         , overlaySuite
         , forPresetSuite
+        , domIdSuite
         ]
 
 
@@ -399,3 +400,34 @@ json : String -> Decode.Value
 json raw =
     Decode.decodeString Decode.value raw
         |> Result.withDefault Encode.null
+
+
+domIdSuite : Test
+domIdSuite =
+    describe "Config.domId"
+        [ test "two stems' identically-named fields do not collide" <|
+            \_ ->
+                Expect.notEqual
+                    (Config.domId (Config.InStem 0 "enabled"))
+                    (Config.domId (Config.InStem 1 "enabled"))
+        , test "a stem field and its decay counterpart do not collide" <|
+            \_ ->
+                Expect.notEqual
+                    (Config.domId (Config.InStem 0 "enabled"))
+                    (Config.domId (Config.InStemDecay 0 "enabled"))
+        , test "the same field in two sections does not collide" <|
+            \_ ->
+                Expect.notEqual
+                    (Config.domId (Config.InSection "loop" "bars"))
+                    (Config.domId (Config.InSection "output" "bars"))
+        , test "a top-level field does not collide with a section's" <|
+            \_ ->
+                Expect.notEqual
+                    (Config.domId (Config.Top "seed"))
+                    (Config.domId (Config.InSection "loop" "seed"))
+        , test "it is stable for the same target" <|
+            \_ ->
+                Expect.equal
+                    (Config.domId (Config.InStem 2 "gain_db"))
+                    (Config.domId (Config.InStem 2 "gain_db"))
+        ]

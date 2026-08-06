@@ -1591,10 +1591,14 @@ sectionNote name =
                         )
 
                 -- No `soundbed` here any more. It said the bed is mixed in
-                -- when you render and never appears in a preview, which is
-                -- exactly what `SoundbedConfig`'s own description now says
-                -- immediately above it — the one note that was never about
-                -- cost, and the section that carries it best.
+                -- when you render and never appears in a preview — true when
+                -- it was written, false now that `render_window` mixes the
+                -- bed into every preview window too (except during a solo).
+                -- `SoundbedConfig`'s own description carries the current fact
+                -- (fetched into `sectionDescription`, immediately above this)
+                -- and always has, so the manual note here was redundant with
+                -- it either way — the one note that was never about cost, and
+                -- the section that carries it best.
                 "output" ->
                     Just
                         ("Duration decides how many repetitions the arc is spread over, so "
@@ -1640,9 +1644,13 @@ controlsFor : Wiring msg -> State -> (String -> Config.Target) -> Dict String Sc
 controlsFor wiring state toTarget fields =
     List.map
         (\( key, spec ) ->
+            let
+                target =
+                    toTarget key
+            in
             div [ class "field-group" ]
-                [ control wiring state (toTarget key) spec
-                , helpLine (fieldHelp spec)
+                [ control wiring state target spec
+                , helpLine target (fieldHelp spec)
                 ]
         )
         (Dict.toList fields)
@@ -1686,11 +1694,36 @@ fieldHelp spec =
     Maybe.andThen nonBlank stated
 
 
-helpLine : Maybe String -> Html msg
-helpLine words =
+{-| The `id` a paragraph of help carries, when there is one — `"-help"` after
+the control's own id, which is also what `aria-describedby` on the control
+points at. Kept in one place so the two sides of that association cannot drift
+apart from each other.
+-}
+helpId : Config.Target -> String
+helpId target =
+    Config.domId target ++ "-help"
+
+
+{-| Attributes that point a control at its own help paragraph — or nothing,
+when there is none to point at. Pointing `aria-describedby` at an id that does
+not exist is worse than not pointing it anywhere: a screen reader that resolves
+it finds nothing, and one that does not is no worse off than before this task.
+-}
+describedBy : Config.Target -> Maybe String -> List (Attribute msg)
+describedBy target help =
+    case help of
+        Just _ ->
+            [ Attr.attribute "aria-describedby" (helpId target) ]
+
+        Nothing ->
+            []
+
+
+helpLine : Config.Target -> Maybe String -> Html msg
+helpLine target words =
     case words of
         Just line ->
-            p [ class "field-help" ] [ text line ]
+            p [ class "field-help", Attr.id (helpId target) ] [ text line ]
 
         Nothing ->
             text ""
@@ -1698,43 +1731,50 @@ helpLine words =
 
 control : Wiring msg -> State -> Config.Target -> Schema.Field -> Html msg
 control wiring state target spec =
+    let
+        help =
+            fieldHelp spec
+    in
     case spec of
         Schema.BoolField s ->
-            checkbox wiring state target s
+            checkbox wiring state target help s
 
         Schema.FloatField s ->
-            number wiring state target s
+            number wiring state target help s
 
         Schema.IntField s ->
-            number wiring state target s
+            number wiring state target help s
 
         Schema.TextField s ->
-            typedBox wiring state target { label = s.label, unit = Nothing } "text" []
+            typedBox wiring state target help { label = s.label, unit = Nothing } "text" []
 
         Schema.StringChoiceField s ->
-            chooser wiring state target { label = s.label } s.choices
+            chooser wiring state target help { label = s.label } s.choices
 
         Schema.IntChoiceField s ->
-            chooser wiring state target { label = s.label } (List.map String.fromInt s.choices)
+            chooser wiring state target help { label = s.label } (List.map String.fromInt s.choices)
 
 
-checkbox : Wiring msg -> State -> Config.Target -> { a | label : String, default : Bool } -> Html msg
-checkbox wiring state target spec =
+checkbox : Wiring msg -> State -> Config.Target -> Maybe String -> { a | label : String, default : Bool } -> Html msg
+checkbox wiring state target help spec =
     let
         on =
             Config.valueAt target state.config
                 |> Maybe.andThen Config.asBool
                 |> Maybe.withDefault spec.default
     in
-    label [ class "field field-check" ]
+    div [ class "field field-check" ]
         [ input
-            [ type_ "checkbox"
-            , Attr.checked on
-            , onCheck (wiring.onToggle target)
-            , disabled (not wiring.enabled)
-            ]
+            ([ type_ "checkbox"
+             , Attr.id (Config.domId target)
+             , Attr.checked on
+             , onCheck (wiring.onToggle target)
+             , disabled (not wiring.enabled)
+             ]
+                ++ describedBy target help
+            )
             []
-        , span [ class "field-label" ] [ text spec.label ]
+        , label [ class "field-label", Attr.for (Config.domId target) ] [ text spec.label ]
         ]
 
 
@@ -1751,6 +1791,7 @@ number :
     Wiring msg
     -> State
     -> Config.Target
+    -> Maybe String
     ->
         { a
             | label : String
@@ -1760,7 +1801,7 @@ number :
             , unit : Maybe String
         }
     -> Html msg
-number wiring state target spec =
+number wiring state target help spec =
     let
         bounds =
             List.filterMap identity
@@ -1772,14 +1813,17 @@ number wiring state target spec =
     case ( spec.min, spec.max, spec.step ) of
         ( Just _, Just _, Just _ ) ->
             div [ class "field" ]
-                [ span [ class "field-label" ] [ text spec.label ]
+                [ label [ class "field-label", Attr.for (Config.domId target) ] [ text spec.label ]
                 , input
-                    (type_ "range"
-                        :: class "field-range"
-                        :: Attr.value (reading state target)
-                        :: onInput (wiring.onField target)
-                        :: disabled (not wiring.enabled)
-                        :: bounds
+                    ([ type_ "range"
+                     , class "field-range"
+                     , Attr.id (Config.domId target)
+                     , Attr.value (reading state target)
+                     , onInput (wiring.onField target)
+                     , disabled (not wiring.enabled)
+                     ]
+                        ++ bounds
+                        ++ describedBy target help
                     )
                     []
                 , span [ class "field-value" ]
@@ -1787,27 +1831,32 @@ number wiring state target spec =
                 ]
 
         _ ->
-            typedBox wiring state target { label = spec.label, unit = spec.unit } "number" bounds
+            typedBox wiring state target help { label = spec.label, unit = spec.unit } "number" bounds
 
 
 typedBox :
     Wiring msg
     -> State
     -> Config.Target
+    -> Maybe String
     -> { label : String, unit : Maybe String }
     -> String
     -> List (Attribute msg)
     -> Html msg
-typedBox wiring state target spec kind bounds =
+typedBox wiring state target help spec kind bounds =
     div [ class "field" ]
-        [ span [ class "field-label" ] [ text (spec.label ++ unitSuffix spec.unit) ]
+        [ label [ class "field-label", Attr.for (Config.domId target) ]
+            [ text (spec.label ++ unitSuffix spec.unit) ]
         , input
-            (type_ kind
-                :: class "field-box"
-                :: Attr.value (reading state target)
-                :: onCommit (wiring.onField target)
-                :: disabled (not wiring.enabled)
-                :: bounds
+            ([ type_ kind
+             , class "field-box"
+             , Attr.id (Config.domId target)
+             , Attr.value (reading state target)
+             , onCommit (wiring.onField target)
+             , disabled (not wiring.enabled)
+             ]
+                ++ bounds
+                ++ describedBy target help
             )
             []
         ]
@@ -1838,21 +1887,25 @@ chooser :
     Wiring msg
     -> State
     -> Config.Target
+    -> Maybe String
     -> { label : String }
     -> List String
     -> Html msg
-chooser wiring state target spec choices =
+chooser wiring state target help spec choices =
     let
         current =
             reading state target
     in
     div [ class "field" ]
-        [ span [ class "field-label" ] [ text spec.label ]
+        [ label [ class "field-label", Attr.for (Config.domId target) ] [ text spec.label ]
         , Html.select
-            [ class "field-select"
-            , onInput (wiring.onField target)
-            , disabled (not wiring.enabled)
-            ]
+            ([ class "field-select"
+             , Attr.id (Config.domId target)
+             , onInput (wiring.onField target)
+             , disabled (not wiring.enabled)
+             ]
+                ++ describedBy target help
+            )
             (List.map
                 (\choice ->
                     option [ Attr.value choice, Attr.selected (choice == current) ]

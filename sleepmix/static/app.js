@@ -11429,6 +11429,52 @@ var $author$project$Page$Mixer$mixFields = function (schema) {
 	return A2($elm$core$Dict$remove, 'separation_model', schema.y);
 };
 var $elm$html$Html$Attributes$checked = $elm$html$Html$Attributes$boolProperty('checked');
+var $elm$virtual_dom$VirtualDom$attribute = F2(
+	function (key, value) {
+		return A2(
+			_VirtualDom_attribute,
+			_VirtualDom_noOnOrFormAction(key),
+			_VirtualDom_noJavaScriptOrHtmlUri(value));
+	});
+var $elm$html$Html$Attributes$attribute = $elm$virtual_dom$VirtualDom$attribute;
+var $author$project$Config$domId = function (target) {
+	switch (target.$) {
+		case 0:
+			var key = target.a;
+			return 'f-top-' + key;
+		case 1:
+			var section = target.a;
+			var key = target.b;
+			return 'f-' + (section + ('-' + key));
+		case 2:
+			var index = target.a;
+			var key = target.b;
+			return 'f-stem' + ($elm$core$String$fromInt(index) + ('-' + key));
+		default:
+			var index = target.a;
+			var key = target.b;
+			return 'f-decay' + ($elm$core$String$fromInt(index) + ('-' + key));
+	}
+};
+var $author$project$Page$Mixer$helpId = function (target) {
+	return $author$project$Config$domId(target) + '-help';
+};
+var $author$project$Page$Mixer$describedBy = F2(
+	function (target, help) {
+		if (!help.$) {
+			return _List_fromArray(
+				[
+					A2(
+					$elm$html$Html$Attributes$attribute,
+					'aria-describedby',
+					$author$project$Page$Mixer$helpId(target))
+				]);
+		} else {
+			return _List_Nil;
+		}
+	});
+var $elm$html$Html$Attributes$for = $elm$html$Html$Attributes$stringProperty('htmlFor');
+var $elm$html$Html$Attributes$id = $elm$html$Html$Attributes$stringProperty('id');
 var $elm$html$Html$label = _VirtualDom_node('label');
 var $elm$html$Html$Events$targetChecked = A2(
 	$elm$json$Json$Decode$at,
@@ -11441,8 +11487,8 @@ var $elm$html$Html$Events$onCheck = function (tagger) {
 		'change',
 		A2($elm$json$Json$Decode$map, tagger, $elm$html$Html$Events$targetChecked));
 };
-var $author$project$Page$Mixer$checkbox = F4(
-	function (wiring, state, target, spec) {
+var $author$project$Page$Mixer$checkbox = F5(
+	function (wiring, state, target, help, spec) {
 		var on = A2(
 			$elm$core$Maybe$withDefault,
 			spec.au,
@@ -11451,7 +11497,7 @@ var $author$project$Page$Mixer$checkbox = F4(
 				$author$project$Config$asBool,
 				A2($author$project$Config$valueAt, target, state.bA)));
 		return A2(
-			$elm$html$Html$label,
+			$elm$html$Html$div,
 			_List_fromArray(
 				[
 					$elm$html$Html$Attributes$class('field field-check')
@@ -11460,20 +11506,26 @@ var $author$project$Page$Mixer$checkbox = F4(
 				[
 					A2(
 					$elm$html$Html$input,
-					_List_fromArray(
-						[
-							$elm$html$Html$Attributes$type_('checkbox'),
-							$elm$html$Html$Attributes$checked(on),
-							$elm$html$Html$Events$onCheck(
-							wiring.dy(target)),
-							$elm$html$Html$Attributes$disabled(!wiring.ai)
-						]),
+					_Utils_ap(
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$type_('checkbox'),
+								$elm$html$Html$Attributes$id(
+								$author$project$Config$domId(target)),
+								$elm$html$Html$Attributes$checked(on),
+								$elm$html$Html$Events$onCheck(
+								wiring.dy(target)),
+								$elm$html$Html$Attributes$disabled(!wiring.ai)
+							]),
+						A2($author$project$Page$Mixer$describedBy, target, help)),
 					_List_Nil),
 					A2(
-					$elm$html$Html$span,
+					$elm$html$Html$label,
 					_List_fromArray(
 						[
-							$elm$html$Html$Attributes$class('field-label')
+							$elm$html$Html$Attributes$class('field-label'),
+							$elm$html$Html$Attributes$for(
+							$author$project$Config$domId(target))
 						]),
 					_List_fromArray(
 						[
@@ -11491,8 +11543,8 @@ var $author$project$Page$Mixer$reading = F2(
 				$author$project$Config$valueString,
 				A2($author$project$Config$valueAt, target, state.bA)));
 	});
-var $author$project$Page$Mixer$chooser = F5(
-	function (wiring, state, target, spec, choices) {
+var $author$project$Page$Mixer$chooser = F6(
+	function (wiring, state, target, help, spec, choices) {
 		var current = A2($author$project$Page$Mixer$reading, state, target);
 		return A2(
 			$elm$html$Html$div,
@@ -11503,10 +11555,12 @@ var $author$project$Page$Mixer$chooser = F5(
 			_List_fromArray(
 				[
 					A2(
-					$elm$html$Html$span,
+					$elm$html$Html$label,
 					_List_fromArray(
 						[
-							$elm$html$Html$Attributes$class('field-label')
+							$elm$html$Html$Attributes$class('field-label'),
+							$elm$html$Html$Attributes$for(
+							$author$project$Config$domId(target))
 						]),
 					_List_fromArray(
 						[
@@ -11514,13 +11568,17 @@ var $author$project$Page$Mixer$chooser = F5(
 						])),
 					A2(
 					$elm$html$Html$select,
-					_List_fromArray(
-						[
-							$elm$html$Html$Attributes$class('field-select'),
-							$elm$html$Html$Events$onInput(
-							wiring.dh(target)),
-							$elm$html$Html$Attributes$disabled(!wiring.ai)
-						]),
+					_Utils_ap(
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('field-select'),
+								$elm$html$Html$Attributes$id(
+								$author$project$Config$domId(target)),
+								$elm$html$Html$Events$onInput(
+								wiring.dh(target)),
+								$elm$html$Html$Attributes$disabled(!wiring.ai)
+							]),
+						A2($author$project$Page$Mixer$describedBy, target, help)),
 					A2(
 						$elm$core$List$map,
 						function (choice) {
@@ -11539,194 +11597,6 @@ var $author$project$Page$Mixer$chooser = F5(
 						},
 						choices))
 				]));
-	});
-var $author$project$Page$Mixer$onCommit = function (toMsg) {
-	return A2(
-		$elm$html$Html$Events$on,
-		'change',
-		A2($elm$json$Json$Decode$map, toMsg, $elm$html$Html$Events$targetValue));
-};
-var $author$project$Page$Mixer$unitSuffix = function (unit) {
-	if (!unit.$) {
-		var u = unit.a;
-		return ' ' + u;
-	} else {
-		return '';
-	}
-};
-var $author$project$Page$Mixer$typedBox = F6(
-	function (wiring, state, target, spec, kind, bounds) {
-		return A2(
-			$elm$html$Html$div,
-			_List_fromArray(
-				[
-					$elm$html$Html$Attributes$class('field')
-				]),
-			_List_fromArray(
-				[
-					A2(
-					$elm$html$Html$span,
-					_List_fromArray(
-						[
-							$elm$html$Html$Attributes$class('field-label')
-						]),
-					_List_fromArray(
-						[
-							$elm$html$Html$text(
-							_Utils_ap(
-								spec.z,
-								$author$project$Page$Mixer$unitSuffix(spec.aV)))
-						])),
-					A2(
-					$elm$html$Html$input,
-					A2(
-						$elm$core$List$cons,
-						$elm$html$Html$Attributes$type_(kind),
-						A2(
-							$elm$core$List$cons,
-							$elm$html$Html$Attributes$class('field-box'),
-							A2(
-								$elm$core$List$cons,
-								$elm$html$Html$Attributes$value(
-									A2($author$project$Page$Mixer$reading, state, target)),
-								A2(
-									$elm$core$List$cons,
-									$author$project$Page$Mixer$onCommit(
-										wiring.dh(target)),
-									A2(
-										$elm$core$List$cons,
-										$elm$html$Html$Attributes$disabled(!wiring.ai),
-										bounds))))),
-					_List_Nil)
-				]));
-	});
-var $author$project$Page$Mixer$number = F4(
-	function (wiring, state, target, spec) {
-		var bounds = A2(
-			$elm$core$List$filterMap,
-			$elm$core$Basics$identity,
-			_List_fromArray(
-				[
-					A2(
-					$elm$core$Maybe$map,
-					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$min, $elm$core$String$fromFloat),
-					spec.bU),
-					A2(
-					$elm$core$Maybe$map,
-					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$max, $elm$core$String$fromFloat),
-					spec.bT),
-					A2(
-					$elm$core$Maybe$map,
-					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$step, $elm$core$String$fromFloat),
-					spec.cl)
-				]));
-		var _v0 = _Utils_Tuple3(spec.bU, spec.bT, spec.cl);
-		if (((!_v0.a.$) && (!_v0.b.$)) && (!_v0.c.$)) {
-			return A2(
-				$elm$html$Html$div,
-				_List_fromArray(
-					[
-						$elm$html$Html$Attributes$class('field')
-					]),
-				_List_fromArray(
-					[
-						A2(
-						$elm$html$Html$span,
-						_List_fromArray(
-							[
-								$elm$html$Html$Attributes$class('field-label')
-							]),
-						_List_fromArray(
-							[
-								$elm$html$Html$text(spec.z)
-							])),
-						A2(
-						$elm$html$Html$input,
-						A2(
-							$elm$core$List$cons,
-							$elm$html$Html$Attributes$type_('range'),
-							A2(
-								$elm$core$List$cons,
-								$elm$html$Html$Attributes$class('field-range'),
-								A2(
-									$elm$core$List$cons,
-									$elm$html$Html$Attributes$value(
-										A2($author$project$Page$Mixer$reading, state, target)),
-									A2(
-										$elm$core$List$cons,
-										$elm$html$Html$Events$onInput(
-											wiring.dh(target)),
-										A2(
-											$elm$core$List$cons,
-											$elm$html$Html$Attributes$disabled(!wiring.ai),
-											bounds))))),
-						_List_Nil),
-						A2(
-						$elm$html$Html$span,
-						_List_fromArray(
-							[
-								$elm$html$Html$Attributes$class('field-value')
-							]),
-						_List_fromArray(
-							[
-								$elm$html$Html$text(
-								_Utils_ap(
-									A2($author$project$Page$Mixer$reading, state, target),
-									$author$project$Page$Mixer$unitSuffix(spec.aV)))
-							]))
-					]));
-		} else {
-			return A6(
-				$author$project$Page$Mixer$typedBox,
-				wiring,
-				state,
-				target,
-				{z: spec.z, aV: spec.aV},
-				'number',
-				bounds);
-		}
-	});
-var $author$project$Page$Mixer$control = F4(
-	function (wiring, state, target, spec) {
-		switch (spec.$) {
-			case 2:
-				var s = spec.a;
-				return A4($author$project$Page$Mixer$checkbox, wiring, state, target, s);
-			case 0:
-				var s = spec.a;
-				return A4($author$project$Page$Mixer$number, wiring, state, target, s);
-			case 1:
-				var s = spec.a;
-				return A4($author$project$Page$Mixer$number, wiring, state, target, s);
-			case 3:
-				var s = spec.a;
-				return A6(
-					$author$project$Page$Mixer$typedBox,
-					wiring,
-					state,
-					target,
-					{z: s.z, aV: $elm$core$Maybe$Nothing},
-					'text',
-					_List_Nil);
-			case 5:
-				var s = spec.a;
-				return A5(
-					$author$project$Page$Mixer$chooser,
-					wiring,
-					state,
-					target,
-					{z: s.z},
-					s.bz);
-			default:
-				var s = spec.a;
-				return A5(
-					$author$project$Page$Mixer$chooser,
-					wiring,
-					state,
-					target,
-					{z: s.z},
-					A2($elm$core$List$map, $elm$core$String$fromInt, s.bz));
-		}
 	});
 var $author$project$Page$Mixer$nonBlank = function (words) {
 	return ($elm$core$String$trim(words) === '') ? $elm$core$Maybe$Nothing : $elm$core$Maybe$Just(
@@ -11757,23 +11627,219 @@ var $author$project$Page$Mixer$fieldHelp = function (spec) {
 	}();
 	return A2($elm$core$Maybe$andThen, $author$project$Page$Mixer$nonBlank, stated);
 };
-var $author$project$Page$Mixer$helpLine = function (words) {
-	if (!words.$) {
-		var line = words.a;
+var $author$project$Page$Mixer$onCommit = function (toMsg) {
+	return A2(
+		$elm$html$Html$Events$on,
+		'change',
+		A2($elm$json$Json$Decode$map, toMsg, $elm$html$Html$Events$targetValue));
+};
+var $author$project$Page$Mixer$unitSuffix = function (unit) {
+	if (!unit.$) {
+		var u = unit.a;
+		return ' ' + u;
+	} else {
+		return '';
+	}
+};
+var $author$project$Page$Mixer$typedBox = F7(
+	function (wiring, state, target, help, spec, kind, bounds) {
 		return A2(
-			$elm$html$Html$p,
+			$elm$html$Html$div,
 			_List_fromArray(
 				[
-					$elm$html$Html$Attributes$class('field-help')
+					$elm$html$Html$Attributes$class('field')
 				]),
 			_List_fromArray(
 				[
-					$elm$html$Html$text(line)
+					A2(
+					$elm$html$Html$label,
+					_List_fromArray(
+						[
+							$elm$html$Html$Attributes$class('field-label'),
+							$elm$html$Html$Attributes$for(
+							$author$project$Config$domId(target))
+						]),
+					_List_fromArray(
+						[
+							$elm$html$Html$text(
+							_Utils_ap(
+								spec.z,
+								$author$project$Page$Mixer$unitSuffix(spec.aV)))
+						])),
+					A2(
+					$elm$html$Html$input,
+					_Utils_ap(
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$type_(kind),
+								$elm$html$Html$Attributes$class('field-box'),
+								$elm$html$Html$Attributes$id(
+								$author$project$Config$domId(target)),
+								$elm$html$Html$Attributes$value(
+								A2($author$project$Page$Mixer$reading, state, target)),
+								$author$project$Page$Mixer$onCommit(
+								wiring.dh(target)),
+								$elm$html$Html$Attributes$disabled(!wiring.ai)
+							]),
+						_Utils_ap(
+							bounds,
+							A2($author$project$Page$Mixer$describedBy, target, help))),
+					_List_Nil)
 				]));
-	} else {
-		return $elm$html$Html$text('');
-	}
-};
+	});
+var $author$project$Page$Mixer$number = F5(
+	function (wiring, state, target, help, spec) {
+		var bounds = A2(
+			$elm$core$List$filterMap,
+			$elm$core$Basics$identity,
+			_List_fromArray(
+				[
+					A2(
+					$elm$core$Maybe$map,
+					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$min, $elm$core$String$fromFloat),
+					spec.bU),
+					A2(
+					$elm$core$Maybe$map,
+					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$max, $elm$core$String$fromFloat),
+					spec.bT),
+					A2(
+					$elm$core$Maybe$map,
+					A2($elm$core$Basics$composeL, $elm$html$Html$Attributes$step, $elm$core$String$fromFloat),
+					spec.cl)
+				]));
+		var _v0 = _Utils_Tuple3(spec.bU, spec.bT, spec.cl);
+		if (((!_v0.a.$) && (!_v0.b.$)) && (!_v0.c.$)) {
+			return A2(
+				$elm$html$Html$div,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('field')
+					]),
+				_List_fromArray(
+					[
+						A2(
+						$elm$html$Html$label,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('field-label'),
+								$elm$html$Html$Attributes$for(
+								$author$project$Config$domId(target))
+							]),
+						_List_fromArray(
+							[
+								$elm$html$Html$text(spec.z)
+							])),
+						A2(
+						$elm$html$Html$input,
+						_Utils_ap(
+							_List_fromArray(
+								[
+									$elm$html$Html$Attributes$type_('range'),
+									$elm$html$Html$Attributes$class('field-range'),
+									$elm$html$Html$Attributes$id(
+									$author$project$Config$domId(target)),
+									$elm$html$Html$Attributes$value(
+									A2($author$project$Page$Mixer$reading, state, target)),
+									$elm$html$Html$Events$onInput(
+									wiring.dh(target)),
+									$elm$html$Html$Attributes$disabled(!wiring.ai)
+								]),
+							_Utils_ap(
+								bounds,
+								A2($author$project$Page$Mixer$describedBy, target, help))),
+						_List_Nil),
+						A2(
+						$elm$html$Html$span,
+						_List_fromArray(
+							[
+								$elm$html$Html$Attributes$class('field-value')
+							]),
+						_List_fromArray(
+							[
+								$elm$html$Html$text(
+								_Utils_ap(
+									A2($author$project$Page$Mixer$reading, state, target),
+									$author$project$Page$Mixer$unitSuffix(spec.aV)))
+							]))
+					]));
+		} else {
+			return A7(
+				$author$project$Page$Mixer$typedBox,
+				wiring,
+				state,
+				target,
+				help,
+				{z: spec.z, aV: spec.aV},
+				'number',
+				bounds);
+		}
+	});
+var $author$project$Page$Mixer$control = F4(
+	function (wiring, state, target, spec) {
+		var help = $author$project$Page$Mixer$fieldHelp(spec);
+		switch (spec.$) {
+			case 2:
+				var s = spec.a;
+				return A5($author$project$Page$Mixer$checkbox, wiring, state, target, help, s);
+			case 0:
+				var s = spec.a;
+				return A5($author$project$Page$Mixer$number, wiring, state, target, help, s);
+			case 1:
+				var s = spec.a;
+				return A5($author$project$Page$Mixer$number, wiring, state, target, help, s);
+			case 3:
+				var s = spec.a;
+				return A7(
+					$author$project$Page$Mixer$typedBox,
+					wiring,
+					state,
+					target,
+					help,
+					{z: s.z, aV: $elm$core$Maybe$Nothing},
+					'text',
+					_List_Nil);
+			case 5:
+				var s = spec.a;
+				return A6(
+					$author$project$Page$Mixer$chooser,
+					wiring,
+					state,
+					target,
+					help,
+					{z: s.z},
+					s.bz);
+			default:
+				var s = spec.a;
+				return A6(
+					$author$project$Page$Mixer$chooser,
+					wiring,
+					state,
+					target,
+					help,
+					{z: s.z},
+					A2($elm$core$List$map, $elm$core$String$fromInt, s.bz));
+		}
+	});
+var $author$project$Page$Mixer$helpLine = F2(
+	function (target, words) {
+		if (!words.$) {
+			var line = words.a;
+			return A2(
+				$elm$html$Html$p,
+				_List_fromArray(
+					[
+						$elm$html$Html$Attributes$class('field-help'),
+						$elm$html$Html$Attributes$id(
+						$author$project$Page$Mixer$helpId(target))
+					]),
+				_List_fromArray(
+					[
+						$elm$html$Html$text(line)
+					]));
+		} else {
+			return $elm$html$Html$text('');
+		}
+	});
 var $author$project$Page$Mixer$controlsFor = F4(
 	function (wiring, state, toTarget, fields) {
 		return A2(
@@ -11781,6 +11847,7 @@ var $author$project$Page$Mixer$controlsFor = F4(
 			function (_v0) {
 				var key = _v0.a;
 				var spec = _v0.b;
+				var target = toTarget(key);
 				return A2(
 					$elm$html$Html$div,
 					_List_fromArray(
@@ -11789,13 +11856,10 @@ var $author$project$Page$Mixer$controlsFor = F4(
 						]),
 					_List_fromArray(
 						[
-							A4(
-							$author$project$Page$Mixer$control,
-							wiring,
-							state,
-							toTarget(key),
-							spec),
-							$author$project$Page$Mixer$helpLine(
+							A4($author$project$Page$Mixer$control, wiring, state, target, spec),
+							A2(
+							$author$project$Page$Mixer$helpLine,
+							target,
 							$author$project$Page$Mixer$fieldHelp(spec))
 						]));
 			},

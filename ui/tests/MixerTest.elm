@@ -20,6 +20,7 @@ import Config
 import Dict
 import Expect
 import Fixtures
+import Html.Attributes as Attr
 import Http
 import Json.Decode as Decode
 import Json.Encode as Encode
@@ -218,6 +219,22 @@ longSong =
 longWarm : Main.Model
 longWarm =
     onSong longSong
+        |> step Main.OpenMixer
+        |> step (Main.PreviewPlaying (Just 12.5))
+
+
+{-| A song separated into exactly two stems, which is the smallest fixture
+that can show two stems' identically-named fields colliding — `keyOf` would
+give both stems' `enabled` checkbox the same bare string, `"enabled"`.
+-}
+twoStemSong : Api.Song
+twoStemSong =
+    { song | id = "song-2stem", stems = [ "vocals", "drums" ] }
+
+
+twoStemWarm : Main.Model
+twoStemWarm =
+    onSong twoStemSong
         |> step Main.OpenMixer
         |> step (Main.PreviewPlaying (Just 12.5))
 
@@ -1107,6 +1124,7 @@ suite =
             ]
         , presetSuite
         , legibilitySuite
+        , accessibilitySuite
         ]
 
 
@@ -1345,6 +1363,193 @@ legibilitySuite =
                         |> screen
                         |> Query.findAll [ Selector.class "stem-row" ]
                         |> Query.count (Expect.equal 3)
+            ]
+        ]
+
+
+{-| Whether a screen reader landing on a control can find what it is about.
+
+Visible help text fixed sighted and touch users, because it sits on the page
+rather than in a `title` nobody hovers. It did not fix a screen reader: the
+help `<p>` used to be a sibling of its control with no programmatic
+association, so focus landing on the input announced only the bare control —
+nothing of the label beside it and nothing of the help paragraph under it.
+
+`Config.domId`, not `Config.keyOf`, is what these are built on throughout.
+`keyOf` is the bare field name — right for indexing the per-section
+dictionaries, wrong as a DOM id, because every stem's `enabled` would collide
+with every other stem's. The last suite below is the case that would actually
+break: a fixture with two stems, checked against the id a naive `keyOf`-based
+implementation would have produced.
+-}
+accessibilitySuite : Test
+accessibilitySuite =
+    describe "a screen reader can find what a label is about"
+        [ describe "a control's id and its label's for"
+            [ test "a slider/typed control carries the id its label points at" <|
+                \_ ->
+                    let
+                        expectedId =
+                            Config.domId (Config.InSection "loop" "search_start")
+                    in
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Search from" ]
+                            ]
+                        |> Query.has [ Selector.id expectedId ]
+            , test "and its label carries a matching for" <|
+                \_ ->
+                    let
+                        expectedId =
+                            Config.domId (Config.InSection "loop" "search_start")
+                    in
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Search from" ]
+                            ]
+                        |> Query.find [ Selector.tag "label" ]
+                        |> Query.has [ Selector.attribute (Attr.for expectedId) ]
+            , test "a checkbox carries the id its label points at" <|
+                \_ ->
+                    let
+                        expectedId =
+                            Config.domId (Config.InStem 0 "enabled")
+                    in
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "stem-row"
+                            , Selector.containing [ Selector.text "vocals" ]
+                            ]
+                        |> Query.has [ Selector.id expectedId ]
+            , test "and the checkbox's own field-label carries a matching for" <|
+                \_ ->
+                    let
+                        expectedId =
+                            Config.domId (Config.InStem 0 "enabled")
+                    in
+                    -- Scoped by the id itself, not by "vocals" or "Enabled" —
+                    -- both texts turn up more than once in a stem's row (a
+                    -- stem's own `enabled` and its decay's `enabled` share a
+                    -- label, "Enabled"), so scoping on text here would make
+                    -- this test ambiguous regardless of whether the markup is
+                    -- right. And `Selector.class "field-label"` rather than
+                    -- `Selector.tag "label"`: a checkbox's own wrapper is
+                    -- already a `<label>`, so tag alone matches it too.
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.id expectedId ]
+                            ]
+                        |> Query.find [ Selector.class "field-label" ]
+                        |> Query.has [ Selector.attribute (Attr.for expectedId) ]
+            , test "a select carries the id its label points at" <|
+                \_ ->
+                    let
+                        expectedId =
+                            Config.domId (Config.InSection "output" "sample_rate")
+                    in
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Sample rate" ]
+                            ]
+                        |> Query.has [ Selector.id expectedId ]
+            ]
+        , describe "aria-describedby only when there is help"
+            -- Sixteen fields deliberately carry none, because their labels
+            -- already say what they do. `Sample rate` is one of them.
+            [ test "a field with help points at its own help paragraph" <|
+                \_ ->
+                    let
+                        helpId =
+                            Config.domId (Config.InSection "loop" "search_start") ++ "-help"
+                    in
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Search from" ]
+                            ]
+                        |> Query.has [ Selector.attribute (Attr.attribute "aria-describedby" helpId) ]
+            , test "and the help paragraph carries that id" <|
+                \_ ->
+                    let
+                        helpId =
+                            Config.domId (Config.InSection "loop" "search_start") ++ "-help"
+                    in
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Search from" ]
+                            ]
+                        |> Query.find [ Selector.class "field-help" ]
+                        |> Query.has [ Selector.id helpId ]
+            , test "a field with no help carries no aria-describedby" <|
+                \_ ->
+                    let
+                        wouldBeHelpId =
+                            Config.domId (Config.InSection "output" "sample_rate") ++ "-help"
+                    in
+                    warm
+                        |> screen
+                        |> Query.find
+                            [ Selector.class "field-group"
+                            , Selector.containing [ Selector.text "Sample rate" ]
+                            ]
+                        |> Query.hasNot [ Selector.attribute (Attr.attribute "aria-describedby" wouldBeHelpId) ]
+            ]
+        , test "no label wraps another label" <|
+            \_ ->
+                -- The WHATWG content model for `<label>` forbids a descendant
+                -- `<label>` — announcement across a nested pair is undefined,
+                -- worst case "Enabled Enabled" on the one control every stem
+                -- has. `elm-test` cannot check content-model validity
+                -- directly, so this is the nearest thing: no `label` anywhere
+                -- on the page contains another `label`. Guards the shape
+                -- rather than one site — a future control that wraps its
+                -- input in a `label` and then reuses `field-label` the same
+                -- way the checkbox once did would be caught here too.
+                warm
+                    |> screen
+                    |> Query.findAll
+                        [ Selector.tag "label", Selector.containing [ Selector.tag "label" ] ]
+                    |> Query.count (Expect.equal 0)
+        , describe "two stems' identically-named fields do not collide"
+            [ test "each stem's enabled box keeps a distinct, correctly-scoped id" <|
+                \_ ->
+                    -- The case `keyOf` would have broken: both stems' `enabled`
+                    -- checkboxes carry the same bare field name, so the third
+                    -- assertion below — no element anywhere carries the bare
+                    -- `"enabled"` as its id — is what a `keyOf`-based `domId`
+                    -- would fail.
+                    Expect.all
+                        [ \_ ->
+                            twoStemWarm
+                                |> screen
+                                |> Query.findAll
+                                    [ Selector.id (Config.domId (Config.InStem 0 "enabled")) ]
+                                |> Query.count (Expect.equal 1)
+                        , \_ ->
+                            twoStemWarm
+                                |> screen
+                                |> Query.findAll
+                                    [ Selector.id (Config.domId (Config.InStem 1 "enabled")) ]
+                                |> Query.count (Expect.equal 1)
+                        , \_ ->
+                            twoStemWarm
+                                |> screen
+                                |> Query.findAll [ Selector.id "enabled" ]
+                                |> Query.count (Expect.equal 0)
+                        ]
+                        ()
             ]
         ]
 

@@ -1,6 +1,6 @@
 module Config exposing
     ( Config, Stem, Target(..), Value(..)
-    , asBool, asFloat, encode, forPreset, fromSchema, keyOf, overlay, set, specAt, toggle, valueAt, valueString
+    , asBool, asFloat, domId, encode, forPreset, fromSchema, keyOf, overlay, set, specAt, toggle, valueAt, valueString
     )
 
 {-| The config JSON a preview — and one day a render — carries.
@@ -93,6 +93,29 @@ keyOf target =
 
         InStemDecay _ key ->
             key
+
+
+{-| A DOM id for the control at this target, unique across the whole page.
+
+Not `keyOf`, which returns the bare field name because that is what indexes the
+per-section dictionaries — and which therefore gives every stem's `enabled` the
+same string as every other stem's. An id that collides points two controls at
+one label, which is worse for a screen reader than no label at all.
+-}
+domId : Target -> String
+domId target =
+    case target of
+        Top key ->
+            "f-top-" ++ key
+
+        InSection section key ->
+            "f-" ++ section ++ "-" ++ key
+
+        InStem index key ->
+            "f-stem" ++ String.fromInt index ++ "-" ++ key
+
+        InStemDecay index key ->
+            "f-decay" ++ String.fromInt index ++ "-" ++ key
 
 
 {-| The sections that describe one stem rather than the whole mix.

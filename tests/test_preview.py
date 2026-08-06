@@ -439,6 +439,58 @@ def test_all_stems_off_refuses_rather_than_rendering_the_default_mix(
         render_window(s, 0.5, reverb=False)
 
 
+def _with_bed(cfg, enabled=True):
+    """A copy of cfg with the bed switched on and given something audible."""
+    import copy
+    out = copy.deepcopy(cfg)
+    out.soundbed.enabled = enabled
+    out.soundbed.noise_gain_db = -12.0
+    return out
+
+
+def test_a_preview_includes_the_sound_bed(tmp_path, stub_separation):
+    """The gap this closes: enabling pink noise used to change nothing you
+    could hear in the mixer, which is a difference in character rather than
+    level — and character is the judgement a preview exists to support."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    quiet = RenderSession(str(song), _with_bed(_level_cfg(), enabled=False),
+                          separate_fn=stub_separation)
+    loud = RenderSession(str(song), _with_bed(_level_cfg(), enabled=True),
+                         separate_fn=stub_separation)
+    without = render_window(quiet, 0.5, master=False)
+    with_bed = render_window(loud, 0.5, master=False)
+    assert with_bed.data.shape == without.data.shape
+    assert not np.allclose(with_bed.data, without.data)
+
+
+def test_the_bed_is_the_same_every_time_it_is_rendered(tmp_path, stub_separation):
+    """Derived from the seed rather than freshly random, so the memoised master
+    gain cannot depend on which draw happened to occur."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    session = RenderSession(str(song), _with_bed(_level_cfg()),
+                            separate_fn=stub_separation)
+    first = render_window(session, 0.5, master=False)
+    second = render_window(session, 0.5, master=False)
+    assert np.array_equal(first.data, second.data)
+
+
+def test_a_soloed_preview_leaves_the_bed_out(tmp_path, stub_separation):
+    """Solo already does not match the render, which has every enabled stem.
+    A bed over an isolated stem masks the thing it was isolated to hear."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    session = RenderSession(str(song), _with_bed(_level_cfg()),
+                            separate_fn=stub_separation)
+    plain = RenderSession(str(song), _with_bed(_level_cfg(), enabled=False),
+                          separate_fn=stub_separation)
+    name = session.stem_names()[0]
+    one = render_window(session, 0.5, stems=[name], master=False)
+    same = render_window(plain, 0.5, stems=[name], master=False)
+    assert np.array_equal(one.data, same.data)
+
+
 def test_soloing_a_stem_the_render_would_drop_refuses(tmp_path, stub_separation):
     """Solo a stem, then switch it off — the mixer's own reachable order.
 

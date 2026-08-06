@@ -87,7 +87,16 @@ for why that trade was made deliberately.
 
 - **`preview.py`** — `render_window` renders one point in the decay arc for a
   subset (or all) of a session's stems, applying reverb, gain, and channel
-  mapping in the same order `pipeline._process_stem` does, and using
+  mapping in the same order `pipeline._process_stem` does. Since Plan 3g it
+  also mixes in the sound bed, where `run_pipeline` does — after the stems are
+  summed, before mastering — but **not when a subset was asked for**: a solo
+  already does not match the render, and a bed over an isolated stem masks the
+  thing it was isolated to hear. The bed is built for the window rather than
+  sliced from a full-length one, and seeded from `config.seed` so the memoized
+  master gain cannot depend on which random draw occurred; that makes it
+  reproducible but *not* the render's own bed sample for sample, since
+  `run_pipeline`'s generator has advanced by the time it reaches the bed. It
+  uses
   `config.plan_stem_configs` to pick which stems apply — the same function
   `pipeline._plan_jobs` calls — so preview and batch render cannot select
   different stems for the same config. `preview_iteration_index` maps a
@@ -487,10 +496,21 @@ produce; a `reverb=False` one is a level-matched view of the dry path, not a
 simulation of any render, since every real render applies reverb.
 
 `RenderSession._master_key` decides when the memoized factor is stale.
-Deliberately excluded: every stem's `decay` settings, `soundbed`, and `seed` —
-none of them can move a number measured at progress 0. Included: `reverb`,
-`output.peak_db`, `output.channels`, and each stem's `enabled`/`gain_db`/
-`reverb_send` — everything that actually changes what iteration 0 sounds like.
+Deliberately excluded: every stem's `decay` settings, `seed`, and
+`output.sample_rate` — none of them can move a number measured at progress 0.
+Included: `reverb`, `output.peak_db`, `output.channels`, each stem's
+`enabled`/`gain_db`/`reverb_send`, and — since Plan 3g — `soundbed`.
+
+**The test for membership is whether the *calibration window* reads the field,
+not whether the render does.** Those two questions have different answers and
+the split has been got wrong in both directions. `output.sample_rate` was added
+to the key on the reasoning that `run_pipeline` resamples before normalizing —
+true, and irrelevant, because `render_window` works end to end at `loop.sr` and
+never resamples; the gain was identical to the last digit at 22050, 44100 and
+48000, and the change was reverted. `soundbed` was correctly *absent* for the
+same reason until Plan 3g put the bed into `render_window`, at which point the
+window began reading it and the absence became a real staleness bug. Neither
+field changed what the render does; both changed what the window measures.
 Getting this split wrong in either direction was caught twice during this
 plan's own review: once from a stem's `enabled` flag being left off the key
 while affecting the gain anyway, and once from the session registry calling
@@ -506,20 +526,40 @@ which is where an independently-run spectral match had already put it (4:55).
 Before the fix, the two methods disagreed by over four minutes on a
 twenty-five-minute mix; after it, they agree to within ten seconds.
 
-This does not close every gap of the same shape. Four things still contribute
-to a render's final peak that the calibration window never sees, and they are
-recorded — with measured magnitudes, in order of size — in
-`docs/project-state.md`. Briefly: the fade-in, which attenuates exactly the
-region iteration 0 occupies (−1.82 dB at the defaults, and the reason the
-render's loudest moment is not iteration 0); the inter-iteration crossfade,
-whose overlap can sum above a single iteration's peak (+0.37 dB on the dry
-path); `output.sample_rate`'s absence from `_master_key`, small in level but
-unconditional as a cache bug; and the sound bed, which `render_window` never
-mixes in (+0.03 dB at the default level, −0.05 dB even at −6 dB — the stems get
-scaled down by very nearly the factor the bed pushed the peak up, so it
-mostly cancels). The sound bed was previously described here and in
-`project-state.md` as the most important of these; measurement says it is the
-least, by roughly thirty-five times.
+This does not close every gap of the same shape. Four were recorded here, with
+measured magnitudes; **two have since closed and one turned out not to be what
+it said.** All four remain written up in `docs/project-state.md`, closed ones
+included, because the reasoning is the part worth keeping.
+
+- **The fade-in**, recorded at −1.82 dB on the grounds that it attenuates
+  exactly the region iteration 0 occupies. Plan 3f traced that figure to the
+  fixture that produced it — `tests/test_preview.py::_level_cfg()`, a
+  thirty-second render of synthetic sine stems, where the default 8 s and 12 s
+  fades cover two thirds of the arc and a decaying tone's peak really is at the
+  start. It reproduces exactly there and **does not describe the mixer's
+  default**, where the same measurement reads 0.00 dB. Not a wrong explanation;
+  a correct one for a signal nobody listens to.
+- **The inter-iteration crossfade**, whose overlap can sum above a single
+  iteration's peak: +0.37 dB on the dry path, masked to about 0.01 dB at the
+  default reverb, because reverb smears the peak either way. **Still open**,
+  and now the only one of the four that is.
+- **`output.sample_rate`'s absence from `_master_key`** — recorded as small in
+  level and unconditional as a cache bug. The cache half is false: the window
+  never resamples, so the gain cannot move, and a change adding it was reverted
+  in the same plan that made it. A ~0.01 dB level difference does remain,
+  because the render normalizes after resampling and the window measures
+  before.
+- **The sound bed**, which `render_window` never mixed in: +0.03 dB at the
+  default level, −0.05 dB even at −6 dB, because the stems get scaled down by
+  very nearly the factor the bed pushed the peak up. **Closed by Plan 3g**,
+  which put the bed into `render_window` — not for the +0.03 dB, but because a
+  preview that silently dropped the bed was wrong about *character* rather than
+  level, which is the judgement a preview exists to support.
+
+The ranking is worth keeping for its own sake. The sound bed was described here
+and in `project-state.md` as the most important of the four; measurement said it
+was the smallest by roughly thirty-five times, and the largest had not been
+written down at all.
 
 ## Jobs, progress, and sessions
 
