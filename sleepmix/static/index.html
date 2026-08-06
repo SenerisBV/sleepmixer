@@ -246,7 +246,13 @@
                 margin: .05rem 0 .45rem; max-width: 34rem; }
   .field { display: flex; align-items: center; gap: .6rem; min-width: 0;
            padding: .1rem 0; }
-  .field-check { cursor: pointer; }
+  /* On the label and the box, not on the row. This was `.field-check` alone
+     while that row was itself a `<label>` wrapping its input, which made the
+     whole row a click target and the row-wide pointer honest. It is a `<div>`
+     now — a label inside a label is invalid, and the inner one is what carries
+     `for` — so only these two toggle anything, and the row's empty right-hand
+     side would otherwise offer a pointer that does nothing. */
+  .field-check .field-label, .field-check input { cursor: pointer; }
   .field-label { color: var(--dim); flex: 0 0 9rem; }
   .field-check .field-label { flex: 0 1 auto; }
   .field-range { flex: 1; min-width: 0; }
