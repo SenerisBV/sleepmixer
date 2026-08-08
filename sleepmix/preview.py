@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from .arrangement import SegmentInfo, plan_arrangement
 from .audio import AudioBuffer
 from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
-from .disintegration import decayed_iteration, plan_iterations
+from .disintegration import decayed_iteration
 from .effects import apply_reverb, reverb_dry_offset
 from .session import RenderSession
 from .soundbed import build_soundbed
@@ -28,18 +29,23 @@ from .util import db_to_amp
 
 
 def preview_iteration_index(session: RenderSession, progress: float) -> tuple[int, int]:
-    """Map a point in the arc to ``(iteration, n_iterations)``.
+    """Map a point in the arc to ``(index, n_placements)``.
 
-    Uses the same ``plan_iterations`` the batch renderer uses, so the mapping
-    cannot drift between preview and render."""
+    Reads the same ``plan_arrangement`` the renderer does, so the mapping
+    cannot drift between preview and render. It used to read
+    ``plan_iterations``, which is correct only when every repeat sits one
+    stride from the last — with a gap the render produces fewer repeats, and
+    a preview scrubbed to the end would audition one that does not exist."""
     cfg = session.config
     name = session.stem_names()[0]
     loop = session.prepared_loop(name)
     target_frames = int(cfg.output.duration_min * 60 * loop.sr)
-    n_iter, _ = plan_iterations(
-        loop.n_frames, target_frames, cfg.output.cycle_crossfade_ms, loop.sr)
+    plan = plan_arrangement(
+        [SegmentInfo(source_id="mix", index=0, n_frames=loop.n_frames)],
+        cfg, target_frames, loop.sr)
+    n = len(plan.placements)
     p = float(np.clip(progress, 0.0, 1.0))
-    return int(round(p * (n_iter - 1))), n_iter
+    return int(round(p * (n - 1))), n
 
 
 def master_gain(session: RenderSession, reverb: bool = True) -> float:

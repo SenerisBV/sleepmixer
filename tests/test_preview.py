@@ -553,6 +553,41 @@ def test_a_soloed_preview_leaves_the_bed_out(tmp_path, stub_separation):
     assert np.array_equal(one.data, same.data)
 
 
+def test_the_preview_indexes_the_repeats_the_render_actually_produces(
+        tmp_path, stub_separation):
+    """With a gap, the render has fewer repeats. The preview must agree, or
+    scrubbing to the end auditions an iteration that does not exist.
+
+    ``duration_min=0.5`` is chosen, not incidental: at this song/gap
+    combination it makes ``plan_iterations`` (gap-blind) report 5 while
+    ``plan_arrangement`` (gap-aware) produces 4 placements — the two
+    disagree, so the assertions below can actually fail. A smaller duration
+    puts the target inside a single loop and both would agree by accident;
+    see the sibling caution in the task brief."""
+    from sleepmix.arrangement import SegmentInfo, plan_arrangement
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 0.5
+    cfg.arrangement.gap_start_s = 2.0
+    cfg.arrangement.gap_end_s = 2.0
+
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    loop = session.prepared_loop(session.stem_names()[0])
+    target = int(cfg.output.duration_min * 60 * loop.sr)
+    plan = plan_arrangement(
+        [SegmentInfo("mix", 0, loop.n_frames)], cfg, target, loop.sr)
+    assert len(plan.placements) > 1, \
+        "test setup produced a single-placement plan; assertions below would be vacuous"
+
+    _, n_iter = preview_iteration_index(session, 0.0)
+    assert n_iter == len(plan.placements)
+
+    last, _ = preview_iteration_index(session, 1.0)
+    assert last == len(plan.placements) - 1
+
+
 def test_soloing_a_stem_the_render_would_drop_refuses(tmp_path, stub_separation):
     """Solo a stem, then switch it off — the mixer's own reachable order.
 
