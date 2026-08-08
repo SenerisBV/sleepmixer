@@ -141,10 +141,36 @@ def decayed_iteration(
     decay: StemDecayConfig,
     seed: int,
     stem: str,
+    source_id: str = "mix",
+    index: int = 0,
+    progress: float | None = None,
 ) -> AudioBuffer:
-    """The loop as it sounds on repetition ``iteration`` of ``n_iterations``."""
-    progress = iteration / max(n_iterations - 1, 1)
-    return apply_decay(loop, progress, decay, iteration_rng(seed, stem, iteration))
+    """The loop as it sounds on repetition ``iteration`` of ``n_iterations``.
+
+    This is the **only** place the decay rng key is composed —
+    ``f"{source_id}:{index}:{stem}"``, further keyed by ``iteration`` through
+    ``util.iteration_rng``. It used to be composed a second time, inline,
+    where ``render_arrangement`` called ``apply_decay`` directly; that split
+    the render and preview paths onto two different keys without either of
+    them changing in a way that looked wrong, and ``preview.py``'s own module
+    docstring is explicit that a preview must be *exactly* reproducible
+    against the render, not merely close to it. Composing the key in exactly
+    one function is what makes that true again, and keeps it true: nothing
+    else may build this string independently.
+
+    ``source_id``/``index`` default to ``"mix"``/``0`` — the one source and
+    segment every caller deals with today — so call sites that only vary by
+    ``stem`` (every one that existed before the arrangement) need no changes.
+
+    ``progress`` defaults to ``iteration / max(n_iterations - 1, 1)``, the
+    even-spacing formula every caller used before arrangement plans existed.
+    A caller that already knows the authoritative progress for this repeat —
+    ``render_arrangement``, reading ``Placement.decay_progress`` off a plan
+    that may not space repeats evenly — should pass it explicitly rather than
+    let this recompute an approximation that only happens to agree today."""
+    p = progress if progress is not None else iteration / max(n_iterations - 1, 1)
+    key = f"{source_id}:{index}:{stem}"
+    return apply_decay(loop, p, decay, iteration_rng(seed, key, iteration))
 
 
 def render_arrangement(
@@ -173,8 +199,11 @@ def render_arrangement(
     two back has already ended by ``start``. Heavier stacking than that takes
     the additive branch, where nothing is overwritten.
 
-    Randomness is still keyed per repeat through ``util.iteration_rng`` so a
-    single repeat reproduces in isolation; see ``decayed_iteration``."""
+    Every placement is decayed through ``decayed_iteration`` rather than
+    ``apply_decay`` directly, so this and ``preview.render_window`` compose
+    the rng key the same way and cannot drift apart — see
+    ``decayed_iteration``'s docstring for why that split happened once
+    already and must not happen again."""
     sr = loop.sr
     ch = loop.n_channels
     seg_len = loop.n_frames
@@ -185,9 +214,10 @@ def render_arrangement(
     for i, placement in enumerate(plan.placements):
         if cancel is not None:
             cancel.check()
-        chunk = apply_decay(
-            loop, placement.decay_progress, decay,
-            iteration_rng(seed, f"{placement.source_id}:{placement.index}:{stem}", i),
+        chunk = decayed_iteration(
+            loop, i, len(plan.placements), decay, seed, stem,
+            source_id=placement.source_id, index=placement.index,
+            progress=placement.decay_progress,
         ).data
         start = placement.start_frame
         overlap = 0 if prev_end is None else max(prev_end - start, 0)

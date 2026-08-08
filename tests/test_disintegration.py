@@ -100,19 +100,23 @@ def test_planned_iterations_are_all_executed(monkeypatch):
     first place, so this observes the executed iterations instead.
 
     ``build_disintegrating_stream`` is now a wrapper around
-    ``render_arrangement``, which decays each placement through ``apply_decay``
-    directly rather than through ``decayed_iteration`` — so the spy watches
-    ``apply_decay`` and reads progress off its ``progress`` argument, which
-    carries exactly the ``iteration / max(n_iterations - 1, 1)`` value
-    ``decayed_iteration`` used to compute.
+    ``render_arrangement``, which still decays every placement through
+    ``decayed_iteration`` — the one function allowed to compose the decay rng
+    key — so the spy watches that, as it always did. ``render_arrangement``
+    passes ``progress`` explicitly (read off the plan), so the spy reads it
+    from that keyword argument rather than recomputing it, but the value is
+    the same ``iteration / max(n_iterations - 1, 1)`` either way for the
+    even-stride plan ``build_disintegrating_stream`` builds.
     """
     executed = []
 
-    def spy(loop, progress, decay, rng):
-        executed.append(progress)
+    def spy(loop, iteration, n_iterations, decay, seed, stem,
+             source_id="mix", index=0, progress=None):
+        p = progress if progress is not None else iteration / max(n_iterations - 1, 1)
+        executed.append(p)
         return loop.copy()
 
-    monkeypatch.setattr(disintegration, "apply_decay", spy)
+    monkeypatch.setattr(disintegration, "decayed_iteration", spy)
 
     # (loop seconds, target minutes) — short, medium and realistic-length arcs.
     for loop_secs, target_min in ((0.5, 0.05), (6.0, 2.0), (9.0, 20.0)):
@@ -134,18 +138,16 @@ def test_planned_iterations_are_all_executed(monkeypatch):
 
 
 def test_stream_iteration_matches_decayed_iteration():
-    """The stream is genuinely built from the same per-repeat decay.
+    """The stream is genuinely built from decayed_iteration outputs.
 
     Iteration i occupies out[i*stride : i*stride + loop_len]. Its neighbours
     overlap only in the crossfade regions, so [i*stride + xfade, (i+1)*stride]
     is contributed by iteration i alone and must match exactly.
 
-    ``build_disintegrating_stream`` now goes through ``render_arrangement``,
-    which decays each placement with ``apply_decay`` keyed by
-    ``f"{source_id}:{index}:{stem}"`` (here ``"mix:0:vocals"``) rather than by
-    ``stem`` alone, so the comparison is built the same way rather than through
-    ``decayed_iteration``, which still uses the old bare-``stem`` key and would
-    draw different noise.
+    ``build_disintegrating_stream`` goes through ``render_arrangement``, which
+    decays every placement through ``decayed_iteration`` — the single place
+    the rng key is composed — with ``source_id="mix"``, ``index=0``, matching
+    this call's defaults, so the two sides draw the same noise.
     """
     loop = _tone(440, secs=0.5)
     decay = StemDecayConfig()
@@ -158,8 +160,7 @@ def test_stream_iteration_matches_decayed_iteration():
     stride = max(loop.n_frames - xfade, 1)
 
     i = 1
-    progress = i / max(n_iter - 1, 1)
-    chunk = apply_decay(loop, progress, decay, iteration_rng(11, "mix:0:vocals", i))
+    chunk = decayed_iteration(loop, i, n_iter, decay, seed=11, stem="vocals")
     lo = i * stride + xfade
     hi = min((i + 1) * stride, target)
     assert hi > lo, "test setup produced no clean region"
