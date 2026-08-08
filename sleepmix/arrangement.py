@@ -76,6 +76,20 @@ class Arrangement:
                 if p.start_frame <= frame < p.start_frame + p.n_frames]
 
 
+class MalformedArrangement(ValueError):
+    """A placement does not fit the buffer a renderer would build for it.
+
+    ``plan_arrangement`` is not supposed to produce this — its own stopping
+    rule keeps every ``start_frame`` short of ``target_frames`` — but
+    ``render_arrangement`` accepts any ``Arrangement``, including one built
+    by hand (a test) or by a future planner that gets the same arithmetic
+    wrong again. A ``ValueError`` so a caller that only knows "this config
+    produced a bad render" handles it with everything else in the DSP; its
+    own type, and a message naming the placement and why, so the actual
+    cause reads directly instead of surfacing several frames later as a
+    numpy broadcast-shape error with no mention of a plan."""
+
+
 def xfade_frames(crossfade_ms: float, seg_frames: int, sr: int) -> int:
     """The crossfade between consecutive repeats, clamped to half a segment.
 
@@ -99,6 +113,27 @@ def plan_arrangement(
     length, which is why ``test_defaults_reproduce_todays_positions`` asserts
     equality against ``plan_iterations`` rather than against a hand-written
     list.
+
+    **A position is only laid down while it is still short of the target**
+    (``while pos < target_frames``), not merely computed and appended before
+    that gets checked. At zero gaps every stride is ``seg.n_frames - xfade``,
+    which is at most ``seg.n_frames``, so a position computed from one that
+    was in range is always still in range — the two versions of this loop
+    cannot be told apart there, which is why that case alone (the only one
+    the tests exercised until now) never showed the difference. Once the gap
+    arc goes positive the stride is not bounded by the segment length at
+    all, and one stride can leap clean past whatever is left of the target.
+    Appending that position anyway used to hand ``render_arrangement`` a
+    placement starting at or past ``target_frames``; sized from
+    ``target_frames``, its buffer then has no room for the write, which
+    surfaces as a bare numpy broadcast ``ValueError`` rather than anything
+    that names a placement or a plan. Dropping that position instead is the
+    right call, not a workaround: a repeat that would only start after the
+    mix has already ended contributes nothing to it. The loop always lays
+    down at least one position when ``target_frames > 0`` (``pos`` starts at
+    ``0``, which is in range whenever the target is), so this cannot itself
+    produce the empty-plan case — that is still exactly
+    ``target_frames <= 0``, guarded below.
 
     **Pass two assigns decay progress**, and it indexes by *repeat*:
     ``i / max(n - 1, 1)``. The count is not known until the positions are laid
@@ -130,7 +165,7 @@ def plan_arrangement(
 
     positions: list[int] = []
     pos = 0
-    while target_frames > 0:
+    while pos < target_frames:
         positions.append(pos)
         if pos + seg.n_frames >= target_frames:
             break

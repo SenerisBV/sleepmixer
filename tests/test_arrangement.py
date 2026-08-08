@@ -126,7 +126,16 @@ def test_gap_widens_by_elapsed_time_not_by_repeat_index():
     count so far over an estimated total) still produces some increasing
     sequence of gaps, so it can pass every test here that only checks
     monotonicity, counts, or endpoints; it cannot survive a frame-exact
-    comparison against the time-based formula the docstring specifies."""
+    comparison against the time-based formula the docstring specifies.
+
+    The loop below mirrors ``plan_arrangement``'s own stopping condition —
+    ``while pos < target`` rather than ``while target > 0`` with the
+    in-range check omitted — for the same reason that one was fixed: at this
+    target (90s) an exp curve from a 1s to a 10s gap makes the stride large
+    enough, late enough, to leap past the end of the target before that gets
+    checked, and an unguarded reimplementation here would assert against a
+    position ``plan_arrangement`` no longer produces rather than genuinely
+    mirroring it."""
     seg = _seg()
     target = SR * 90
     xfade = xfade_frames(MixConfig().output.cycle_crossfade_ms, seg.n_frames, SR)
@@ -134,7 +143,7 @@ def test_gap_widens_by_elapsed_time_not_by_repeat_index():
 
     expected = []
     pos = 0
-    while target > 0:
+    while pos < target:
         expected.append(pos)
         if pos + seg.n_frames >= target:
             break
@@ -188,9 +197,51 @@ def test_stride_is_floored_so_a_huge_negative_gap_cannot_explode():
     assert strides.min() >= int(seg.n_frames * 0.1)
 
 
-def test_nothing_starts_past_the_target():
-    target = SR * 60
-    plan = plan_arrangement([_seg()], _cfg(), target, SR)
+@pytest.mark.parametrize(
+    "seg_seconds, gap_start_s, gap_end_s, gap_curve, target_s, crossfade_ms",
+    [
+        (4, 0.0, 0.0, "linear", 60, 800.0),     # defaults — the original case
+        # The reported reproducer: a strongly positive-going gap arc lets one
+        # stride leap past what remains of the target, and the position that
+        # leap lands on used to get appended anyway. render_arrangement then
+        # sizes its buffer from ``target_frames``, so a start past it makes
+        # ``out[start:start + seg_len]`` shorter than the chunk being summed
+        # into it — a numpy broadcast ValueError, not a readable error about
+        # placement.
+        (1, -5.0, 4.0, "linear", 30, 800.0),
+        (1, -5.0, 4.0, "exp", 30, 0.0),
+        (1, -5.0, 4.0, "log", 30, 0.0),
+        (2, -3.0, 6.0, "linear", 60, 400.0),
+        (4, -10.0, 15.0, "exp", 120, 200.0),
+    ],
+    ids=["defaults", "repro-linear", "repro-exp", "repro-log",
+         "wide-gap-linear", "wide-gap-exp"],
+)
+def test_nothing_starts_past_the_target(
+        seg_seconds, gap_start_s, gap_end_s, gap_curve, target_s, crossfade_ms):
+    """No placement may start at or past ``target_frames``.
+
+    ``render_arrangement`` sizes its output buffer from ``target_frames``, so
+    a placement starting at or past it does not just contribute audio beyond
+    the mix's nominal length — depending on how far past, it can make the
+    buffer slice ``render_arrangement`` writes into shorter than the chunk
+    being summed in, which numpy reports as a bare broadcast-shape
+    ``ValueError`` with no mention of a placement or a plan.
+
+    Only the ``defaults`` case was ever exercised here before: at zero gaps
+    every stride is ``seg_len - xfade <= seg_len``, so a position computed
+    from an in-range one is always still in range, and the loop that lays
+    positions out could not overshoot no matter how it was written. The
+    other cases use gap arcs where the stride is *not* bounded by the
+    segment length — the exact shape a config needs to reach the bug this
+    pins down, confirmed by sweeping segment lengths 1-8s, gaps -30s..120s,
+    all three curves and several targets/crossfades against this same
+    assertion."""
+    seg = SegmentInfo("song-1", 0, SR * seg_seconds)
+    cfg = _cfg(gap_start_s=gap_start_s, gap_end_s=gap_end_s, gap_curve=gap_curve)
+    cfg.output.cycle_crossfade_ms = crossfade_ms
+    target = SR * target_s
+    plan = plan_arrangement([seg], cfg, target, SR)
     assert all(p.start_frame < target for p in plan.placements)
     assert plan.n_frames == target
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 import numpy as np
 from scipy import signal
 
-from .arrangement import Arrangement, Placement, xfade_frames
+from .arrangement import Arrangement, MalformedArrangement, Placement, xfade_frames
 from .audio import AudioBuffer
 from .config import StemDecayConfig
 from .looping import equal_power_crossfade
@@ -225,7 +225,14 @@ def render_arrangement(
     ``apply_decay`` directly, so this and ``preview.render_window`` compose
     the rng key the same way and cannot drift apart — see
     ``decayed_iteration``'s docstring for why that split happened once
-    already and must not happen again."""
+    already and must not happen again.
+
+    Raises ``MalformedArrangement`` for a placement that does not fit the
+    buffer this builds, rather than letting the write below fail as a bare
+    numpy broadcast error. ``plan_arrangement`` is not supposed to produce
+    one — see its own docstring — so this is a cheap precondition check
+    guarding against whatever else might hand this an ``Arrangement``, not a
+    replacement for that fix."""
     sr = loop.sr
     ch = loop.n_channels
     seg_len = loop.n_frames
@@ -237,12 +244,24 @@ def render_arrangement(
     for i, placement in enumerate(plan.placements):
         if cancel is not None:
             cancel.check()
+        start = placement.start_frame
+        # A precondition, not validation: plan_arrangement's own stopping
+        # rule keeps every start short of target_frames, so this should
+        # never fire from a plan it produced. It exists for whatever else
+        # might hand this an Arrangement it didn't build, so a malformed one
+        # fails with a named placement and reason instead of a numpy
+        # broadcast-shape error out of the write below.
+        if start < 0 or start + seg_len > out.shape[0]:
+            raise MalformedArrangement(
+                f"placement {i} (source {placement.source_id!r} index "
+                f"{placement.index}) starts at frame {start}, which does "
+                f"not fit the {out.shape[0]}-frame buffer built for a "
+                f"{plan.n_frames}-frame arrangement")
         chunk = decayed_iteration(
             loop, i, len(plan.placements), decay, seed, stem,
             source_id=placement.source_id, index=placement.index,
             progress=placement.decay_progress,
         ).data
-        start = placement.start_frame
         overlap = 0 if prev_end is None else max(prev_end - start, 0)
         if 0 < overlap <= xfade:
             prev_tail = prev_chunk[-overlap:]
