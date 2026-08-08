@@ -40,6 +40,12 @@ def preview_iteration_index(session: RenderSession, progress: float) -> tuple[in
     name = session.stem_names()[0]
     loop = session.prepared_loop(name)
     target_frames = int(cfg.output.duration_min * 60 * loop.sr)
+    # source_id/index are inert here: plan_arrangement uses them only to label
+    # each Placement, and the count this function wants comes from len(...),
+    # which depends on n_frames alone. Set to the render pipeline's own values
+    # anyway, not because this call site needs them today, but so it is
+    # already correct once a later plan gives segments real identities and
+    # decayed_iteration starts reading them instead of its "mix"/0 defaults.
     plan = plan_arrangement(
         [SegmentInfo(source_id="mix", index=0, n_frames=loop.n_frames)],
         cfg, target_frames, loop.sr)

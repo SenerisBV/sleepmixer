@@ -177,13 +177,13 @@ class RenderSession:
         than waving at a branch. The fades: ``preview.py`` imports no fade
         function and no ``normalize_peak`` at all, so ``render_window`` cannot
         see them at any progress. The crossfade: ``cycle_crossfade_ms`` *is*
-        read on the preview path — ``preview_iteration_index`` passes it to
-        ``plan_iterations`` — but it only changes ``n_iterations``, and
-        ``decayed_iteration`` computes
-        ``progress = iteration / max(n_iterations - 1, 1)``
-        (``disintegration.py:145``), which is 0 at iteration 0 whatever
-        ``n_iterations`` turns out to be. See the level-matching entry in
-        ``docs/project-state.md``.
+        read on the preview path — ``preview_iteration_index`` passes it,
+        via ``config``, into ``plan_arrangement``, which uses it (through
+        ``xfade_frames``) to size the stride between placements — but it only
+        changes the placement *count*, and ``plan_arrangement`` assigns decay
+        progress by ``i / max(len(positions) - 1, 1)``, which is 0 at
+        placement 0 whatever the count turns out to be. See the
+        level-matching entry in ``docs/project-state.md``.
 
         ``config.soundbed`` *is* here, and that is the opposite case from
         ``output.sample_rate`` above, not an exception to it. The question is
