@@ -11,10 +11,11 @@ from typing import Callable
 import numpy as np
 
 from .analysis import find_loop, slice_loop
+from .arrangement import SegmentInfo, plan_arrangement
 from .audio import (
     AudioBuffer, normalize_peak, resample, save_audio, silence, sum_buffers)
 from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
-from .disintegration import build_disintegrating_stream
+from .disintegration import render_arrangement
 from .effects import apply_reverb
 from .looping import make_seamless
 from .paths import cache_dir
@@ -99,8 +100,14 @@ def _process_stem(
     loop = slice_loop(buf, loop_point)
     loop = make_seamless(loop, config.loop.crossfade_ms)
     loop = slow_and_pitch(loop, config.tempo.speed, config.tempo.pitch_semitones)
-    stream = build_disintegrating_stream(
-        loop, target_frames, sc.decay, config.output.cycle_crossfade_ms,
+    # One plan per stem, from the same loop length, so every stem's repeats
+    # land on the same frames and stay phase-aligned — the reason the loop
+    # point is found once on the summed reference in the first place.
+    plan = plan_arrangement(
+        [SegmentInfo(source_id="mix", index=0, n_frames=loop.n_frames)],
+        config, target_frames, loop.sr)
+    stream = render_arrangement(
+        loop, plan, sc.decay, config.output.cycle_crossfade_ms,
         config.seed, sc.name, cancel=cancel)
     stream = apply_reverb(stream, config.reverb, wet_scale=sc.reverb_send)
     if abs(sc.gain_db) > 1e-6:
