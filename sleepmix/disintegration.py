@@ -192,12 +192,34 @@ def render_arrangement(
     would duck both through the overlap, which is the opposite of playing over
     each other. A gap gets nothing, and the silence is the point.
 
-    The crossfade branch *assigns* into the overlap region rather than adding,
-    which is only safe because no third repeat can reach it: the crossfade
-    branch runs when the overlap is at most ``xfade``, ``xfade`` is clamped to
-    half a segment, so the stride is at least half a segment and the repeat
-    two back has already ended by ``start``. Heavier stacking than that takes
-    the additive branch, where nothing is overwritten.
+    The crossfade branch blends against the *previous placement's own
+    chunk*, not against whatever the accumulator holds, and adds the
+    difference in:
+    ``out[region] += crossfade(prev_tail, chunk[:overlap]) - prev_tail``,
+    where ``prev_tail`` is the previous placement's own last ``overlap``
+    samples — never anything the accumulator has already mixed in. Whatever
+    else already sits in that region — placement i-2, i-3, any number of
+    earlier voices the additive branch stacked there — is left exactly as it
+    was, because the delta only ever replaces placement i-1's own
+    contribution: for any existing content ``d``,
+    ``d + prev_tail + (crossfade(prev_tail, b) - prev_tail) = d +
+    crossfade(prev_tail, b)``. That holds regardless of how many earlier
+    placements overlap the region, so it is additive-safe by construction —
+    not because of any argument about how far back an overlap can reach.
+    (An earlier version of this docstring made exactly that argument, from
+    the crossfade branch's overlap bound alone, and it was wrong: that bound
+    constrains only the stride into this placement, not the stride into the
+    one before it, so a heavy stack — small stride, additive branch —
+    immediately followed by a seam — large stride, crossfade branch — is
+    reachable, including from ``plan_arrangement`` at its own default
+    settings. ``test_a_seam_after_a_stack_keeps_the_stacked_voice`` pins down
+    the case that argument would have silently dropped.) The formula reduces
+    to the old plain assignment exactly when the region truly holds nothing
+    but placement i-1's contribution, so nothing that already passed on that
+    basis changes.
+
+    Heavier stacking than the crossfade window takes the additive branch,
+    where nothing is overwritten or subtracted.
 
     Every placement is decayed through ``decayed_iteration`` rather than
     ``apply_decay`` directly, so this and ``preview.render_window`` compose
@@ -211,6 +233,7 @@ def render_arrangement(
 
     out = np.zeros((plan.n_frames + seg_len, ch), dtype=np.float32)
     prev_end = None
+    prev_chunk = None
     for i, placement in enumerate(plan.placements):
         if cancel is not None:
             cancel.check()
@@ -222,12 +245,14 @@ def render_arrangement(
         start = placement.start_frame
         overlap = 0 if prev_end is None else max(prev_end - start, 0)
         if 0 < overlap <= xfade:
-            out[start:start + overlap] = equal_power_crossfade(
-                out[start:start + overlap], chunk[:overlap])
+            prev_tail = prev_chunk[-overlap:]
+            blended = equal_power_crossfade(prev_tail, chunk[:overlap])
+            out[start:start + overlap] += blended - prev_tail
             out[start + overlap:start + seg_len] += chunk[overlap:]
         else:
             out[start:start + seg_len] += chunk
         prev_end = start + seg_len
+        prev_chunk = chunk
 
     return AudioBuffer(out[:plan.n_frames], sr)
 

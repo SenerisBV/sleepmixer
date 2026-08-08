@@ -4,7 +4,9 @@ import numpy as np
 
 from sleepmix.audio import AudioBuffer, save_audio
 from sleepmix.config import MixConfig, StemConfig
-from sleepmix.disintegration import decayed_iteration, plan_iterations
+from sleepmix import disintegration
+from sleepmix.disintegration import (
+    build_disintegrating_stream, decayed_iteration, plan_iterations)
 from sleepmix.effects import apply_reverb, reverb_dry_offset
 from sleepmix.pipeline import run_pipeline
 from sleepmix.preview import preview_iteration_index, render_window
@@ -114,6 +116,66 @@ def test_window_matches_what_the_renderer_actually_produces(tmp_path, stub_separ
     # like enough slack to hide a real divergence: swapping two stages in
     # ``session.prepared_loop`` moves this to 1.157e+00.
     assert err < 1e-6, f"preview and render disagree by {err:.3e}"
+
+
+def test_the_preview_and_render_paths_compose_the_same_rng_key(
+        tmp_path, stub_separation, monkeypatch):
+    """Names the invariant every test above this one relies on without ever
+    stating it: preview and render must key their decay randomness the same
+    way, or a preview auditions noise the render does not produce.
+
+    ``decayed_iteration`` is the one place that key is composed —
+    ``f"{source_id}:{index}:{stem}"`` — but the two paths only ever reach it
+    through values that happen to agree today, declared nowhere as a pair:
+    ``render_window`` never states ``source_id``/``index``, relying on
+    ``decayed_iteration``'s ``"mix"``/``0`` defaults; ``build_disintegrating_stream``
+    states them explicitly via ``Placement("mix", 0, ...)``. When those two
+    silently diverged earlier in this branch's history, the symptom three
+    tests away was ``err = 1.2e+00`` — a number that says nothing about an
+    rng key. A later plan gives sources real ids and segments real indices,
+    which is exactly the kind of change that could reintroduce this
+    divergence. This test fails here first when it does, with a message
+    that names the actual mismatch instead of a bare tolerance miss.
+
+    Captured by spying on ``disintegration.iteration_rng``, which
+    ``decayed_iteration`` calls with the composed key as its second
+    argument — so this observes the real key each path uses rather than
+    re-deriving the format and risking a second place that must agree with
+    the first. The spy still delegates to the real ``iteration_rng``, so
+    both calls run for real rather than being stubbed out."""
+    from sleepmix.util import iteration_rng as real_iteration_rng
+
+    keys: dict[str, str] = {}
+    current = {"label": None}
+
+    def spy(seed, key, iteration):
+        if current["label"] is not None:
+            keys[current["label"]] = key
+        return real_iteration_rng(seed, key, iteration)
+
+    monkeypatch.setattr(disintegration, "iteration_rng", spy)
+
+    s = _session(tmp_path, stub_separation)
+    name = s.stem_names()[0]
+    s.config.stems = [StemConfig(name=name)]
+    loop = s.prepared_loop(name)
+    decay = s.config.stems[0].decay
+    seed = s.config.seed
+
+    current["label"] = "preview"
+    render_window(s, 0.5, stems=[name], reverb=False, master=False)
+
+    current["label"] = "render"
+    build_disintegrating_stream(
+        loop, loop.n_frames * 3, decay, s.config.output.cycle_crossfade_ms,
+        seed, name)
+
+    assert "preview" in keys and "render" in keys, \
+        "the spy never observed a call on one of the two paths"
+    assert keys["preview"] == keys["render"], (
+        f"preview composed rng key {keys['preview']!r} but the render path "
+        f"composed {keys['render']!r} for the same stem — preview and "
+        "render no longer agree on which noise this repeat plays")
 
 
 def test_iteration_index_spans_the_arc(tmp_path, stub_separation):

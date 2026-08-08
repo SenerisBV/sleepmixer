@@ -233,3 +233,39 @@ def test_build_disintegrating_stream_still_works():
         seg, target_frames=sr * 5, decay=_FLAT, crossfade_ms=100.0,
         seed=0, stem="mix")
     assert out.n_frames == sr * 5
+
+
+def test_a_seam_after_a_stack_keeps_the_stacked_voice():
+    """A voice already stacked into a region must survive a later seam.
+
+    Placement 0 and 1 overlap by more than the crossfade (a deliberate
+    stack, the additive branch); placement 1 and 2 then overlap by less than
+    it (a seam, the crossfade branch). Every test above this one uses two
+    placements, or three with no overlap, so none of them can catch this:
+    the crossfade must replace only placement 1's contribution to the seam
+    region, leaving placement 0's still-live tail underneath it untouched.
+
+    Assigning into the region instead of blending against the previous
+    placement's own chunk — the bug this pins down — crossfades whatever the
+    accumulator already holds there, placement 0's tail included, against
+    placement 2. That quietly ramps placement 0 down to nothing across the
+    seam and snaps it back to full level immediately past it: lost audio and
+    a discontinuity that clicks.
+
+    All three placements share one constant-valued loop (decay is off), so
+    the region's level is exact and reproducible rather than approximate:
+    correct, ``out[16537:22050]`` averages placement 0's constant 0.5 plus
+    an equal-power blend of placements 1 and 2 (also 0.5 each), ≈1.144.
+    Measured directly against the pre-fix code, the same region instead
+    averages ≈1.082 — placement 0 folded into the blend rather than left
+    standing beneath it. The threshold below sits between the two with
+    margin on both sides."""
+    sr = 22050
+    seg = _dc(sr, 1.0, value=0.5)
+    plan = _plan([0, 4410, 16537], seg.n_frames, sr * 3)
+    out = render_arrangement(seg, plan, _FLAT, crossfade_ms=500.0, seed=0)
+    region = out.data[16537:22050]
+    assert region.mean() > 1.10, (
+        f"region mean {region.mean():.4f} is at or below the level a "
+        "seam that drops the stacked voice would produce (~1.082); "
+        "placement 0's tail did not survive the crossfade with placement 2")
