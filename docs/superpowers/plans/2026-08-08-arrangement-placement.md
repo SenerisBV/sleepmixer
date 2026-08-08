@@ -4,7 +4,7 @@
 
 **Goal:** Make placement a first-class thing — the gap between successive repeats of a loop becomes a shaped, configurable quantity instead of one constant, so a mix can breathe or stack instead of only repeating back to back.
 
-**Architecture:** A new pure module, `sleepmix/arrangement.py`, decides *where every repeat lands and how decayed it is* before any audio is touched, and hands back a flat list of `Placement` records. The renderer and the preview both read that same list, which is why they cannot drift — the pattern `plan_stem_configs` and `plan_iterations` already establish here. Defaults reproduce today's output byte for byte, and a regression test asserts it.
+**Architecture:** A new pure module, `sleepmix/arrangement.py`, decides *where every repeat lands and how decayed it is* before any audio is touched, and hands back a flat list of `Placement` records. The renderer and the preview both read that same list, which is why they cannot drift — the pattern `plan_stem_configs` and `plan_iterations` already establish here. Defaults place every repeat exactly where the current renderer places it, and a regression test asserts that against `plan_iterations` as the oracle.
 
 **Tech Stack:** Python 3.11 · numpy / scipy · pytest. No frontend work at all: the three new config fields generate their own controls from `/api/schema`.
 
@@ -34,9 +34,9 @@ That is why `ArrangementConfig` in this plan has exactly **three fields** and no
 
 **The two riskiest things, in order:**
 
-1. **The stopping rule.** `build_disintegrating_stream` breaks when the *write head* — the end of the repeat just placed — reaches `target_frames`, not when the next *start* would. Get this wrong by one and the bit-identity regression in Task 4 fails, which is the good outcome; get it wrong in a way that still passes and every mix silently changes length. The arithmetic is worked out in Task 1 and the test asserts equality against `plan_iterations`, which is retained precisely as that oracle.
+1. **The stopping rule.** `build_disintegrating_stream` breaks when the *write head* — the end of the repeat just placed — reaches `target_frames`, not when the next *start* would. Get this wrong by one and the placement regression in Task 4 fails, which is the good outcome; get it wrong in a way that still passes and every mix silently changes length. The arithmetic is worked out in Task 2 and the test asserts equality against `plan_iterations`, which is retained precisely as that oracle.
 
-2. **Decay progress indexes by repeat, not by time.** `i / max(n - 1, 1)`. Normalising a repeat's *position* over the mix instead caps the arc below 1.0, so a render never reaches full decay — the same defect `plan_iterations`' docstring records being fixed once already. Task 1 has a dedicated test for both endpoints because every other test in the file passes either way.
+2. **Decay progress indexes by repeat, not by time.** `i / max(n - 1, 1)`. Normalising a repeat's *position* over the mix instead caps the arc below 1.0, so a render never reaches full decay — the same defect `plan_iterations`' docstring records being fixed once already. Task 2 has a dedicated test for both endpoints because every other test in the file passes either way.
 
 **One deliberate asymmetry, and it will look like a mistake if you don't read this.** The gap is shaped by *elapsed time* (`pos / target_frames`), while decay progress is indexed by *repeat number*. That is not an oversight:
 
@@ -59,13 +59,175 @@ Using time for the gap also dodges a chicken-and-egg problem, since the repeat c
 | `sleepmix/preview.py` *(modify)* | `preview_iteration_index` reads the plan; `master_gain` measures the densest window rather than assuming frame 0. |
 | `sleepmix/session.py` *(modify)* | `_master_key` gains `config.arrangement`. |
 | `tests/test_disintegration.py` *(modify)* | Seam-rule tests. |
-| `tests/test_pipeline.py` *(modify)* | The bit-identity regression. |
+| `tests/test_pipeline.py` *(modify)* | The placement regression against `plan_iterations`. |
 | `tests/test_preview.py` *(modify)* | Densest-window tests. |
 | `tests/test_config.py` *(modify)* | Schema and round-trip tests. |
 
 ---
 
-## Task 1: The pure planner
+## Task 1: `ArrangementConfig`
+
+**Files:**
+- Modify: `sleepmix/config.py` (add the dataclass near `LoopConfig`; add the field to `MixConfig`; extend `validate`; register in `_SECTION_TYPES`)
+- Test: `tests/test_config.py` *(modify)*
+
+**Interfaces:**
+- Consumes: nothing from any other task. `config.py` must not import `arrangement.py` — `arrangement.py` imports *it*, and this task runs first so the planner has a config to read.
+- Produces: `ArrangementConfig(gap_start_s: float, gap_end_s: float, gap_curve: str)` and `MixConfig.arrangement: ArrangementConfig`.
+
+**Three fields, not seven.** The spec's `segments`, `segment_overlap`, `lifetime_jitter` and `order` belong to Plan 4b. Every field here becomes a mixer control automatically; adding one that does nothing is the failure this task exists to avoid.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_config.py`:
+
+```python
+def test_the_arrangement_section_is_published_to_the_ui():
+    schema = config_schema()
+    assert "arrangement" in schema["sections"]
+    fields = schema["sections"]["arrangement"]["fields"]
+    assert set(fields) == {"gap_start_s", "gap_end_s", "gap_curve"}
+    assert schema["sections"]["arrangement"]["description"]
+
+
+def test_every_arrangement_field_carries_the_bounds_the_config_enforces():
+    """A control that can produce a value ``validate`` refuses turns a slider
+    into a 400 on a preview."""
+    fields = config_schema()["sections"]["arrangement"]["fields"]
+    for name in ("gap_start_s", "gap_end_s"):
+        assert fields[name]["min"] == -30.0
+        assert fields[name]["max"] == 120.0
+    assert fields["gap_curve"]["choices"] == ["linear", "exp", "log"]
+
+
+def test_arrangement_round_trips_through_from_dict():
+    cfg = MixConfig.from_dict(
+        {"arrangement": {"gap_start_s": 1.5, "gap_end_s": 9.0,
+                         "gap_curve": "exp"}})
+    assert cfg.arrangement.gap_start_s == 1.5
+    assert cfg.arrangement.gap_end_s == 9.0
+    assert cfg.arrangement.gap_curve == "exp"
+
+
+def test_arrangement_defaults_are_todays_behaviour():
+    cfg = MixConfig()
+    assert cfg.arrangement.gap_start_s == 0.0
+    assert cfg.arrangement.gap_end_s == 0.0
+    assert cfg.arrangement.gap_curve == "linear"
+
+
+def test_a_gap_outside_the_published_bounds_is_refused():
+    with pytest.raises(ValueError, match="gap_start_s"):
+        MixConfig.from_dict({"arrangement": {"gap_start_s": -100.0}})
+    with pytest.raises(ValueError, match="gap_end_s"):
+        MixConfig.from_dict({"arrangement": {"gap_end_s": 500.0}})
+
+
+def test_an_unknown_gap_curve_is_refused():
+    with pytest.raises(ValueError, match="gap_curve"):
+        MixConfig.from_dict({"arrangement": {"gap_curve": "sigmoid"}})
+```
+
+Check the top of `tests/test_config.py` for its existing imports; add `config_schema` and `pytest` if they are not already there.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `pipenv run pytest tests/test_config.py -v -k arrangement`
+Expected: FAIL — `KeyError: 'arrangement'` and `AttributeError: 'MixConfig' object has no attribute 'arrangement'`.
+
+- [ ] **Step 3: Add the dataclass**
+
+In `sleepmix/config.py`, after `LoopConfig`:
+
+```python
+@dataclass
+class ArrangementConfig:
+    """How much space sits between one repeat of the loop and the next.
+
+    A mix used to be the loop repeated back to back, forever, at one fixed
+    stride. These two numbers let that stride grow as the mix goes on — so the
+    loop breathes, arriving less often as it erodes — or go negative, so
+    repeats overlap and play over each other."""
+
+    gap_start_s: float = field(default=0.0, metadata={
+        "label": "Gap at the start", "min": -30.0, "max": 120.0, "step": 0.5,
+        "unit": "s",
+        "help": "Silence between one repeat and the next, early in the mix. "
+                "Negative overlaps them instead."})
+    gap_end_s: float = field(default=0.0, metadata={
+        "label": "Gap at the end", "min": -30.0, "max": 120.0, "step": 0.5,
+        "unit": "s",
+        "help": "The same, late in the mix. Larger than the start gap and the "
+                "loop spaces out as it dissolves."})
+    gap_curve: str = field(default="linear", metadata={
+        "label": "Gap curve", "choices": ["linear", "exp", "log"],
+        "help": "How the gap travels from start to end — the same curves the "
+                "decay uses. exp holds the early spacing longer; log opens "
+                "up quickly then settles."})
+```
+
+- [ ] **Step 4: Add the field, the validation and the registration**
+
+On `MixConfig`, beside the other section fields:
+
+```python
+    arrangement: ArrangementConfig = field(default_factory=ArrangementConfig)
+```
+
+In `MixConfig.validate`, after the seed check:
+
+```python
+        arr = self.arrangement
+        for name in ("gap_start_s", "gap_end_s"):
+            value = float(getattr(arr, name))
+            # These bounds are the ones config_schema publishes; the mixer
+            # clamps to them, so a value outside here can only arrive from a
+            # hand-written config or an old preset. Refusing at construction
+            # keeps it from surfacing as a 400 on a preview instead.
+            if not -30.0 <= value <= 120.0:
+                raise ValueError(
+                    f"arrangement.{name} must be between -30 and 120 seconds, "
+                    f"got {value}")
+        if arr.gap_curve not in ("linear", "exp", "log"):
+            raise ValueError(
+                f"arrangement.gap_curve must be one of linear, exp, log; "
+                f"got {arr.gap_curve!r}")
+```
+
+In `_SECTION_TYPES`:
+
+```python
+    "arrangement": ArrangementConfig,
+```
+
+- [ ] **Step 5: Run the config tests**
+
+Run: `pipenv run pytest tests/test_config.py -v`
+Expected: PASS. `tests/test_arrangement.py` does not exist yet — it arrives in Task 2, which reads the config this task just added.
+
+- [ ] **Step 6: Confirm the mixer picks it up with no frontend change**
+
+```bash
+export SLEEPMIX_DATA_DIR=$(mktemp -d)
+pipenv run python -c "
+from sleepmix.config import config_schema
+import json
+print(json.dumps(config_schema()['sections']['arrangement'], indent=2))
+"
+```
+
+Expected: the section, its description and three fields with their bounds. **Do not run `make ui`.** The controls are generated from this.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add sleepmix/config.py tests/test_config.py
+git commit -m "feat: the gap between repeats becomes a setting"
+```
+
+---
+
+## Task 2: The pure planner
 
 **Files:**
 - Create: `sleepmix/arrangement.py`
@@ -222,7 +384,7 @@ def test_xfade_is_clamped_to_half_a_segment():
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `pipenv run pytest tests/test_arrangement.py -v`
-Expected: collection error — `ModuleNotFoundError: No module named 'sleepmix.arrangement'` (and `ArrangementConfig` does not exist yet either; Task 2 adds it, so a couple of these stay red until then — that is expected and called out in Step 4).
+Expected: collection error — `ModuleNotFoundError: No module named 'sleepmix.arrangement'`. `ArrangementConfig` already exists (Task 1), so this is the only thing missing.
 
 - [ ] **Step 3: Write the module**
 
@@ -389,177 +551,15 @@ def plan_arrangement(
 
 Run: `pipenv run pytest tests/test_arrangement.py -v`
 
-Expected: every test passes **except** those needing `ArrangementConfig`, which does not exist until Task 2 — that is every test in the file, since `_cfg()` constructs one. So at this point expect an `ImportError` on `ArrangementConfig`.
+Expected: PASS, every test in the file.
 
-**Do not work around this by inlining a stub config.** Go to Task 2, then return and run this file green. This is the one place in this plan where two tasks interlock; it is called out here so you do not "fix" it by weakening the test helper.
+If `_cfg()` raises on `ArrangementConfig`, Task 1 has not landed — check `git log` before changing anything here. Do not work around it by inlining a stub config; the helper is meant to construct the real one.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add sleepmix/arrangement.py tests/test_arrangement.py
 git commit -m "feat: a plan for where every repeat lands"
-```
-
----
-
-## Task 2: `ArrangementConfig`
-
-**Files:**
-- Modify: `sleepmix/config.py` (add the dataclass near `LoopConfig`; add the field to `MixConfig`; extend `validate`; register in `_SECTION_TYPES`)
-- Test: `tests/test_config.py` *(modify)*
-
-**Interfaces:**
-- Consumes: nothing from Task 1 (`config.py` must not import `arrangement.py` — `arrangement.py` imports *it*).
-- Produces: `ArrangementConfig(gap_start_s: float, gap_end_s: float, gap_curve: str)` and `MixConfig.arrangement: ArrangementConfig`.
-
-**Three fields, not seven.** The spec's `segments`, `segment_overlap`, `lifetime_jitter` and `order` belong to Plan 4b. Every field here becomes a mixer control automatically; adding one that does nothing is the failure this task exists to avoid.
-
-- [ ] **Step 1: Write the failing tests**
-
-Append to `tests/test_config.py`:
-
-```python
-def test_the_arrangement_section_is_published_to_the_ui():
-    schema = config_schema()
-    assert "arrangement" in schema["sections"]
-    fields = schema["sections"]["arrangement"]["fields"]
-    assert set(fields) == {"gap_start_s", "gap_end_s", "gap_curve"}
-    assert schema["sections"]["arrangement"]["description"]
-
-
-def test_every_arrangement_field_carries_the_bounds_the_config_enforces():
-    """A control that can produce a value ``validate`` refuses turns a slider
-    into a 400 on a preview."""
-    fields = config_schema()["sections"]["arrangement"]["fields"]
-    for name in ("gap_start_s", "gap_end_s"):
-        assert fields[name]["min"] == -30.0
-        assert fields[name]["max"] == 120.0
-    assert fields["gap_curve"]["choices"] == ["linear", "exp", "log"]
-
-
-def test_arrangement_round_trips_through_from_dict():
-    cfg = MixConfig.from_dict(
-        {"arrangement": {"gap_start_s": 1.5, "gap_end_s": 9.0,
-                         "gap_curve": "exp"}})
-    assert cfg.arrangement.gap_start_s == 1.5
-    assert cfg.arrangement.gap_end_s == 9.0
-    assert cfg.arrangement.gap_curve == "exp"
-
-
-def test_arrangement_defaults_are_todays_behaviour():
-    cfg = MixConfig()
-    assert cfg.arrangement.gap_start_s == 0.0
-    assert cfg.arrangement.gap_end_s == 0.0
-    assert cfg.arrangement.gap_curve == "linear"
-
-
-def test_a_gap_outside_the_published_bounds_is_refused():
-    with pytest.raises(ValueError, match="gap_start_s"):
-        MixConfig.from_dict({"arrangement": {"gap_start_s": -100.0}})
-    with pytest.raises(ValueError, match="gap_end_s"):
-        MixConfig.from_dict({"arrangement": {"gap_end_s": 500.0}})
-
-
-def test_an_unknown_gap_curve_is_refused():
-    with pytest.raises(ValueError, match="gap_curve"):
-        MixConfig.from_dict({"arrangement": {"gap_curve": "sigmoid"}})
-```
-
-Check the top of `tests/test_config.py` for its existing imports; add `config_schema` and `pytest` if they are not already there.
-
-- [ ] **Step 2: Run to verify they fail**
-
-Run: `pipenv run pytest tests/test_config.py -v -k arrangement`
-Expected: FAIL — `KeyError: 'arrangement'` and `AttributeError: 'MixConfig' object has no attribute 'arrangement'`.
-
-- [ ] **Step 3: Add the dataclass**
-
-In `sleepmix/config.py`, after `LoopConfig`:
-
-```python
-@dataclass
-class ArrangementConfig:
-    """How much space sits between one repeat of the loop and the next.
-
-    A mix used to be the loop repeated back to back, forever, at one fixed
-    stride. These two numbers let that stride grow as the mix goes on — so the
-    loop breathes, arriving less often as it erodes — or go negative, so
-    repeats overlap and play over each other."""
-
-    gap_start_s: float = field(default=0.0, metadata={
-        "label": "Gap at the start", "min": -30.0, "max": 120.0, "step": 0.5,
-        "unit": "s",
-        "help": "Silence between one repeat and the next, early in the mix. "
-                "Negative overlaps them instead."})
-    gap_end_s: float = field(default=0.0, metadata={
-        "label": "Gap at the end", "min": -30.0, "max": 120.0, "step": 0.5,
-        "unit": "s",
-        "help": "The same, late in the mix. Larger than the start gap and the "
-                "loop spaces out as it dissolves."})
-    gap_curve: str = field(default="linear", metadata={
-        "label": "Gap curve", "choices": ["linear", "exp", "log"],
-        "help": "How the gap travels from start to end — the same curves the "
-                "decay uses. exp holds the early spacing longer; log opens "
-                "up quickly then settles."})
-```
-
-- [ ] **Step 4: Add the field, the validation and the registration**
-
-On `MixConfig`, beside the other section fields:
-
-```python
-    arrangement: ArrangementConfig = field(default_factory=ArrangementConfig)
-```
-
-In `MixConfig.validate`, after the seed check:
-
-```python
-        arr = self.arrangement
-        for name in ("gap_start_s", "gap_end_s"):
-            value = float(getattr(arr, name))
-            # These bounds are the ones config_schema publishes; the mixer
-            # clamps to them, so a value outside here can only arrive from a
-            # hand-written config or an old preset. Refusing at construction
-            # keeps it from surfacing as a 400 on a preview instead.
-            if not -30.0 <= value <= 120.0:
-                raise ValueError(
-                    f"arrangement.{name} must be between -30 and 120 seconds, "
-                    f"got {value}")
-        if arr.gap_curve not in ("linear", "exp", "log"):
-            raise ValueError(
-                f"arrangement.gap_curve must be one of linear, exp, log; "
-                f"got {arr.gap_curve!r}")
-```
-
-In `_SECTION_TYPES`:
-
-```python
-    "arrangement": ArrangementConfig,
-```
-
-- [ ] **Step 5: Run the config tests and Task 1's tests**
-
-Run: `pipenv run pytest tests/test_config.py tests/test_arrangement.py -v`
-Expected: PASS, all of both files. Task 1's suite goes green here.
-
-- [ ] **Step 6: Confirm the mixer picks it up with no frontend change**
-
-```bash
-export SLEEPMIX_DATA_DIR=$(mktemp -d)
-pipenv run python -c "
-from sleepmix.config import config_schema
-import json
-print(json.dumps(config_schema()['sections']['arrangement'], indent=2))
-"
-```
-
-Expected: the section, its description and three fields with their bounds. **Do not run `make ui`.** The controls are generated from this.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add sleepmix/config.py tests/test_config.py
-git commit -m "feat: the gap between repeats becomes a setting"
 ```
 
 ---
@@ -571,7 +571,7 @@ git commit -m "feat: the gap between repeats becomes a setting"
 - Test: `tests/test_disintegration.py` *(modify)*
 
 **Interfaces:**
-- Consumes: `arrangement.Arrangement`, `arrangement.Placement`, `arrangement.xfade_frames` from Task 1.
+- Consumes: `arrangement.Arrangement`, `arrangement.Placement`, `arrangement.xfade_frames` from Task 2.
 - Produces: `render_arrangement(loop: AudioBuffer, plan: Arrangement, decay: StemDecayConfig, crossfade_ms: float, seed: int, stem: str = "mix", cancel=None) -> AudioBuffer`. `build_disintegrating_stream` keeps its current signature and becomes a wrapper, so nothing outside this file breaks.
 
 **The seam rule** is the whole of this task:
@@ -671,7 +671,7 @@ Expected: FAIL — `ImportError: cannot import name 'render_arrangement'`.
 In `sleepmix/disintegration.py`, add the imports and the function; then rewrite `build_disintegrating_stream` as a wrapper:
 
 ```python
-from .arrangement import Arrangement, xfade_frames
+from .arrangement import Arrangement, Placement, xfade_frames
 
 
 def render_arrangement(
@@ -743,8 +743,6 @@ def build_disintegrating_stream(
     Retained as the zero-gap case of ``render_arrangement``, which is what
     every caller predating the arrangement wants and what
     ``tests/test_disintegration.py`` already pins down."""
-    from .arrangement import Placement
-
     n_iter, xfade = plan_iterations(loop.n_frames, target_frames, crossfade_ms, loop.sr)
     stride = max(loop.n_frames - xfade, 1)
     last = max(n_iter - 1, 1)
@@ -758,7 +756,7 @@ def build_disintegrating_stream(
     return render_arrangement(loop, plan, decay, crossfade_ms, seed, stem, cancel)
 ```
 
-Note the rng key changed from `stem` to `f"{source}:{index}:{stem}"`. That reshuffles the noise relative to the old build, which is intentional and is why Task 4's bit-identity regression is captured *before* this lands — see Task 4, Step 1.
+Note the rng key changed from `stem` to `f"{source}:{index}:{stem}"`. That reshuffles the noise relative to the old build, which is intentional. Task 4's regression is a *placement* comparison against `plan_iterations` rather than a byte comparison of audio, precisely so this key change does not falsely fail it.
 
 - [ ] **Step 4: Run the disintegration tests**
 
@@ -784,33 +782,9 @@ git commit -m "feat: render a plan, and tell a seam from a stack"
 - Consumes: `arrangement.SegmentInfo`, `arrangement.plan_arrangement`, `disintegration.render_arrangement`.
 - Produces: no new public names. `_process_stem` keeps its signature.
 
-**This is the task that makes the whole change safe**, and the order of its steps matters: capture the reference output **first**, on the current code, then change the code, then assert against the capture.
+**This is the task that makes the whole change safe.** The regression is a *placement* comparison, computed live against `plan_iterations` — no captured fixture, no binary artifact on disk. `plan_iterations` is retained in `disintegration.py` precisely to be that oracle, and comparing against it beats comparing against a recorded file: a fixture records what the code did on the day it was captured, whereas the oracle records what the code was always *supposed* to do.
 
-- [ ] **Step 1: Capture the reference render before changing anything**
-
-```bash
-export SLEEPMIX_DATA_DIR=$(mktemp -d)
-pipenv run python - <<'PY'
-import numpy as np
-from sleepmix.audio import AudioBuffer, save_audio
-from sleepmix.config import MixConfig, StemDecayConfig
-from sleepmix.disintegration import build_disintegrating_stream
-
-sr = 22050
-t = np.arange(sr * 3) / sr
-loop = AudioBuffer((0.3 * np.sin(2 * np.pi * 220 * t))[:, None].astype(np.float32), sr)
-cfg = MixConfig()
-out = build_disintegrating_stream(
-    loop, target_frames=sr * 30, decay=cfg.stems[0].decay,
-    crossfade_ms=cfg.output.cycle_crossfade_ms, seed=cfg.seed, stem="vocals")
-np.save("tests/fixtures/arrangement_reference.npy", out.data)
-print("captured", out.data.shape, float(np.abs(out.data).sum()))
-PY
-```
-
-Create `tests/fixtures/` if it does not exist. **Run this on the commit from Task 2, before Task 3's rng-key change is on your working tree** — if you have already done Task 3, `git stash` it, capture, then restore.
-
-- [ ] **Step 2: Write the failing regression test**
+- [ ] **Step 1: Write the failing regression test**
 
 Append to `tests/test_pipeline.py`:
 
@@ -858,12 +832,12 @@ def test_a_gap_makes_the_render_use_fewer_repeats(tmp_path, stub_separation):
 
 Read the top of `tests/test_pipeline.py` and reuse whatever helper it already has for writing a test song; if `_count_repeats` has no equivalent, implement it as a call to `plan_arrangement` with the same `SegmentInfo` the pipeline would build, rather than by analysing audio.
 
-- [ ] **Step 3: Run to verify it fails**
+- [ ] **Step 2: Run to verify it fails**
 
 Run: `pipenv run pytest tests/test_pipeline.py -v -k arrangement`
 Expected: FAIL — `_process_stem` does not build a plan yet, so the end-to-end case does not change with the gap.
 
-- [ ] **Step 4: Rewrite `_process_stem`**
+- [ ] **Step 3: Rewrite `_process_stem`**
 
 In `sleepmix/pipeline.py`, replace the body's stream construction:
 
@@ -903,20 +877,20 @@ from .disintegration import render_arrangement
 
 **Note the phase-alignment subtlety:** every stem is sliced from the same `loop_point` and stretched identically, so `loop.n_frames` is the same for all of them and each stem's plan is identical. Do not hoist the plan out of the loop to "optimise" it — it is cheap, and computing it per stem keeps the function honest about what it depends on.
 
-- [ ] **Step 5: Run the pipeline tests**
+- [ ] **Step 4: Run the pipeline tests**
 
 Run: `pipenv run pytest tests/test_pipeline.py -v`
 Expected: PASS.
 
-- [ ] **Step 6: Run the whole suite**
+- [ ] **Step 5: Run the whole suite**
 
 Run: `pipenv run pytest -q`
 Expected: 299 + the new tests, all passing. Investigate any failure rather than adjusting the assertion; a test that broke here is telling you something about placement.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add sleepmix/pipeline.py tests/test_pipeline.py tests/fixtures/
+git add sleepmix/pipeline.py tests/test_pipeline.py
 git commit -m "feat: the renderer places repeats from a plan"
 ```
 
@@ -1233,7 +1207,9 @@ git commit -m "docs: placement becomes a plan, and what that opens"
 
 Checked against the spec's Plan 4a scope:
 
-- **Planner, `ArrangementConfig`, renderer reading a plan, the seam rule, `master_gain` argmax, bit-identity regression** — Tasks 1, 2, 3, 3, 6, 4 respectively. Covered.
+- **`ArrangementConfig`, planner, renderer reading a plan, the seam rule, `master_gain` argmax, placement regression** — Tasks 1, 2, 3, 3, 6, 4 respectively. Covered.
+
+- **Task order note (amended before execution):** the config lands first and the planner second, so every task commits with its own tests green. The original ordering had the planner's test file importing `ArrangementConfig` a task before it existed. The two have no dependency in the other direction — `config.py` must never import `arrangement.py`.
 - **Lifetimes, `segments`, `segment_overlap`, `lifetime_jitter`, `order`, `find_loops`, `ArrangementSession`, `render_arrangement_window`** — all deferred to 4b/4c, stated in "Notes for whoever executes this" and again in Task 7 Step 2 so the deferral is recorded in project state rather than lost.
-- **One deviation from the spec:** `Placement` gains `n_frames` (five fields, not four), so `Arrangement.at()` needs no side table. Recorded in Task 1's Interfaces block.
+- **One deviation from the spec:** `Placement` gains `n_frames` (five fields, not four), so `Arrangement.at()` needs no side table. Recorded in Task 2's Interfaces block.
 - **One correction the spec does not carry:** the bit-identity regression is a **placement** comparison, not a byte comparison of audio. Task 3 changes the `iteration_rng` key to `f"{source}:{index}:{stem}"` — required so that adding sources in 4c does not reshuffle existing noise — and that moves sample values. What must not move is the number of repeats, their frames, and their decay progress. Task 4's test asserts exactly that. Anyone reading the spec's "bit-identical" wording alone would write a test that fails for a legitimate reason.
