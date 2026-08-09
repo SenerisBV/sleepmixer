@@ -311,6 +311,13 @@ use, rather than a second set of names to remember: `exp` holds the early
 spacing longer and opens up late, `log` opens up quickly and then settles. It
 does nothing while `gap_start_s` and `gap_end_s` are equal.
 
+`gap_end_s` is where the spacing is heading rather than a gap you will find in
+the file. The spacing is sized from how far into the mix each repeat starts,
+and the last repeat starts before the end, so the widest gap actually laid down
+falls a little short — a 20-minute mix off a 6.7-second loop with
+`gap_end_s: 30` gets to about 28.9 seconds. How short depends on how many
+repeats fit; ask for a wider end gap if you want a specific one.
+
 See `sleepmix/config.example.yaml` for every field with comments.
 
 ## Notes & caveats

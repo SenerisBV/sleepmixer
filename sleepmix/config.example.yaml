@@ -4,7 +4,9 @@
 seed: 0
 separation_model: htdemucs_ft   # Demucs model; needs the 'separation' extra
 
-# Output / arrangement -------------------------------------------------
+# Output file & mastering ----------------------------------------------
+# Length, format and levels. Not to be confused with the `arrangement:`
+# block further down, which is where the spacing of the repeats now lives.
 output:
   duration_min: 25
   sample_rate: 44100

@@ -67,6 +67,28 @@ class Placement:
 
 @dataclass(frozen=True)
 class Arrangement:
+    """The whole plan: every repeat, and how long the mix runs.
+
+    ``n_frames`` is the *target* length of the render, not a bound on the
+    placements. **A placement may extend past it, and normally the last one
+    does** — ``plan_arrangement`` stops once a repeat's write head reaches the
+    target, so that final repeat begins inside the mix and ends outside it.
+    ``render_arrangement`` allows for exactly this: it builds a buffer of
+    ``n_frames + seg_len``, writes every placement into it in full, and clips
+    the result back to ``n_frames`` at the end. So the overhang is audible
+    only as the mix stopping mid-repeat, which is what a fade-out is for.
+
+    What is *not* allowed is a placement that begins at or past ``n_frames``.
+    Such a repeat would contribute nothing to the mix, and it does not fit the
+    buffer a renderer sizes from this — ``render_arrangement`` raises
+    ``MalformedArrangement`` rather than letting the write fail as a numpy
+    broadcast error. ``plan_arrangement``'s own stopping rule never produces
+    one; see its docstring for the time it did.
+
+    ``placements`` is not required to be sorted, and ``render_arrangement``'s
+    seam-versus-stack decision reads it in the order given — so a plan built
+    by hand should give the order it means."""
+
     placements: list[Placement]
     n_frames: int
 
@@ -153,6 +175,26 @@ def plan_arrangement(
     index. Gaps widening is something heard in seconds ("it is spacing out as
     it goes"), and using time also sidesteps the same chicken-and-egg the
     progress pass has to solve with a second walk.
+
+    **``gap_end_s`` is approached, not reached, and that is worth knowing
+    before you go looking for a bug.** ``elapsed`` is ``pos / target_frames``
+    at the *start* of the repeat whose following gap is being sized, and the
+    loop has already stopped by the time a start could reach the target — so
+    ``elapsed`` is always strictly below 1.0 and the last gap laid down is
+    always strictly short of ``gap_end_s``. Measured: a 20-minute mix off a
+    6.69 s loop with ``gap_end_s: 30.0`` tops out at a largest actual gap of
+    28.94 s, from a final ``elapsed`` of 0.9647. How close it gets depends on
+    how many repeats fit — a longer loop or a shorter mix leaves a coarser
+    walk and a wider shortfall.
+
+    Left as it is, deliberately. Normalising ``elapsed`` over the last
+    *placeable* position instead would make the arc's shape depend on where
+    the mix happens to end, and would change the placements of every existing
+    config for the sake of the final gap being a second or two wider. The
+    ``min(..., 1.0)`` clamp on ``elapsed`` is dead code for the same reason —
+    it can never bind — and is kept only because a future planner that walks
+    positions differently would want it back. Do not read it as evidence that
+    ``elapsed`` reaches 1.0.
     """
     if len(segments) != 1:
         raise NotImplementedError(
@@ -169,6 +211,12 @@ def plan_arrangement(
         positions.append(pos)
         if pos + seg.n_frames >= target_frames:
             break
+        # The clamp never binds: the loop has already broken out by the time
+        # ``pos`` could reach ``target_frames``, so ``elapsed`` stops short of
+        # 1.0 and the last gap laid down stops short of ``gap_end_s``. See the
+        # docstring — that shortfall is a documented property, not a rounding
+        # slip, and the clamp stays as a guard for a future planner that walks
+        # positions differently.
         elapsed = min(pos / target_frames, 1.0)
         gap_s = lerp(arr.gap_start_s, arr.gap_end_s,
                      shape_progress(elapsed, arr.gap_curve))

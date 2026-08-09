@@ -1337,7 +1337,9 @@ future work beyond any plan written so far.
 
 **Renders are no longer byte-for-byte reproducible against output generated
 before this branch.** `util.iteration_rng` derives each iteration's RNG from
-`(seed, stem, iteration)` instead of drawing from one `np.random.Generator`
+`(seed, key, iteration)` — where `key` is `f"{source_id}:{index}:{stem}"`,
+composed only in `disintegration.decayed_iteration`, and was a bare stem name
+when this entry was written — instead of drawing from one `np.random.Generator`
 threaded through the whole stream. The old approach made iteration *i*'s
 noise depend on every draw before it, which made it impossible to reproduce a
 single iteration without replaying the entire stem from the start — exactly

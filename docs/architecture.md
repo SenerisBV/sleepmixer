@@ -38,8 +38,16 @@ threaded through all iterations of a stem (the natural way to do it) makes
 iteration *i*'s draws depend on how many random numbers every prior iteration
 consumed — which makes iteration *i* impossible to reproduce without replaying
 everything before it. `util.iteration_rng` fixes this by deriving a fresh
-generator from `(seed, stem, iteration)` alone, via `np.random.default_rng`
-seeded with a tuple of `(seed, sha256(stem)[:8 bytes as int], iteration)`. Any
+generator from `(seed, key, iteration)` alone, via `np.random.default_rng`
+seeded with a tuple of `(seed, sha256(key)[:8 bytes as int], iteration)`, where
+`key` is a string naming which voice the iteration belongs to. That key is
+composed in exactly one place — `disintegration.decayed_iteration`, as
+`f"{source_id}:{index}:{stem}"` — so since Plan 4a it identifies a *segment of
+a stem of a source*, not merely a stem; two segments of the same stem draw
+different noise, and nothing outside that function may build the string. (The
+parameter was called `stem` and held a bare stem name before the arrangement
+existed; the rename to `key` in Plan 4a's final wave is cosmetic, and every
+call site passes it positionally.) Any
 iteration of any stem can be reconstructed in isolation, forever. This is also
 why `RenderSession` and `render_window` exist at all as separate objects
 instead of just being a slice into the batch renderer's loop: the
