@@ -4,7 +4,9 @@ import numpy as np
 
 from sleepmix.audio import AudioBuffer, save_audio
 from sleepmix.config import MixConfig, StemConfig
-from sleepmix.disintegration import decayed_iteration, plan_iterations
+from sleepmix import disintegration
+from sleepmix.disintegration import (
+    build_disintegrating_stream, decayed_iteration, plan_iterations)
 from sleepmix.effects import apply_reverb, reverb_dry_offset
 from sleepmix.pipeline import run_pipeline
 from sleepmix.preview import preview_iteration_index, render_window
@@ -114,6 +116,66 @@ def test_window_matches_what_the_renderer_actually_produces(tmp_path, stub_separ
     # like enough slack to hide a real divergence: swapping two stages in
     # ``session.prepared_loop`` moves this to 1.157e+00.
     assert err < 1e-6, f"preview and render disagree by {err:.3e}"
+
+
+def test_the_preview_and_render_paths_compose_the_same_rng_key(
+        tmp_path, stub_separation, monkeypatch):
+    """Names the invariant every test above this one relies on without ever
+    stating it: preview and render must key their decay randomness the same
+    way, or a preview auditions noise the render does not produce.
+
+    ``decayed_iteration`` is the one place that key is composed —
+    ``f"{source_id}:{index}:{stem}"`` — but the two paths only ever reach it
+    through values that happen to agree today, declared nowhere as a pair:
+    ``render_window`` never states ``source_id``/``index``, relying on
+    ``decayed_iteration``'s ``"mix"``/``0`` defaults; ``build_disintegrating_stream``
+    states them explicitly via ``Placement("mix", 0, ...)``. When those two
+    silently diverged earlier in this branch's history, the symptom three
+    tests away was ``err = 1.2e+00`` — a number that says nothing about an
+    rng key. A later plan gives sources real ids and segments real indices,
+    which is exactly the kind of change that could reintroduce this
+    divergence. This test fails here first when it does, with a message
+    that names the actual mismatch instead of a bare tolerance miss.
+
+    Captured by spying on ``disintegration.iteration_rng``, which
+    ``decayed_iteration`` calls with the composed key as its second
+    argument — so this observes the real key each path uses rather than
+    re-deriving the format and risking a second place that must agree with
+    the first. The spy still delegates to the real ``iteration_rng``, so
+    both calls run for real rather than being stubbed out."""
+    from sleepmix.util import iteration_rng as real_iteration_rng
+
+    keys: dict[str, str] = {}
+    current = {"label": None}
+
+    def spy(seed, key, iteration):
+        if current["label"] is not None:
+            keys[current["label"]] = key
+        return real_iteration_rng(seed, key, iteration)
+
+    monkeypatch.setattr(disintegration, "iteration_rng", spy)
+
+    s = _session(tmp_path, stub_separation)
+    name = s.stem_names()[0]
+    s.config.stems = [StemConfig(name=name)]
+    loop = s.prepared_loop(name)
+    decay = s.config.stems[0].decay
+    seed = s.config.seed
+
+    current["label"] = "preview"
+    render_window(s, 0.5, stems=[name], reverb=False, master=False)
+
+    current["label"] = "render"
+    build_disintegrating_stream(
+        loop, loop.n_frames * 3, decay, s.config.output.cycle_crossfade_ms,
+        seed, name)
+
+    assert "preview" in keys and "render" in keys, \
+        "the spy never observed a call on one of the two paths"
+    assert keys["preview"] == keys["render"], (
+        f"preview composed rng key {keys['preview']!r} but the render path "
+        f"composed {keys['render']!r} for the same stem — preview and "
+        "render no longer agree on which noise this repeat plays")
 
 
 def test_iteration_index_spans_the_arc(tmp_path, stub_separation):
@@ -375,6 +437,27 @@ def test_master_gain_is_computed_once_per_config(tmp_path, stub_separation):
     assert s.master_gain == {}, "a config change must invalidate the gain"
 
 
+def test_master_gain_survives_an_empty_stems_list(tmp_path, stub_separation):
+    """``MixConfig.from_dict({"stems": []})`` is a supported state —
+    ``plan_stem_configs`` documents it explicitly, falling back to every
+    available stem at defaults — and ``render_window(..., master=False)``
+    already handles it. ``cfg.stems[0].decay``, read directly rather than
+    through ``plan_stem_configs``, does not: it raised a bare ``IndexError``
+    with no message, reachable as a 500 from ``POST /api/preview`` (that
+    endpoint catches ``ValueError``, not ``IndexError``). At the parent
+    commit — before ``master_gain`` read ``cfg.stems`` at all — this same
+    call returned a number."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig.from_dict({"stems": []})
+    cfg.output.duration_min = 2.0
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+
+    from sleepmix.preview import master_gain
+    gain = master_gain(session)
+    assert gain > 0 and np.isfinite(gain)
+
+
 def test_master_gain_is_calibrated_per_signal_path(tmp_path, stub_separation):
     """A dry preview must not be mastered with a wet-calibrated factor.
 
@@ -395,6 +478,155 @@ def test_master_gain_is_calibrated_per_signal_path(tmp_path, stub_separation):
     for flag in (True, False):
         peak = float(np.abs(render_window(s, 0.0, reverb=flag).data).max())
         assert abs(peak - target) < 1e-4, f"reverb={flag} peaks at {peak}"
+
+
+def test_master_gain_matches_the_old_formula_when_nothing_overlaps(tmp_path, stub_separation):
+    """The property that keeps every level-matching test above honest.
+
+    ``_session``'s config uses the default (zero-gap) arrangement, so no two
+    placements ever sound together: the densest frame has exactly one
+    placement, the density ratio is exactly 1.0, and ``master_gain`` must
+    come out bit-identical to the old "measure iteration 0 alone" formula it
+    replaces. If the arrangement-aware rewrite had changed anything in this
+    case, every test above — all of which run at zero gap — would have been
+    silently measuring a different thing."""
+    from sleepmix.preview import master_gain
+    from sleepmix.util import db_to_amp
+
+    s = _session(tmp_path, stub_separation)
+    gain = master_gain(s, reverb=True)
+
+    loudest = render_window(s, 0.0, reverb=True, master=False)
+    peak = float(np.abs(loudest.data).max())
+    target = db_to_amp(s.config.output.peak_db)
+    assert gain == target / peak
+
+
+def test_a_rising_amplitude_arc_still_calibrates_on_the_first_repeat(
+        tmp_path, stub_separation):
+    """One slider drag used to put the preview 3.85 dB above the render.
+
+    ``amp_start_db`` and ``amp_end_db`` are independent sliders over the same
+    −60…0 range, so ``amp_start_db < amp_end_db`` — the stem *growing* across
+    the arc rather than fading — is a state the mixer can reach from stock
+    settings in one drag. The arrangement here is the default one: zero gap,
+    nothing overlapping, so this is not about stacking at all.
+
+    ``arrangement.decay_amplitude_proxy`` used to report the first repeat as
+    the quietest on such an arc, because it applied ``amp_start_db`` at
+    progress 0 where ``apply_decay`` applies nothing. ``densest_frame`` then
+    picked the *last* placement and ``master_gain`` calibrated against a
+    window from the far end of the arc — measured here as a mastered dry
+    preview peaking at 1.3883 against the render's 0.8913 normalisation.
+
+    So: with no overlap, the gain must still be exactly the old
+    "measure the first repeat alone" formula, whichever way the arc runs."""
+    import pytest
+
+    from sleepmix.preview import master_gain
+    from sleepmix.util import db_to_amp
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    for sc in cfg.stems:
+        sc.decay.amp_start_db = -30.0
+        sc.decay.amp_end_db = -16.0
+    s = RenderSession(str(song), cfg, separate_fn=stub_separation)
+
+    gain = master_gain(s, reverb=False)
+    first = render_window(s, 0.0, reverb=False, master=False)
+    peak = float(np.abs(first.data).max())
+    target = db_to_amp(cfg.output.peak_db)
+    assert gain == target / peak
+
+    mastered = float(np.abs(render_window(s, 0.0, reverb=False).data).max())
+    assert mastered == pytest.approx(target, abs=1e-4), (
+        f"a rising arc mastered the first window to {mastered:.4f}, "
+        f"{20 * np.log10(mastered / target):+.2f} dB off the render's target")
+
+
+def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
+    """The regression this task fixes, checked against the corrected formula
+    directly rather than against a full render — ``_preview_to_render_ratio``
+    assumes a uniform, gap-blind stride and cannot be reused for an
+    overlapping arrangement without asserting something else by accident.
+
+    A negative gap makes several near-fresh repeats sound together at the
+    densest frame. The old code measured iteration 0 alone and would have
+    left the render's true peak above target; the fix scales that single
+    window's measured peak up by the density ratio before deriving the gain,
+    so the resulting gain must be smaller than what the old, overlap-blind
+    measurement would have produced."""
+    import pytest
+
+    from sleepmix.arrangement import (
+        SegmentInfo, concurrent_placements, densest_frame, plan_arrangement,
+        xfade_frames)
+    from sleepmix.config import plan_stem_configs
+    from sleepmix.preview import master_gain
+    from sleepmix.util import db_to_amp, lerp, shape_progress
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    cfg.arrangement.gap_start_s = -3.0
+    cfg.arrangement.gap_end_s = -3.0
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    name = session.stem_names()[0]
+    loop = session.prepared_loop(name)
+    target_frames = int(cfg.output.duration_min * 60 * loop.sr)
+    plan = plan_arrangement(
+        [SegmentInfo("mix", 0, loop.n_frames)], cfg, target_frames, loop.sr)
+    decay = plan_stem_configs(session.stem_names(), cfg)[0].decay
+    xfade = xfade_frames(cfg.output.cycle_crossfade_ms, loop.n_frames, loop.sr)
+    frame = densest_frame(plan, decay, xfade)
+    here = concurrent_placements(plan, frame, xfade)
+    assert len(here) >= 2, \
+        "test setup produced no overlap; assertions below would be vacuous"
+
+    dominant = min(here, key=lambda p: p.decay_progress)
+
+    # The density ratio, recomputed from the decay *settings* rather than by
+    # calling the two functions under test. That circularity used to be the
+    # whole weakness of this test: it called ``concurrent_amplitude`` and
+    # ``decay_amplitude_proxy`` to build the number it then asserted
+    # ``master_gain`` had computed with those same two functions, so any
+    # change to either moved both sides together and the equality held
+    # regardless. Reverting root-sum-square to a plain sum — a one-line
+    # mutation reinstating a measured +17.7 dB error — left this test green.
+    # Written out here, that mutation fails it. ``lerp`` and
+    # ``shape_progress`` are still called: they are not what this pins down,
+    # and re-deriving an ``exp`` curve by hand would only add a second place
+    # to get the curve wrong.
+    def amp(p):
+        # Mirrors apply_decay's short-circuit, as decay_amplitude_proxy does.
+        if p <= 0:
+            return 1.0
+        return 10 ** (lerp(decay.amp_start_db, decay.amp_end_db,
+                           shape_progress(p, decay.curve)) / 20.0)
+
+    single = amp(dominant.decay_progress)
+    total = sum(amp(p.decay_progress) ** 2 for p in here) ** 0.5
+    ratio = total / single
+    assert ratio > 1.0, "overlap should raise the density ratio above 1"
+
+    loudest = render_window(
+        session, dominant.decay_progress, reverb=False, master=False)
+    peak = float(np.abs(loudest.data).max())
+    target = db_to_amp(cfg.output.peak_db)
+    expected_gain = target / (peak * ratio)
+
+    gain = master_gain(session, reverb=False)
+    assert gain == pytest.approx(expected_gain, rel=1e-9)
+
+    naive_peak = float(
+        np.abs(render_window(session, 0.0, reverb=False, master=False).data).max())
+    naive_gain = target / naive_peak
+    assert gain < naive_gain, \
+        "overlap must pull the gain down from the old iteration-0-only measurement"
 
 
 def test_mastering_preserves_the_arc(tmp_path, stub_separation):
@@ -489,6 +721,41 @@ def test_a_soloed_preview_leaves_the_bed_out(tmp_path, stub_separation):
     one = render_window(session, 0.5, stems=[name], master=False)
     same = render_window(plain, 0.5, stems=[name], master=False)
     assert np.array_equal(one.data, same.data)
+
+
+def test_the_preview_indexes_the_repeats_the_render_actually_produces(
+        tmp_path, stub_separation):
+    """With a gap, the render has fewer repeats. The preview must agree, or
+    scrubbing to the end auditions an iteration that does not exist.
+
+    ``duration_min=0.5`` is chosen, not incidental: at this song/gap
+    combination it makes ``plan_iterations`` (gap-blind) report 5 while
+    ``plan_arrangement`` (gap-aware) produces 4 placements — the two
+    disagree, so the assertions below can actually fail. A smaller duration
+    puts the target inside a single loop and both would agree by accident;
+    see the sibling caution in the task brief."""
+    from sleepmix.arrangement import SegmentInfo, plan_arrangement
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 0.5
+    cfg.arrangement.gap_start_s = 2.0
+    cfg.arrangement.gap_end_s = 2.0
+
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    loop = session.prepared_loop(session.stem_names()[0])
+    target = int(cfg.output.duration_min * 60 * loop.sr)
+    plan = plan_arrangement(
+        [SegmentInfo("mix", 0, loop.n_frames)], cfg, target, loop.sr)
+    assert len(plan.placements) > 1, \
+        "test setup produced a single-placement plan; assertions below would be vacuous"
+
+    _, n_iter = preview_iteration_index(session, 0.0)
+    assert n_iter == len(plan.placements)
+
+    last, _ = preview_iteration_index(session, 1.0)
+    assert last == len(plan.placements) - 1
 
 
 def test_soloing_a_stem_the_render_would_drop_refuses(tmp_path, stub_separation):

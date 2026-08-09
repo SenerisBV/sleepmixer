@@ -44,6 +44,9 @@ def test_example_yaml_parses(tmp_path):
     cfg = MixConfig.from_yaml(str(p))
     assert cfg.soundbed.enabled is True
     assert cfg.output.duration_min == 25
+    assert cfg.arrangement.gap_start_s == 0.0
+    assert cfg.arrangement.gap_end_s == 0.0
+    assert cfg.arrangement.gap_curve == "linear"
 
 
 def test_schema_describes_tempo_speed():
@@ -224,3 +227,49 @@ def test_help_says_something_the_label_does_not():
             aField = sections[section]["fields"][name]
             assert aField["help"].strip().lower() != aField["label"].strip().lower()
             assert len(aField["help"]) > len(aField["label"])
+
+
+def test_the_arrangement_section_is_published_to_the_ui():
+    schema = config_schema()
+    assert "arrangement" in schema["sections"]
+    fields = schema["sections"]["arrangement"]["fields"]
+    assert set(fields) == {"gap_start_s", "gap_end_s", "gap_curve"}
+    assert schema["sections"]["arrangement"]["description"]
+
+
+def test_every_arrangement_field_carries_the_bounds_the_config_enforces():
+    """A control that can produce a value ``validate`` refuses turns a slider
+    into a 400 on a preview."""
+    fields = config_schema()["sections"]["arrangement"]["fields"]
+    for name in ("gap_start_s", "gap_end_s"):
+        assert fields[name]["min"] == -30.0
+        assert fields[name]["max"] == 120.0
+    assert fields["gap_curve"]["choices"] == ["linear", "exp", "log"]
+
+
+def test_arrangement_round_trips_through_from_dict():
+    cfg = MixConfig.from_dict(
+        {"arrangement": {"gap_start_s": 1.5, "gap_end_s": 9.0,
+                         "gap_curve": "exp"}})
+    assert cfg.arrangement.gap_start_s == 1.5
+    assert cfg.arrangement.gap_end_s == 9.0
+    assert cfg.arrangement.gap_curve == "exp"
+
+
+def test_arrangement_defaults_are_todays_behaviour():
+    cfg = MixConfig()
+    assert cfg.arrangement.gap_start_s == 0.0
+    assert cfg.arrangement.gap_end_s == 0.0
+    assert cfg.arrangement.gap_curve == "linear"
+
+
+def test_a_gap_outside_the_published_bounds_is_refused():
+    with pytest.raises(ValueError, match="gap_start_s"):
+        MixConfig.from_dict({"arrangement": {"gap_start_s": -100.0}})
+    with pytest.raises(ValueError, match="gap_end_s"):
+        MixConfig.from_dict({"arrangement": {"gap_end_s": 500.0}})
+
+
+def test_an_unknown_gap_curve_is_refused():
+    with pytest.raises(ValueError, match="gap_curve"):
+        MixConfig.from_dict({"arrangement": {"gap_curve": "sigmoid"}})

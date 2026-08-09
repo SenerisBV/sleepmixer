@@ -18,9 +18,13 @@ from __future__ import annotations
 
 import numpy as np
 
+from .arrangement import (
+    SegmentInfo, concurrent_amplitude, concurrent_placements,
+    decay_amplitude_proxy, densest_frame, plan_arrangement, xfade_frames)
 from .audio import AudioBuffer
-from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
-from .disintegration import decayed_iteration, plan_iterations
+from .config import (
+    MixConfig, NothingToRender, StemConfig, StemDecayConfig, plan_stem_configs)
+from .disintegration import decayed_iteration
 from .effects import apply_reverb, reverb_dry_offset
 from .session import RenderSession
 from .soundbed import build_soundbed
@@ -28,18 +32,29 @@ from .util import db_to_amp
 
 
 def preview_iteration_index(session: RenderSession, progress: float) -> tuple[int, int]:
-    """Map a point in the arc to ``(iteration, n_iterations)``.
+    """Map a point in the arc to ``(index, n_placements)``.
 
-    Uses the same ``plan_iterations`` the batch renderer uses, so the mapping
-    cannot drift between preview and render."""
+    Reads the same ``plan_arrangement`` the renderer does, so the mapping
+    cannot drift between preview and render. It used to read
+    ``plan_iterations``, which is correct only when every repeat sits one
+    stride from the last — with a gap the render produces fewer repeats, and
+    a preview scrubbed to the end would audition one that does not exist."""
     cfg = session.config
     name = session.stem_names()[0]
     loop = session.prepared_loop(name)
     target_frames = int(cfg.output.duration_min * 60 * loop.sr)
-    n_iter, _ = plan_iterations(
-        loop.n_frames, target_frames, cfg.output.cycle_crossfade_ms, loop.sr)
+    # source_id/index are inert here: plan_arrangement uses them only to label
+    # each Placement, and the count this function wants comes from len(...),
+    # which depends on n_frames alone. Set to the render pipeline's own values
+    # anyway, not because this call site needs them today, but so it is
+    # already correct once a later plan gives segments real identities and
+    # decayed_iteration starts reading them instead of its "mix"/0 defaults.
+    plan = plan_arrangement(
+        [SegmentInfo(source_id="mix", index=0, n_frames=loop.n_frames)],
+        cfg, target_frames, loop.sr)
+    n = len(plan.placements)
     p = float(np.clip(progress, 0.0, 1.0))
-    return int(round(p * (n_iter - 1))), n_iter
+    return int(round(p * (n - 1))), n
 
 
 def master_gain(session: RenderSession, reverb: bool = True) -> float:
@@ -58,17 +73,136 @@ def master_gain(session: RenderSession, reverb: bool = True) -> float:
     reads as *more* decayed. So the calibration window is rendered down the same
     path the caller asked for, and the two factors are cached separately.
 
-    One window per path is enough: decay only removes energy, so the peak falls
-    monotonically across the arc and iteration 0 is the loudest window this
-    module can produce. (A whole render's loudest moment is not necessarily
-    iteration 0 — fades and inter-iteration crossfades move it; see the
-    level-matching entry in ``docs/project-state.md``.)"""
+    Which window to measure used to be assumed rather than chosen: decay only
+    removes energy, so the peak fell monotonically across the arc and
+    iteration 0 was the loudest window this module could produce. A negative
+    gap large enough to overlap repeats by more than the crossfade width
+    breaks that — two near-fresh repeats genuinely sounding together (summed
+    by ``render_arrangement``'s additive branch) beat one fresh repeat alone.
+    An *ordinary* seam does not: consecutive repeats always geometrically
+    overlap by exactly the crossfade width, at every config including the
+    default, and ``render_arrangement`` blends that into one voice, not two.
+    ``arrangement.densest_frame`` (and the ``concurrent_placements`` it's
+    built on) draws exactly that distinction — see their docstrings — so it
+    finds the frame carrying the most *genuinely concurrent* amplitude, not
+    merely the most geometric overlap. This measures a real window at the
+    progress of whichever placement dominates there — the freshest one, since
+    ``render_window`` renders exactly one loop iteration and has no way to
+    render two placements sounding together at once.
+
+    What that single window's peak is missing is scaled back in rather than
+    ignored: the measured peak is multiplied by the ratio of
+    ``arrangement.concurrent_amplitude`` — the root-sum-square of the
+    amplitude proxy across every placement concurrent (in that same
+    seam-excluding sense) at the densest frame — to the proxy of the one
+    placement actually rendered. With no overlap beyond an ordinary seam —
+    which includes every default config — exactly one placement is concurrent
+    there, the ratio is 1.0, and this is bit-identical to measuring iteration
+    0 alone, as it always was.
+
+    Root-sum-square, not a plain sum: a plain sum was tried first and
+    measured wrong. It assumes the concurrent repeats are *coherent* — in
+    phase, adding sample for sample, like duplicates of one signal — and
+    stacked repeats are much closer to independent sources: the same loop at
+    different decay stages, offset in time by a full stride. Measured against
+    real ``render_arrangement`` output — ground truth, not an approximation —
+    across eight content types and five stacking depths, the plain-sum ratio
+    over-predicted broadband/percussive content by as much as +17.7 dB (a
+    preview that much *quieter* than the render once the scaled-up peak is
+    divided out), worse than the ~4 dB defect this module exists to fix in
+    the first place. Root-sum-square brought that worst case down to
+    +7.7 dB, with the signed mean across the same content at +2.2 dB — still
+    biased toward over-predicting the peak, and so toward a preview a bit
+    quiet, but far short of the plain sum's.
+
+    This is an estimate, not a prediction, and it still has a known,
+    lopsided failure mode worth stating precisely rather than gesturing at:
+    strongly tonal, near-periodic content can be far more phase-coherent
+    than the independent-source assumption behind root-sum-square, so real
+    stacking there adds up closer to the plain sum than to the root-sum-
+    square estimate — measured up to −10 dB (root-sum-square predicting the
+    peak that much *quieter* than the true render) on pure-tone content at
+    10 concurrent placements. That direction is the dangerous one: it makes
+    ``density_ratio`` too small, which makes ``gain = target / (peak *
+    ratio)`` too *large*, which makes the preview play **louder** than the
+    render — the same direction as the ~4 dB-hot defect this module exists
+    to fix, and at heavy overlap, more than twice its size.
+
+    That −10 dB is not a property of "tonal content" as a class, though — it
+    is a property of the *stride landing on a whole number of periods* of
+    the content's fundamental. The same pure tone moved off that lock
+    (220 Hz to 233 Hz, nothing else changed) erases the plain sum's apparent
+    advantage entirely: its own error there is +10.3 dB, no better than
+    root-sum-square's broadband case. A stride at a half-period offset can
+    also make coherent copies partially *cancel* rather than add — measured
+    true peak ratio 1.92 against a plain-sum prediction of 3.92. So "sum
+    wins on tonal material" was never a content rule; it was a knife-edge in
+    the stride that happened to land in every case measured until someone
+    swept it. There is no cheap content classifier this module could add to
+    pick the better formula per case, which is why one estimator is used
+    everywhere: root-sum-square is the standard estimate for how independent
+    sources combine, and sweeping its exponent against measured ground truth
+    puts the optimum at *p* ≈ 1.75 — about 0.9 dB better worst-case than
+    root-sum-square's *p* = 2 — not enough of a gain to trade a principled,
+    standard estimator for an unprincipled tuned constant.
+
+    So the residual error this leaves is two-sided: within about ±7.7 dB for
+    broadband or percussive material (mean bias +2.2 dB, toward a slightly
+    quiet preview), but capable of leaning the other way by up to 10 dB —
+    toward a *louder* preview — when a stride happens to lock onto the
+    period of strongly tonal content. Both directions corrupt the same
+    judgement a preview exists to protect: a quiet preview reads as more
+    decayed than the render, a loud one reads as less, and the tonal
+    direction is the larger of the two.
+
+    That looseness is acceptable here — not eliminated, but tolerated —
+    because of what this factor is *for*: the real render is peak-normalized
+    properly, from the genuine rendered audio, by ``run_pipeline``'s
+    ``normalize_peak``, which reads the true peak wherever it actually falls
+    and cannot be fooled by this module's estimate. This only has to put a
+    preview window in the neighborhood of the render's level for tuning
+    judgement to stay meaningful; it does not, and from one rendered window
+    cannot, protect the render from clipping. (A whole render's loudest
+    moment is also not necessarily the densest frame this proxy finds —
+    fades and inter-iteration crossfades move it too; see the level-matching
+    entry in ``docs/project-state.md``.)"""
     cached = session.master_gain.get(reverb)
     if cached is None:
-        loudest = render_window(session, 0.0, reverb=reverb, master=False)
+        cfg = session.config
+        name = session.stem_names()[0]
+        loop = session.prepared_loop(name)
+        target_frames = int(cfg.output.duration_min * 60 * loop.sr)
+        plan = plan_arrangement(
+            [SegmentInfo(source_id="mix", index=0, n_frames=loop.n_frames)],
+            cfg, target_frames, loop.sr)
+        # The stem the render actually processes, not cfg.stems[0]
+        # unconditionally: ``cfg.stems`` may be empty (``MixConfig.from_dict(
+        # {"stems": []})`` is a supported state — see ``plan_stem_configs``'s
+        # own docstring), which made ``cfg.stems[0]`` an ``IndexError`` this
+        # module raised and nothing above it caught, reachable as a 500 from
+        # ``POST /api/preview``. It also mattered even when non-empty:
+        # ``cfg.stems[0]`` defaults to "vocals", so if separation fell back
+        # to a single "mix" stem this proxy was reading vocals' curve for a
+        # stem that does not exist. ``plan_stem_configs`` is the one place
+        # that already resolves both cases the same way the render does.
+        planned = plan_stem_configs(session.stem_names(), cfg)
+        decay = planned[0].decay if planned else StemDecayConfig()
+        xfade = xfade_frames(cfg.output.cycle_crossfade_ms, loop.n_frames, loop.sr)
+        frame = densest_frame(plan, decay, xfade)
+        here = concurrent_placements(plan, frame, xfade)
+        # here is never empty: densest_frame's candidates are placement start
+        # frames, and a placement's effective span always contains its own
+        # start (see concurrent_placements / _effective_spans).
+        dominant = min(here, key=lambda p: p.decay_progress)
+        loudest = render_window(
+            session, dominant.decay_progress, reverb=reverb, master=False)
         peak = float(np.abs(loudest.data).max())
+        single = decay_amplitude_proxy(dominant.decay_progress, decay)
+        total = concurrent_amplitude(here, decay)
+        density_ratio = total / single if single > 1e-12 else 1.0
+        effective_peak = peak * density_ratio
         target = db_to_amp(session.config.output.peak_db)
-        cached = float(target / peak) if peak > 1e-9 else 1.0
+        cached = float(target / effective_peak) if effective_peak > 1e-9 else 1.0
         session.master_gain[reverb] = cached
     return cached
 

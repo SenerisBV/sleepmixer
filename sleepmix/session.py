@@ -31,15 +31,25 @@ class RenderSession:
     Whether that is safe depends entirely on *which* field you touch, because
     only some of them feed the memoized stages:
 
-    - **Safe to mutate in place on ``session.config``:** each stem's ``decay``
-      (curve, lowpass, amplitude, dropout, noise, spectral-hole settings),
-      plus ``seed``. Nothing downstream is cached from these, so
-      ``render_window`` picks the new value up immediately. The existing
-      tests rely on exactly this.
+    - **Safe to mutate in place on ``session.config``: nothing, as of Plan
+      4a's final review.** Each stem's ``decay`` and the global ``seed`` used
+      to be listed here, on the claim that nothing downstream is cached from
+      them. That was true of the *staged stages* and is no longer true of the
+      memoized master gain: ``preview.master_gain`` measures at
+      ``densest_frame``'s chosen progress, which is not iteration 0 once a
+      gap arc moves it, and weights the result by
+      ``arrangement.concurrent_amplitude``, a function of ``amp_start_db``,
+      ``amp_end_db``, ``curve`` and ``enabled``; the calibration window also
+      builds its sound bed from ``seed``. Mutating either in place still
+      changes what ``render_window`` *renders* immediately — that part of the
+      old claim holds, and the tests that rely on it still work — but it
+      leaves the level it is rendered at behind, silently. Measured up to
+      −9.98 dB (see :meth:`_master_key`).
 
-    - **Must go through :meth:`update_config`:** ``loop``, ``tempo``,
-      ``separation_model``, ``reverb``, ``output``, ``soundbed``, and each
-      stem's ``enabled``, ``gain_db`` and ``reverb_send``. The first three
+    - **Must go through :meth:`update_config`:** everything, then. ``loop``,
+      ``tempo``, ``separation_model``, ``reverb``, ``output``, ``soundbed``,
+      ``seed``, each stem's ``enabled``, ``gain_db`` and ``reverb_send``, and
+      each stem's ``decay``. The first three
       determine ``loop_point()``, the ``prepared_loop()`` cache, and
       ``stems()`` respectively, as before. The rest feed
       ``preview.master_gain``, which is now memoized on this class (see
@@ -58,9 +68,9 @@ class RenderSession:
       render reads the field, but whether the calibration window does.
 
     A server applying config edits to a long-lived session should therefore
-    build the new ``MixConfig`` and hand it to :meth:`update_config` rather than
-    patching fields onto the held one, unless it knows the edit is confined to
-    the safe set.
+    build the new ``MixConfig`` and hand it to :meth:`update_config` rather
+    than patching fields onto the held one. There is no longer a safe set to
+    make an exception for.
     """
 
     def __init__(self, input_path: str, config: MixConfig,
@@ -124,11 +134,14 @@ class RenderSession:
             self._stems = None
             self._loop_point = None
             self._prepared.clear()
-        # master_gain is measured at progress 0, where apply_decay is a
-        # passthrough, so decay settings alone can never move it — clearing on
-        # every config swap (the registry does one per request) would double
-        # the render cost of every preview for no reason. A different loop
-        # means a different peak, so loop/tempo/model changes still clear it.
+        # master_gain used to be measured at progress 0, where apply_decay is
+        # a passthrough — so the comment here said decay settings alone could
+        # never move it, and _master_key left them out to keep a decay-slider
+        # drag from costing a second window render. That stopped being true
+        # when master_gain started measuring at densest_frame's progress and
+        # weighting by concurrent_amplitude; decay settings are in the key
+        # now, and this clears on them. A different loop means a different
+        # peak, so loop/tempo/model changes still clear it too.
         if (master_key != self._master_key_value
                 or loop_key != self._loop_key
                 or tempo_key != self._tempo_key
@@ -155,9 +168,54 @@ class RenderSession:
     def _master_key(config: MixConfig) -> tuple:
         """What the master gain actually depends on.
 
-        It is measured from iteration 0, where ``apply_decay`` returns the loop
-        untouched — so no decay setting can move it. Dragging a decay slider
-        must not invalidate this, or every preview pays a second window render.
+        **This docstring used to open by claiming the master gain is measured
+        from iteration 0, where ``apply_decay`` returns the loop untouched, so
+        no decay setting can move it.** That was the whole justification for
+        leaving every stem's ``decay`` out of this tuple, and it is no longer
+        true. ``preview.master_gain`` does not measure iteration 0: it asks
+        ``arrangement.densest_frame`` which window to measure and renders at
+        ``dominant.decay_progress``, observed as far along as 0.29 on ordinary
+        gap arcs, where ``apply_decay`` is emphatically not a passthrough. It
+        then weights that measured peak by
+        ``arrangement.concurrent_amplitude``, which is a function of
+        ``amp_start_db``, ``amp_end_db``, ``curve`` and ``enabled``.
+
+        So ``decay`` is in the key. Measured stale-memo error, by computing
+        the gain, changing only a decay field through :meth:`update_config`,
+        and comparing against a session built fresh on the new config:
+
+        ===========================================  ==========
+        edit                                         stale by
+        ===========================================  ==========
+        ``amp_start_db`` 0 → −40, gap −2/−2          −3.00 dB
+        ``amp_start_db`` 0 → −40, gap −4/−4          −6.00 dB
+        ``amp_start_db`` 0 → −40, gap −6/−6          −9.98 dB
+        ``decay.enabled`` on → off, gap 4/−6         +6.94 dB
+        ``curve`` linear → exp, gap 4/−6             +0.47 dB
+        ===========================================  ==========
+
+        ``server/sessions.py``'s registry calls :meth:`update_config` on every
+        ``POST /api/preview``, so without this the operator drags a decay
+        slider and the preview keeps the old level indefinitely, with nothing
+        to hear but "that seems louder than it should be".
+
+        ``config.seed`` is here for the same reason, on a much smaller
+        measurement: ``render_window`` builds the calibration window's sound
+        bed from ``np.random.default_rng(cfg.seed)``, so a re-seeded bed moves
+        the peak — +0.02 dB on the default bed here, up to +0.343 dB measured
+        elsewhere. Pre-existing rather than introduced by the arrangement
+        work, but the same defect and fixed in the same pass.
+
+        **The cost being accepted, stated plainly:** a decay edit now costs
+        one extra calibration window — a single ``render_window`` call, the
+        thing the old exclusion existed to avoid paying per keystroke. That is
+        the trade: one window render against a silent level error of up to
+        about 10 dB, in a preview whose only job is to let someone judge how
+        decayed a mix sounds, where loudness *is* the judgement. It is not
+        close. ``docs/project-state.md`` states the governing rule for this
+        tuple — *"A field's absence from this key is a measurement with an
+        expiry date, not a theorem"* — and this is that rule applied to the
+        largest field it had not yet been turned on.
 
         What is *deliberately* absent is as load-bearing as what is present.
         ``output.sample_rate`` is not here, and must not be added: the
@@ -172,18 +230,43 @@ class RenderSession:
         cannot change the value this key guards; it only makes the operator pay
         a whole extra calibration window on a rate change, which is the exact
         cost this docstring exists to avoid. The same measurement clears
-        ``fade_in_s``/``fade_out_s`` and ``cycle_crossfade_ms`` — both are
-        bit-identical too, but for two different reasons worth stating rather
-        than waving at a branch. The fades: ``preview.py`` imports no fade
-        function and no ``normalize_peak`` at all, so ``render_window`` cannot
-        see them at any progress. The crossfade: ``cycle_crossfade_ms`` *is*
-        read on the preview path — ``preview_iteration_index`` passes it to
-        ``plan_iterations`` — but it only changes ``n_iterations``, and
-        ``decayed_iteration`` computes
-        ``progress = iteration / max(n_iterations - 1, 1)``
-        (``disintegration.py:145``), which is 0 at iteration 0 whatever
-        ``n_iterations`` turns out to be. See the level-matching entry in
-        ``docs/project-state.md``.
+        ``fade_in_s``/``fade_out_s`` — bit-identical, because ``preview.py``
+        imports no fade function and no ``normalize_peak`` at all, so
+        ``render_window`` cannot see them at any progress.
+
+        ``output.duration_min`` is measured and left out too, but only just:
+        it feeds ``target_frames``, which changes how many placements
+        ``plan_arrangement`` lays down and therefore, in principle, which one
+        ``densest_frame`` picks. Measured across a negative-gap config where
+        that could plausibly matter, it moves ``master_gain`` by 0.073 dB —
+        noise next to the effects this key exists to catch. Left out on that
+        measurement, not on the argument alone; if a future change to how
+        density ranking works makes duration matter more, re-measure rather
+        than assume this still holds.
+
+        ``output.cycle_crossfade_ms`` is **not** in that safe set, and used to
+        be excluded here on an argument that has since been overtaken by
+        events. It reads: ``cycle_crossfade_ms`` only changes the placement
+        *count*, and ``plan_arrangement`` assigns decay progress by
+        ``i / max(len(positions) - 1, 1)``, which is 0 at placement 0
+        whatever the count turns out to be — so however many placements
+        there are, the window ``master_gain`` measures was always the same
+        one. That was airtight while ``master_gain`` always measured
+        placement 0. It no longer does: ``densest_frame`` and
+        ``concurrent_placements`` take ``xfade`` — derived from
+        ``cycle_crossfade_ms`` — and use it to decide which overlaps are an
+        ordinary seam (folded into one voice) versus genuine stacking (summed
+        as two or more), which changes both *which* placement dominates the
+        densest frame and *how many* are concurrent there. Measured on a
+        ``gap_start_s = gap_end_s = -3.0`` config, sweeping
+        ``cycle_crossfade_ms`` from 0 to 3000 ms moves ``master_gain`` across
+        a ~7.0 dB span — not a rounding-edge effect. Confirmed the stale path
+        too: compute the gain, change only ``cycle_crossfade_ms`` via
+        ``update_config``, and without this field in the key the memo is
+        served unchanged — the preview keeps the old level indefinitely,
+        exactly the defect ``config.arrangement`` below exists to prevent,
+        introduced by the same commit that added ``densest_frame``. See the
+        level-matching entry in ``docs/project-state.md``.
 
         ``config.soundbed`` *is* here, and that is the opposite case from
         ``output.sample_rate`` above, not an exception to it. The question is
@@ -196,9 +279,10 @@ class RenderSession:
         it off, so this field moves the value this key guards, where
         ``output.sample_rate`` measurably does not. What decides membership in
         this tuple was never whether a field is *read* by ``render_window`` in
-        the abstract — ``cycle_crossfade_ms`` is read and still excluded,
+        the abstract — ``output.duration_min`` is read, through
+        ``plan_arrangement``, and still excluded on the measurement above;
         ``output.sample_rate`` is not read at all — it is whether the
-        calibration window's own output depends on it.
+        calibration window's own output depends on it, and by how much.
 
         Confirmed by reverting only this line while leaving the bed in
         ``render_window``: ``test_toggling_the_bed_clears_the_memoised_gain``
@@ -209,12 +293,24 @@ class RenderSession:
         ``render_window`` change alone, with or without this key entry; it
         documents the observable behavior, not the invalidation. See
         ``docs/project-state.md`` for the ``output.sample_rate`` measurement
-        this reasoning mirrors."""
+        this reasoning mirrors.
+
+        ``config.arrangement`` is here for the same reason ``config.soundbed``
+        is, and it is the third instance of the distinction drawn above. The
+        question is never whether a real render reads the field — it is
+        whether the *calibration window's own output* depends on it. It does:
+        ``master_gain`` now asks ``arrangement.densest_frame`` which window to
+        measure, so a changed gap can move the measurement to a different
+        point in the arc entirely."""
         return (
+            config.seed,
             tuple(sorted(asdict(config.reverb).items())),
             config.output.peak_db,
             config.output.channels,
-            tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send)
+            config.output.cycle_crossfade_ms,
+            tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send,
+                   tuple(sorted(asdict(sc.decay).items())))
                   for sc in config.stems),
             tuple(sorted(asdict(config.soundbed).items())),
+            tuple(sorted(asdict(config.arrangement).items())),
         )

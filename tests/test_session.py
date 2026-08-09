@@ -114,3 +114,127 @@ def test_toggling_the_bed_clears_the_memoised_gain(tmp_path, stub_separation):
     session.update_config(_with_bed(_level_cfg(), enabled=True))
     assert not session.master_gain, "a bed change must not serve a stale factor"
     assert master_gain(session, reverb=True) != before
+
+
+def test_changing_the_gap_clears_the_memoised_gain(tmp_path, stub_separation):
+    """The arrangement decides which window gets measured, so it belongs in
+    the key — the same test ``_master_key``'s docstring applies to the sound
+    bed: not whether a render reads the field, but whether the calibration
+    window's own output depends on it."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    session.master_gain[True] = 0.5
+
+    changed = MixConfig()
+    changed.arrangement.gap_start_s = -2.0
+    session.update_config(changed)
+    assert session.master_gain == {}
+
+
+def test_changing_the_crossfade_clears_the_memoised_gain_when_repeats_overlap(
+        tmp_path, stub_separation):
+    """``cycle_crossfade_ms`` decides ``xfade``, which now decides which
+    overlaps ``densest_frame``/``concurrent_placements`` treat as an ordinary
+    seam versus genuine stacking — so it can move which placement dominates
+    the densest frame and how many are concurrent there. That was not true
+    before ``densest_frame`` existed, when ``master_gain`` always measured
+    placement 0 regardless of the crossfade, which is why this field used to
+    be safely excluded from the key. On a negative-gap config, where the
+    crossfade width genuinely changes the density ratio, a stale memo must
+    not survive a crossfade change."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    cfg.arrangement.gap_start_s = -3.0
+    cfg.arrangement.gap_end_s = -3.0
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    before = master_gain(session, reverb=False)
+    assert session.master_gain  # memoised
+
+    changed = MixConfig()
+    changed.output.duration_min = 2.0
+    changed.arrangement.gap_start_s = -3.0
+    changed.arrangement.gap_end_s = -3.0
+    changed.output.cycle_crossfade_ms = 3000.0
+    session.update_config(changed)
+    assert session.master_gain == {}, \
+        "a crossfade change must not serve a stale factor once it can move the gain"
+    assert master_gain(session, reverb=False) != before
+
+
+def _overlapping_cfg(gap=-4.0):
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    cfg.arrangement.gap_start_s = gap
+    cfg.arrangement.gap_end_s = gap
+    return cfg
+
+
+def test_changing_a_decay_setting_clears_the_memoised_gain(tmp_path, stub_separation):
+    """The invariant this key was built on, and the day it stopped holding.
+
+    ``_master_key``'s docstring used to open by saying the gain is measured
+    from iteration 0, where ``apply_decay`` returns the loop untouched, so no
+    decay setting could move it — which is why every stem's ``decay`` was left
+    out. ``master_gain`` stopped measuring iteration 0 when it started asking
+    ``densest_frame`` which window to measure, and it now weights that
+    measurement by ``concurrent_amplitude``, which reads the amplitude arc
+    directly.
+
+    Measured on this configuration before the fix: computing the gain,
+    changing only ``amp_start_db`` through ``update_config``, and comparing
+    against a session built fresh on the new config gave a stale factor
+    6.00 dB off. ``server/sessions.py`` calls ``update_config`` on every
+    ``POST /api/preview``, so that error persisted for as long as the session
+    lived, with nothing to hear but a preview at the wrong loudness.
+
+    A negative gap, because that is what makes ``densest_frame`` leave frame 0
+    and gives ``concurrent_amplitude`` more than one placement to weigh —
+    asserted below rather than assumed."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    session = RenderSession(str(song), _overlapping_cfg(),
+                            separate_fn=stub_separation)
+    before = master_gain(session, reverb=False)
+    assert session.master_gain  # memoised
+
+    changed = _overlapping_cfg()
+    for sc in changed.stems:
+        sc.decay.amp_start_db = -40.0
+    session.update_config(changed)
+    assert session.master_gain == {}, \
+        "a decay change must not serve a stale factor once it can move the gain"
+
+    after = master_gain(session, reverb=False)
+    fresh = RenderSession(str(song), changed, separate_fn=stub_separation)
+    assert after == master_gain(fresh, reverb=False), \
+        "the recomputed gain must match a session built fresh on the new config"
+    assert after != before, \
+        "test setup produced a decay change that cannot move the gain"
+
+
+def test_changing_the_seed_clears_the_memoised_gain(tmp_path, stub_separation):
+    """``render_window`` seeds the calibration window's sound bed from
+    ``cfg.seed``, so a re-seeded bed measures a different peak. Small — +0.02
+    dB on the default bed, +0.343 dB measured on a louder one — but the same
+    kind of staleness as the decay settings above, and pre-existing rather
+    than introduced by the arrangement work.
+
+    The bed is switched on and given something audible, because with
+    ``soundbed.enabled = False`` nothing on the preview path reads the seed at
+    all and this would assert nothing."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    session = RenderSession(str(song), _with_bed(_level_cfg()),
+                            separate_fn=stub_separation)
+    before = master_gain(session, reverb=False)
+    assert session.master_gain  # memoised
+
+    changed = _with_bed(_level_cfg())
+    changed.seed = 12345
+    session.update_config(changed)
+    assert session.master_gain == {}, "a seed change must not serve a stale factor"
+    assert master_gain(session, reverb=False) != before

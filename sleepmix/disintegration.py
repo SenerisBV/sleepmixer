@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 from scipy import signal
 
+from .arrangement import Arrangement, MalformedArrangement, Placement, xfade_frames
 from .audio import AudioBuffer
 from .config import StemDecayConfig
 from .looping import equal_power_crossfade
@@ -116,8 +117,13 @@ def plan_iterations(
 ) -> tuple[int, int]:
     """Return ``(n_iterations, xfade_frames)`` for a stream of this shape.
 
-    Shared by the batch stream builder and the preview path so both agree on
-    which iteration a given point in the arc corresponds to.
+    Has no production caller left — ``run_pipeline`` goes through
+    ``plan_arrangement``/``render_arrangement``, and the preview reads that same
+    plan rather than calling this. Retained on purpose, as the regression oracle
+    ``tests/test_arrangement.py::test_defaults_reproduce_todays_positions`` checks
+    the planner against: at default gaps the planner must land on exactly the
+    frames and exactly the count this produces, and that equality is not
+    re-derivable from the new code once this is gone.
 
     The count is the number of iterations the renderer *executes*, not an upper
     bound on them. Iteration ``i`` leaves the write head at
@@ -127,7 +133,7 @@ def plan_iterations(
     iteration beyond anything the render produces: the arc never reached
     ``progress == 1.0`` in output, and a preview scrubbed to maximum decay
     auditioned an iteration that does not exist in any render."""
-    xfade = min(int(crossfade_ms / 1000.0 * sr), loop_frames // 2)
+    xfade = xfade_frames(crossfade_ms, loop_frames, sr)
     stride = max(loop_frames - xfade, 1)
     n_iter = int(np.ceil((target_frames - xfade) / stride))
     return max(n_iter, 1), xfade
@@ -140,10 +146,139 @@ def decayed_iteration(
     decay: StemDecayConfig,
     seed: int,
     stem: str,
+    source_id: str = "mix",
+    index: int = 0,
+    progress: float | None = None,
 ) -> AudioBuffer:
-    """The loop as it sounds on repetition ``iteration`` of ``n_iterations``."""
-    progress = iteration / max(n_iterations - 1, 1)
-    return apply_decay(loop, progress, decay, iteration_rng(seed, stem, iteration))
+    """The loop as it sounds on repetition ``iteration`` of ``n_iterations``.
+
+    This is the **only** place the decay rng key is composed —
+    ``f"{source_id}:{index}:{stem}"``, further keyed by ``iteration`` through
+    ``util.iteration_rng``. It used to be composed a second time, inline,
+    where ``render_arrangement`` called ``apply_decay`` directly; that split
+    the render and preview paths onto two different keys without either of
+    them changing in a way that looked wrong, and ``preview.py``'s own module
+    docstring is explicit that a preview must be *exactly* reproducible
+    against the render, not merely close to it. Composing the key in exactly
+    one function is what makes that true again, and keeps it true: nothing
+    else may build this string independently.
+
+    ``source_id``/``index`` default to ``"mix"``/``0`` — the one source and
+    segment every caller deals with today — so call sites that only vary by
+    ``stem`` (every one that existed before the arrangement) need no changes.
+
+    ``progress`` defaults to ``iteration / max(n_iterations - 1, 1)``, the
+    even-spacing formula every caller used before arrangement plans existed.
+    A caller that already knows the authoritative progress for this repeat —
+    ``render_arrangement``, reading ``Placement.decay_progress`` off a plan
+    that may not space repeats evenly — should pass it explicitly rather than
+    let this recompute an approximation that only happens to agree today."""
+    p = progress if progress is not None else iteration / max(n_iterations - 1, 1)
+    key = f"{source_id}:{index}:{stem}"
+    return apply_decay(loop, p, decay, iteration_rng(seed, key, iteration))
+
+
+def render_arrangement(
+    loop: AudioBuffer,
+    plan: Arrangement,
+    decay: StemDecayConfig,
+    crossfade_ms: float,
+    seed: int,
+    stem: str = "mix",
+    cancel=None,
+) -> AudioBuffer:
+    """Render every placement in ``plan``, each decayed to its own progress.
+
+    **The seam rule.** Consecutive repeats can now relate three ways, and only
+    one of them is the join this renderer used to assume. An overlap no larger
+    than the crossfade is a seam and gets an equal-power crossfade, exactly as
+    before. An overlap *larger* than the crossfade is deliberate stacking —
+    the operator asked for two voices — and is summed, because crossfading it
+    would duck both through the overlap, which is the opposite of playing over
+    each other. A gap gets nothing, and the silence is the point.
+
+    The crossfade branch blends against the *previous placement's own
+    chunk*, not against whatever the accumulator holds, and adds the
+    difference in:
+    ``out[region] += crossfade(prev_tail, chunk[:overlap]) - prev_tail``,
+    where ``prev_tail`` is the previous placement's own last ``overlap``
+    samples — never anything the accumulator has already mixed in. Whatever
+    else already sits in that region — placement i-2, i-3, any number of
+    earlier voices the additive branch stacked there — is left exactly as it
+    was, because the delta only ever replaces placement i-1's own
+    contribution: for any existing content ``d``,
+    ``d + prev_tail + (crossfade(prev_tail, b) - prev_tail) = d +
+    crossfade(prev_tail, b)``. That holds regardless of how many earlier
+    placements overlap the region, so it is additive-safe by construction —
+    not because of any argument about how far back an overlap can reach.
+    (An earlier version of this docstring made exactly that argument, from
+    the crossfade branch's overlap bound alone, and it was wrong: that bound
+    constrains only the stride into this placement, not the stride into the
+    one before it, so a heavy stack — small stride, additive branch —
+    immediately followed by a seam — large stride, crossfade branch — is
+    reachable, including from ``plan_arrangement`` at its own default
+    settings. ``test_a_seam_after_a_stack_keeps_the_stacked_voice`` pins down
+    the case that argument would have silently dropped.) The formula reduces
+    to the old plain assignment exactly when the region truly holds nothing
+    but placement i-1's contribution, so nothing that already passed on that
+    basis changes.
+
+    Heavier stacking than the crossfade window takes the additive branch,
+    where nothing is overwritten or subtracted.
+
+    Every placement is decayed through ``decayed_iteration`` rather than
+    ``apply_decay`` directly, so this and ``preview.render_window`` compose
+    the rng key the same way and cannot drift apart — see
+    ``decayed_iteration``'s docstring for why that split happened once
+    already and must not happen again.
+
+    Raises ``MalformedArrangement`` for a placement that does not fit the
+    buffer this builds, rather than letting the write below fail as a bare
+    numpy broadcast error. ``plan_arrangement`` is not supposed to produce
+    one — see its own docstring — so this is a cheap precondition check
+    guarding against whatever else might hand this an ``Arrangement``, not a
+    replacement for that fix."""
+    sr = loop.sr
+    ch = loop.n_channels
+    seg_len = loop.n_frames
+    xfade = xfade_frames(crossfade_ms, seg_len, sr)
+
+    out = np.zeros((plan.n_frames + seg_len, ch), dtype=np.float32)
+    prev_end = None
+    prev_chunk = None
+    for i, placement in enumerate(plan.placements):
+        if cancel is not None:
+            cancel.check()
+        start = placement.start_frame
+        # A precondition, not validation: plan_arrangement's own stopping
+        # rule keeps every start short of target_frames, so this should
+        # never fire from a plan it produced. It exists for whatever else
+        # might hand this an Arrangement it didn't build, so a malformed one
+        # fails with a named placement and reason instead of a numpy
+        # broadcast-shape error out of the write below.
+        if start < 0 or start + seg_len > out.shape[0]:
+            raise MalformedArrangement(
+                f"placement {i} (source {placement.source_id!r} index "
+                f"{placement.index}) starts at frame {start}, which does "
+                f"not fit the {out.shape[0]}-frame buffer built for a "
+                f"{plan.n_frames}-frame arrangement")
+        chunk = decayed_iteration(
+            loop, i, len(plan.placements), decay, seed, stem,
+            source_id=placement.source_id, index=placement.index,
+            progress=placement.decay_progress,
+        ).data
+        overlap = 0 if prev_end is None else max(prev_end - start, 0)
+        if 0 < overlap <= xfade:
+            prev_tail = prev_chunk[-overlap:]
+            blended = equal_power_crossfade(prev_tail, chunk[:overlap])
+            out[start:start + overlap] += blended - prev_tail
+            out[start + overlap:start + seg_len] += chunk[overlap:]
+        else:
+            out[start:start + seg_len] += chunk
+        prev_end = start + seg_len
+        prev_chunk = chunk
+
+    return AudioBuffer(out[:plan.n_frames], sr)
 
 
 def build_disintegrating_stream(
@@ -155,35 +290,19 @@ def build_disintegrating_stream(
     stem: str = "mix",
     cancel=None,
 ) -> AudioBuffer:
-    """Repeat ``loop`` until ``target_frames`` is reached, degrading each pass.
+    """Repeat ``loop`` back to back until ``target_frames``, degrading each pass.
 
-    Successive iterations are joined with an equal-power crossfade so cycle
-    boundaries don't click. Each iteration's randomness is derived from
-    ``(seed, stem, iteration)`` so any single iteration can be reproduced in
-    isolation — see ``util.iteration_rng``."""
-    sr = loop.sr
-    ch = loop.n_channels
-    loop_len = loop.n_frames
-    n_iter, xfade = plan_iterations(loop_len, target_frames, crossfade_ms, sr)
-
-    out = np.zeros((target_frames + loop_len, ch), dtype=np.float32)
-    pos = 0
-    for i in range(n_iter):
-        if cancel is not None:
-            cancel.check()
-        chunk = decayed_iteration(loop, i, n_iter, decay, seed, stem).data
-        if pos == 0:
-            out[:loop_len] += chunk
-            pos = loop_len
-        else:
-            start = pos - xfade
-            a = out[start:start + xfade]
-            b = chunk[:xfade]
-            out[start:start + xfade] = equal_power_crossfade(a, b)
-            end = start + loop_len
-            out[start + xfade:end] += chunk[xfade:]
-            pos = end
-        if pos >= target_frames:
-            break
-
-    return AudioBuffer(out[:target_frames], sr)
+    Retained as the zero-gap case of ``render_arrangement``, which is what
+    every caller predating the arrangement wants and what
+    ``tests/test_disintegration.py`` already pins down."""
+    n_iter, xfade = plan_iterations(loop.n_frames, target_frames, crossfade_ms, loop.sr)
+    stride = max(loop.n_frames - xfade, 1)
+    last = max(n_iter - 1, 1)
+    plan = Arrangement(
+        placements=[
+            Placement("mix", 0, i * stride, i / last, loop.n_frames)
+            for i in range(n_iter)
+        ],
+        n_frames=target_frames,
+    )
+    return render_arrangement(loop, plan, decay, crossfade_ms, seed, stem, cancel)

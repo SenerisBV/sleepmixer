@@ -164,6 +164,32 @@ class LoopConfig:
 
 
 @dataclass
+class ArrangementConfig:
+    """How much space sits between one repeat of the loop and the next.
+
+    A mix used to be the loop repeated back to back, forever, at one fixed
+    stride. These two numbers let that stride grow as the mix goes on — so the
+    loop breathes, arriving less often as it erodes — or go negative, so
+    repeats overlap and play over each other."""
+
+    gap_start_s: float = field(default=0.0, metadata={
+        "label": "Gap at the start", "min": -30.0, "max": 120.0, "step": 0.5,
+        "unit": "s",
+        "help": "Silence between one repeat and the next, early in the mix. "
+                "Negative overlaps them instead."})
+    gap_end_s: float = field(default=0.0, metadata={
+        "label": "Gap at the end", "min": -30.0, "max": 120.0, "step": 0.5,
+        "unit": "s",
+        "help": "The same, late in the mix. Larger than the start gap and the "
+                "loop spaces out as it dissolves."})
+    gap_curve: str = field(default="linear", metadata={
+        "label": "Gap curve", "choices": ["linear", "exp", "log"],
+        "help": "How the gap travels from start to end — the same curves the "
+                "decay uses. exp holds the early spacing longer; log opens "
+                "up quickly then settles."})
+
+
+@dataclass
 class TempoConfig:
     """How fast and how low the loop plays, before any of it erodes.
 
@@ -312,6 +338,7 @@ class MixConfig:
         StemConfig(name="drums", enabled=False),  # usually too rhythmic for sleep
     ])
     loop: LoopConfig = field(default_factory=LoopConfig)
+    arrangement: ArrangementConfig = field(default_factory=ArrangementConfig)
     tempo: TempoConfig = field(default_factory=TempoConfig)
     reverb: ReverbConfig = field(default_factory=ReverbConfig)
     soundbed: SoundbedConfig = field(default_factory=SoundbedConfig)
@@ -332,6 +359,22 @@ class MixConfig:
         a config from a UI field first arrives."""
         if int(self.seed) < 0:
             raise ValueError(f"seed must be non-negative, got {self.seed}")
+
+        arr = self.arrangement
+        for name in ("gap_start_s", "gap_end_s"):
+            value = float(getattr(arr, name))
+            # These bounds are the ones config_schema publishes; the mixer
+            # clamps to them, so a value outside here can only arrive from a
+            # hand-written config or an old preset. Refusing at construction
+            # keeps it from surfacing as a 400 on a preview instead.
+            if not -30.0 <= value <= 120.0:
+                raise ValueError(
+                    f"arrangement.{name} must be between -30 and 120 seconds, "
+                    f"got {value}")
+        if arr.gap_curve not in ("linear", "exp", "log"):
+            raise ValueError(
+                f"arrangement.gap_curve must be one of linear, exp, log; "
+                f"got {arr.gap_curve!r}")
 
     @classmethod
     def from_yaml(cls, path: str) -> "MixConfig":
@@ -368,6 +411,7 @@ def _build(dc_type: type, d: dict[str, Any]) -> Any:
 # -- schema export ------------------------------------------------------
 _SECTION_TYPES = {
     "loop": LoopConfig,
+    "arrangement": ArrangementConfig,
     "tempo": TempoConfig,
     "reverb": ReverbConfig,
     "soundbed": SoundbedConfig,
