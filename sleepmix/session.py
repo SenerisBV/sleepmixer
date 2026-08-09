@@ -209,7 +209,15 @@ class RenderSession:
         ``render_window`` change alone, with or without this key entry; it
         documents the observable behavior, not the invalidation. See
         ``docs/project-state.md`` for the ``output.sample_rate`` measurement
-        this reasoning mirrors."""
+        this reasoning mirrors.
+
+        ``config.arrangement`` is here for the same reason ``config.soundbed``
+        is, and it is the third instance of the distinction drawn above. The
+        question is never whether a real render reads the field — it is
+        whether the *calibration window's own output* depends on it. It does:
+        ``master_gain`` now asks ``arrangement.densest_frame`` which window to
+        measure, so a changed gap can move the measurement to a different
+        point in the arc entirely."""
         return (
             tuple(sorted(asdict(config.reverb).items())),
             config.output.peak_db,
@@ -217,4 +225,5 @@ class RenderSession:
             tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send)
                   for sc in config.stems),
             tuple(sorted(asdict(config.soundbed).items())),
+            tuple(sorted(asdict(config.arrangement).items())),
         )

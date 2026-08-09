@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from .arrangement import SegmentInfo, plan_arrangement
+from .arrangement import (
+    SegmentInfo, concurrent_placements, decay_amplitude_proxy, densest_frame,
+    plan_arrangement, xfade_frames)
 from .audio import AudioBuffer
 from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
 from .disintegration import decayed_iteration
@@ -70,17 +72,70 @@ def master_gain(session: RenderSession, reverb: bool = True) -> float:
     reads as *more* decayed. So the calibration window is rendered down the same
     path the caller asked for, and the two factors are cached separately.
 
-    One window per path is enough: decay only removes energy, so the peak falls
-    monotonically across the arc and iteration 0 is the loudest window this
-    module can produce. (A whole render's loudest moment is not necessarily
-    iteration 0 — fades and inter-iteration crossfades move it; see the
-    level-matching entry in ``docs/project-state.md``.)"""
+    Which window to measure used to be assumed rather than chosen: decay only
+    removes energy, so the peak fell monotonically across the arc and
+    iteration 0 was the loudest window this module could produce. A negative
+    gap large enough to overlap repeats by more than the crossfade width
+    breaks that — two near-fresh repeats genuinely sounding together (summed
+    by ``render_arrangement``'s additive branch) beat one fresh repeat alone.
+    An *ordinary* seam does not: consecutive repeats always geometrically
+    overlap by exactly the crossfade width, at every config including the
+    default, and ``render_arrangement`` blends that into one voice, not two.
+    ``arrangement.densest_frame`` (and the ``concurrent_placements`` it's
+    built on) draws exactly that distinction — see their docstrings — so it
+    finds the frame carrying the most *genuinely concurrent* amplitude, not
+    merely the most geometric overlap. This measures a real window at the
+    progress of whichever placement dominates there — the freshest one, since
+    ``render_window`` renders exactly one loop iteration and has no way to
+    render two placements sounding together at once.
+
+    What that single window's peak is missing is scaled back in rather than
+    ignored: the measured peak is multiplied by the ratio of the summed
+    amplitude proxy over every placement concurrent (in that same
+    seam-excluding sense) at the densest frame to the proxy of the one
+    placement actually rendered. With no overlap beyond an ordinary seam —
+    which includes every default config — exactly one placement is concurrent
+    there, the ratio is 1.0, and this is bit-identical to measuring iteration
+    0 alone, as it always was.
+
+    This is an estimate, not a prediction. Repeats of the same loop at
+    different decay stages are the same material at different points in its
+    decay, not independent sources, so summing their amplitude proxies is an
+    upper-ish bound on how loud they truly sum to rather than the render's
+    actual peak. That looseness is acceptable here because of what this
+    factor is *for*: the real render is peak-normalized properly, from the
+    genuine rendered audio, by ``run_pipeline``'s ``normalize_peak`` — this
+    only has to put a preview window at roughly the render's level, not
+    protect the render from clipping. (A whole render's loudest moment is
+    also not necessarily the densest frame this proxy finds — fades and
+    inter-iteration crossfades move it too; see the level-matching entry in
+    ``docs/project-state.md``.)"""
     cached = session.master_gain.get(reverb)
     if cached is None:
-        loudest = render_window(session, 0.0, reverb=reverb, master=False)
+        cfg = session.config
+        name = session.stem_names()[0]
+        loop = session.prepared_loop(name)
+        target_frames = int(cfg.output.duration_min * 60 * loop.sr)
+        plan = plan_arrangement(
+            [SegmentInfo(source_id="mix", index=0, n_frames=loop.n_frames)],
+            cfg, target_frames, loop.sr)
+        decay = cfg.stems[0].decay
+        xfade = xfade_frames(cfg.output.cycle_crossfade_ms, loop.n_frames, loop.sr)
+        frame = densest_frame(plan, decay, xfade)
+        here = concurrent_placements(plan, frame, xfade)
+        # here is never empty: densest_frame's candidates are placement start
+        # frames, and a placement's effective span always contains its own
+        # start (see concurrent_placements / _effective_spans).
+        dominant = min(here, key=lambda p: p.decay_progress)
+        loudest = render_window(
+            session, dominant.decay_progress, reverb=reverb, master=False)
         peak = float(np.abs(loudest.data).max())
+        single = decay_amplitude_proxy(dominant.decay_progress, decay)
+        total = sum(decay_amplitude_proxy(p.decay_progress, decay) for p in here)
+        density_ratio = total / single if single > 1e-12 else 1.0
+        effective_peak = peak * density_ratio
         target = db_to_amp(session.config.output.peak_db)
-        cached = float(target / peak) if peak > 1e-9 else 1.0
+        cached = float(target / effective_peak) if effective_peak > 1e-9 else 1.0
         session.master_gain[reverb] = cached
     return cached
 

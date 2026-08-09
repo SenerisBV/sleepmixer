@@ -114,3 +114,20 @@ def test_toggling_the_bed_clears_the_memoised_gain(tmp_path, stub_separation):
     session.update_config(_with_bed(_level_cfg(), enabled=True))
     assert not session.master_gain, "a bed change must not serve a stale factor"
     assert master_gain(session, reverb=True) != before
+
+
+def test_changing_the_gap_clears_the_memoised_gain(tmp_path, stub_separation):
+    """The arrangement decides which window gets measured, so it belongs in
+    the key — the same test ``_master_key``'s docstring applies to the sound
+    bed: not whether a render reads the field, but whether the calibration
+    window's own output depends on it."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    session.master_gain[True] = 0.5
+
+    changed = MixConfig()
+    changed.arrangement.gap_start_s = -2.0
+    session.update_config(changed)
+    assert session.master_gain == {}

@@ -276,3 +276,32 @@ def test_more_than_one_segment_is_not_yet_supported():
 def test_xfade_is_clamped_to_half_a_segment():
     assert xfade_frames(crossfade_ms=100_000, seg_frames=1000, sr=SR) == 500
     assert xfade_frames(crossfade_ms=1000, seg_frames=SR * 10, sr=SR) == SR
+
+
+def test_the_densest_frame_is_the_start_when_nothing_overlaps():
+    """At default config every consecutive pair overlaps by exactly the
+    crossfade width — a plain seam, blended by ``render_arrangement`` into
+    one voice, not summed into two. ``densest_frame`` must not mistake that
+    geometric overlap for real concurrency, or it would move off frame 0 on
+    every default-configured mix, gap or no gap."""
+    from sleepmix.arrangement import densest_frame
+    from sleepmix.config import StemDecayConfig
+
+    plan = plan_arrangement([_seg()], _cfg(), SR * 60, SR)
+    assert densest_frame(plan, StemDecayConfig(), _DEFAULT_XFADE) == 0
+
+
+def test_the_densest_frame_moves_when_repeats_stack():
+    """Two near-fresh repeats sounding together beat one fresh repeat alone.
+
+    The gap here (-3.0s) overlaps repeats by far more than the default
+    crossfade (``_DEFAULT_XFADE``, well under a second), so this is genuine
+    additive stacking, not an ordinary seam."""
+    from sleepmix.arrangement import densest_frame
+    from sleepmix.config import StemDecayConfig
+
+    plan = plan_arrangement(
+        [_seg()], _cfg(gap_start_s=-3.0, gap_end_s=-3.0), SR * 60, SR)
+    frame = densest_frame(plan, StemDecayConfig(), _DEFAULT_XFADE)
+    assert frame > 0
+    assert len(plan.at(frame)) >= 2

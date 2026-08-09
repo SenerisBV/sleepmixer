@@ -459,6 +459,89 @@ def test_master_gain_is_calibrated_per_signal_path(tmp_path, stub_separation):
         assert abs(peak - target) < 1e-4, f"reverb={flag} peaks at {peak}"
 
 
+def test_master_gain_matches_the_old_formula_when_nothing_overlaps(tmp_path, stub_separation):
+    """The property that keeps every level-matching test above honest.
+
+    ``_session``'s config uses the default (zero-gap) arrangement, so no two
+    placements ever sound together: the densest frame has exactly one
+    placement, the density ratio is exactly 1.0, and ``master_gain`` must
+    come out bit-identical to the old "measure iteration 0 alone" formula it
+    replaces. If the arrangement-aware rewrite had changed anything in this
+    case, every test above — all of which run at zero gap — would have been
+    silently measuring a different thing."""
+    from sleepmix.preview import master_gain
+    from sleepmix.util import db_to_amp
+
+    s = _session(tmp_path, stub_separation)
+    gain = master_gain(s, reverb=True)
+
+    loudest = render_window(s, 0.0, reverb=True, master=False)
+    peak = float(np.abs(loudest.data).max())
+    target = db_to_amp(s.config.output.peak_db)
+    assert gain == target / peak
+
+
+def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
+    """The regression this task fixes, checked against the corrected formula
+    directly rather than against a full render — ``_preview_to_render_ratio``
+    assumes a uniform, gap-blind stride and cannot be reused for an
+    overlapping arrangement without asserting something else by accident.
+
+    A negative gap makes several near-fresh repeats sound together at the
+    densest frame. The old code measured iteration 0 alone and would have
+    left the render's true peak above target; the fix scales that single
+    window's measured peak up by the density ratio before deriving the gain,
+    so the resulting gain must be smaller than what the old, overlap-blind
+    measurement would have produced."""
+    import pytest
+
+    from sleepmix.arrangement import (
+        SegmentInfo, concurrent_placements, decay_amplitude_proxy,
+        densest_frame, plan_arrangement, xfade_frames)
+    from sleepmix.preview import master_gain
+    from sleepmix.util import db_to_amp
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    cfg.arrangement.gap_start_s = -3.0
+    cfg.arrangement.gap_end_s = -3.0
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    name = session.stem_names()[0]
+    loop = session.prepared_loop(name)
+    target_frames = int(cfg.output.duration_min * 60 * loop.sr)
+    plan = plan_arrangement(
+        [SegmentInfo("mix", 0, loop.n_frames)], cfg, target_frames, loop.sr)
+    decay = cfg.stems[0].decay
+    xfade = xfade_frames(cfg.output.cycle_crossfade_ms, loop.n_frames, loop.sr)
+    frame = densest_frame(plan, decay, xfade)
+    here = concurrent_placements(plan, frame, xfade)
+    assert len(here) >= 2, \
+        "test setup produced no overlap; assertions below would be vacuous"
+
+    dominant = min(here, key=lambda p: p.decay_progress)
+    single = decay_amplitude_proxy(dominant.decay_progress, decay)
+    total = sum(decay_amplitude_proxy(p.decay_progress, decay) for p in here)
+    ratio = total / single
+    assert ratio > 1.0, "overlap should raise the density ratio above 1"
+
+    loudest = render_window(
+        session, dominant.decay_progress, reverb=False, master=False)
+    peak = float(np.abs(loudest.data).max())
+    target = db_to_amp(cfg.output.peak_db)
+    expected_gain = target / (peak * ratio)
+
+    gain = master_gain(session, reverb=False)
+    assert gain == pytest.approx(expected_gain, rel=1e-9)
+
+    naive_peak = float(
+        np.abs(render_window(session, 0.0, reverb=False, master=False).data).max())
+    naive_gain = target / naive_peak
+    assert gain < naive_gain, \
+        "overlap must pull the gain down from the old iteration-0-only measurement"
+
+
 def test_mastering_preserves_the_arc(tmp_path, stub_separation):
     """One factor for all windows — not per-window normalization.
 

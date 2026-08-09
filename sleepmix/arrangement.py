@@ -27,8 +27,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .config import MixConfig, NothingToRender
-from .util import lerp, shape_progress
+from .config import MixConfig, NothingToRender, StemDecayConfig
+from .util import db_to_amp, lerp, shape_progress
 
 # A stride below this fraction of a segment stops being an overlap and starts
 # being a comb filter — and, less musically, would let one config produce
@@ -187,3 +187,107 @@ def plan_arrangement(
         for i, p in enumerate(positions)
     ]
     return Arrangement(placements=placements, n_frames=target_frames)
+
+
+def decay_amplitude_proxy(progress: float, decay: StemDecayConfig) -> float:
+    """How loud a placement at ``progress`` is, amplitude-fade only.
+
+    Not a measurement of what the placement actually sounds like — decay also
+    filters, punches holes, drops out and adds noise, none of which this
+    accounts for. It exists only to *rank and weight* placements relative to
+    one another, which is all ``densest_frame`` and ``preview.master_gain``
+    ask of it. Shared between the two rather than duplicated so they cannot
+    silently diverge on what "louder" means."""
+    if not decay.enabled:
+        return 1.0
+    shaped = shape_progress(progress, decay.curve)
+    return db_to_amp(lerp(decay.amp_start_db, decay.amp_end_db, shaped))
+
+
+def _effective_spans(plan: Arrangement, xfade: int) -> list[tuple[int, int]]:
+    """``(start, effective_end)`` per placement, index-aligned with
+    ``plan.placements``.
+
+    Plain geometric containment (``Arrangement.at``) is the wrong notion of
+    "sounding" for this purpose: a repeat handing over to the next always
+    geometrically overlaps it by exactly the crossfade width, at *every*
+    config, gap or no gap — ``plan_arrangement``'s stride is
+    ``seg.n_frames - xfade + gap_frames``, so at the default zero gap
+    consecutive placements overlap by exactly ``xfade``. That overlap is
+    ``equal_power_crossfade``d by ``render_arrangement`` into one blended
+    voice, not summed into two, and a handover reading as "two things
+    sounding at once" would defeat the whole reason that crossfade exists.
+
+    So a seam is deliberately *not* counted as concurrency here. Only overlap
+    *beyond* the crossfade is genuine stacking — the same
+    ``0 < overlap <= xfade`` test ``render_arrangement`` already uses to
+    choose between its crossfade branch and its additive branch, mirrored
+    exactly rather than re-derived, so the two cannot silently disagree about
+    which case a given pair of placements is in. Where it's a seam, this
+    placement's *effective* end is trimmed to the next placement's start —
+    its tail is folded into the blend and must not be double-counted. Where
+    it's real stacking (or no overlap at all), the effective end is the real
+    one. At default config every pair is a seam, so the effective spans tile
+    the timeline with no gaps and no doubling — this is the property that
+    keeps ``densest_frame`` landing on frame 0 there, exactly as it did
+    before this function existed."""
+    placements = plan.placements
+    spans: list[tuple[int, int]] = []
+    for i, p in enumerate(placements):
+        real_end = p.start_frame + p.n_frames
+        if i + 1 < len(placements):
+            nxt = placements[i + 1]
+            overlap = real_end - nxt.start_frame
+            end = nxt.start_frame if 0 < overlap <= xfade else real_end
+        else:
+            end = real_end
+        spans.append((p.start_frame, end))
+    return spans
+
+
+def concurrent_placements(plan: Arrangement, frame: int, xfade: int) -> list[Placement]:
+    """Every placement genuinely sounding as its own voice at ``frame``.
+
+    Not ``Arrangement.at``: that is pure geometric containment, which counts
+    an ordinary crossfade seam as two voices when ``render_arrangement``
+    blends it into one — see ``_effective_spans`` for why that distinction
+    matters and how it's drawn. Shared by ``densest_frame`` (ranks frames by
+    this) and ``preview.master_gain`` (weighs the frame ``densest_frame``
+    picks by this same set), so the ranking and the scaling can never
+    disagree about which placements they mean by "concurrent"."""
+    spans = _effective_spans(plan, xfade)
+    return [p for p, (start, end) in zip(plan.placements, spans)
+            if start <= frame < end]
+
+
+def densest_frame(plan: Arrangement, decay: StemDecayConfig, xfade: int) -> int:
+    """The frame where the most amplitude is likely to coincide.
+
+    ``preview.master_gain`` measures one window and used to assume it was the
+    first: decay only removes energy, so the peak fell monotonically and
+    iteration 0 was the loudest thing that module could produce. Overlapping
+    repeats (a negative gap large enough to exceed the crossfade width) break
+    that — two near-fresh repeats sounding together beat one fresh repeat
+    alone, and a gain calibrated at frame 0 leaves the real peak above
+    target.
+
+    ``xfade`` is the crossfade width in frames (``arrangement.xfade_frames``
+    is the single source of that clamp; callers should use it rather than
+    re-deriving one). It exists so concurrency can be measured over
+    *effective* spans rather than raw geometric ones — see
+    ``concurrent_placements`` and ``_effective_spans`` for why an ordinary
+    seam must not be counted as two voices.
+
+    The proxy below only has to *rank* candidates; the level is still
+    measured by rendering a real window (see ``master_gain``). Candidates are
+    the placement starts themselves, because the summed concurrent amplitude
+    only changes where a placement's effective span begins or ends, and every
+    effective span starts at its placement's own start."""
+    best_frame, best = 0, -1.0
+    for candidate in plan.placements:
+        frame = candidate.start_frame
+        total = sum(decay_amplitude_proxy(p.decay_progress, decay)
+                    for p in concurrent_placements(plan, frame, xfade))
+        if total > best:
+            best, best_frame = total, frame
+    return best_frame
