@@ -562,11 +562,11 @@ def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
     import pytest
 
     from sleepmix.arrangement import (
-        SegmentInfo, concurrent_amplitude, concurrent_placements,
-        decay_amplitude_proxy, densest_frame, plan_arrangement, xfade_frames)
+        SegmentInfo, concurrent_placements, densest_frame, plan_arrangement,
+        xfade_frames)
     from sleepmix.config import plan_stem_configs
     from sleepmix.preview import master_gain
-    from sleepmix.util import db_to_amp
+    from sleepmix.util import db_to_amp, lerp, shape_progress
 
     song = tmp_path / "s.wav"
     _song(song)
@@ -588,8 +588,28 @@ def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
         "test setup produced no overlap; assertions below would be vacuous"
 
     dominant = min(here, key=lambda p: p.decay_progress)
-    single = decay_amplitude_proxy(dominant.decay_progress, decay)
-    total = concurrent_amplitude(here, decay)  # root-sum-square, not a sum
+
+    # The density ratio, recomputed from the decay *settings* rather than by
+    # calling the two functions under test. That circularity used to be the
+    # whole weakness of this test: it called ``concurrent_amplitude`` and
+    # ``decay_amplitude_proxy`` to build the number it then asserted
+    # ``master_gain`` had computed with those same two functions, so any
+    # change to either moved both sides together and the equality held
+    # regardless. Reverting root-sum-square to a plain sum — a one-line
+    # mutation reinstating a measured +17.7 dB error — left this test green.
+    # Written out here, that mutation fails it. ``lerp`` and
+    # ``shape_progress`` are still called: they are not what this pins down,
+    # and re-deriving an ``exp`` curve by hand would only add a second place
+    # to get the curve wrong.
+    def amp(p):
+        # Mirrors apply_decay's short-circuit, as decay_amplitude_proxy does.
+        if p <= 0:
+            return 1.0
+        return 10 ** (lerp(decay.amp_start_db, decay.amp_end_db,
+                           shape_progress(p, decay.curve)) / 20.0)
+
+    single = amp(dominant.decay_progress)
+    total = sum(amp(p.decay_progress) ** 2 for p in here) ** 0.5
     ratio = total / single
     assert ratio > 1.0, "overlap should raise the density ratio above 1"
 

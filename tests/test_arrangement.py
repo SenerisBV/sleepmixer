@@ -362,3 +362,62 @@ def test_the_amplitude_proxy_is_untouched_at_progress_zero():
     assert decay_amplitude_proxy(0.0, rising) == 1.0
     # …and disabled decay is untouched everywhere, as it always was.
     assert decay_amplitude_proxy(0.5, StemDecayConfig(enabled=False)) == 1.0
+
+
+def test_the_amplitude_proxy_is_the_decibel_arc_past_progress_zero():
+    """Past 0 the proxy is the arc itself, checked against arithmetic.
+
+    Hand-computed rather than re-derived from ``lerp``/``db_to_amp``/
+    ``shape_progress``: half way along a linear arc from 0 dB to −12 dB is
+    −6 dB, and −6 dB is ``10 ** (-6/20)``. An ``exp`` curve squares the
+    progress, so half way along that one is a quarter of the way along the
+    arc — −3 dB. Nothing here calls the shaping helpers the function under
+    test calls, so a proxy that stopped shaping, stopped interpolating, or
+    collapsed to a constant fails here rather than agreeing with itself."""
+    from sleepmix.arrangement import decay_amplitude_proxy
+    from sleepmix.config import StemDecayConfig
+
+    linear = StemDecayConfig(curve="linear", amp_start_db=0.0, amp_end_db=-12.0)
+    assert decay_amplitude_proxy(0.5, linear) == pytest.approx(
+        10 ** (-6.0 / 20.0), rel=1e-12)
+    assert decay_amplitude_proxy(1.0, linear) == pytest.approx(
+        10 ** (-12.0 / 20.0), rel=1e-12)
+
+    eased = StemDecayConfig(curve="exp", amp_start_db=0.0, amp_end_db=-12.0)
+    assert decay_amplitude_proxy(0.5, eased) == pytest.approx(
+        10 ** (-3.0 / 20.0), rel=1e-12)
+
+
+def test_concurrent_amplitude_combines_as_root_sum_square():
+    """The combining rule, pinned against numbers rather than against itself.
+
+    Root-sum-square is the single most expensive decision on this branch —
+    it cost three rounds of measurement against real ``render_arrangement``
+    output, and it shipped as a fix for a +17.7 dB error that a plain sum
+    produced on broadband material. Nothing caught reverting it: the only
+    test that touched this recomputed the expected value by calling this very
+    function, so a mutation moved both sides of the comparison together.
+
+    So the expected values below are arithmetic, written out: two equally
+    loud voices combine to ``sqrt(2)``, four to ``sqrt(4) == 2``, and a full
+    voice beside a half-amplitude one to ``sqrt(1 + 0.25)``. A plain sum
+    would give 2, 4 and 1.5 — every one of them distinguishable here."""
+    from sleepmix.arrangement import concurrent_amplitude
+    from sleepmix.config import StemDecayConfig
+
+    off = StemDecayConfig(enabled=False)
+
+    def voices(n, progress=0.0):
+        return [Placement("s", 0, 0, progress, SR) for _ in range(n)]
+
+    assert concurrent_amplitude(voices(1), off) == pytest.approx(1.0, rel=1e-12)
+    assert concurrent_amplitude(voices(2), off) == pytest.approx(2 ** 0.5, rel=1e-12)
+    assert concurrent_amplitude(voices(4), off) == pytest.approx(2.0, rel=1e-12)
+
+    # One fresh voice (untouched, amplitude 1.0) beside one fully decayed to
+    # −6.0206 dB, which is exactly half amplitude.
+    half = StemDecayConfig(curve="linear", amp_start_db=0.0,
+                           amp_end_db=-6.020599913279624)
+    mixed = [Placement("s", 0, 0, 0.0, SR), Placement("s", 0, 0, 1.0, SR)]
+    assert concurrent_amplitude(mixed, half) == pytest.approx(
+        (1.0 + 0.25) ** 0.5, rel=1e-9)
