@@ -27,6 +27,16 @@ loop:
   search_start: 0.2          # only look for a loop between 20%..80% of the track
   search_end: 0.8
 
+# Space between repeats ------------------------------------------------
+# Zero (the default) repeats the loop back to back, with just the seam
+# crossfade above joining them. Positive gaps insert silence so the loop
+# breathes as it goes; negative gaps make consecutive repeats overlap and
+# play over each other instead.
+arrangement:
+  gap_start_s: 0.0           # gap before the next repeat, early in the mix
+  gap_end_s: 0.0             # gap late in the mix; grow this past gap_start_s and the loop spaces out as it decays
+  gap_curve: linear          # linear | exp (holds the early spacing longer) | log (opens up quickly, then settles)
+
 # Global reverb (each stem can scale its own send) ---------------------
 reverb:
   room_size: 0.85

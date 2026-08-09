@@ -44,6 +44,9 @@ def test_example_yaml_parses(tmp_path):
     cfg = MixConfig.from_yaml(str(p))
     assert cfg.soundbed.enabled is True
     assert cfg.output.duration_min == 25
+    assert cfg.arrangement.gap_start_s == 0.0
+    assert cfg.arrangement.gap_end_s == 0.0
+    assert cfg.arrangement.gap_curve == "linear"
 
 
 def test_schema_describes_tempo_speed():
