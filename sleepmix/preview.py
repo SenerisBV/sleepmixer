@@ -105,32 +105,55 @@ def master_gain(session: RenderSession, reverb: bool = True) -> float:
     phase, adding sample for sample, like duplicates of one signal — and
     stacked repeats are much closer to independent sources: the same loop at
     different decay stages, offset in time by a full stride. Measured against
-    a real local sum of decayed placements (not a plain proxy sum) across
-    four synthetic content types — a pure tone, white noise, a five-partial
-    pad, and a sparse pulse train — at 2, 3, 4 and 10 concurrent placements,
-    the plain-sum ratio over-predicted broadband/percussive content by as
-    much as +13.2 dB (a preview that much *quieter* than the render once the
-    scaled-up peak is divided out), which is worse than the ~4 dB defect this
-    module exists to fix in the first place. Root-sum-square brought that
-    worst case on the same content down to +5.3 dB, with the signed error
-    across broadband/percussive configurations averaging close to zero
-    (+0.2 dB) rather than consistently over-predicting.
+    real ``render_arrangement`` output — ground truth, not an approximation —
+    across eight content types and five stacking depths, the plain-sum ratio
+    over-predicted broadband/percussive content by as much as +17.7 dB (a
+    preview that much *quieter* than the render once the scaled-up peak is
+    divided out), worse than the ~4 dB defect this module exists to fix in
+    the first place. Root-sum-square brought that worst case down to
+    +7.7 dB, with the signed mean across the same content at +2.2 dB — still
+    biased toward over-predicting the peak, and so toward a preview a bit
+    quiet, but far short of the plain sum's.
 
     This is an estimate, not a prediction, and it still has a known,
-    lopsided failure mode worth stating rather than glossing over: strongly
-    tonal or near-periodic content (a sustained tone or drone, more than a
-    typical separated stem) is more phase-coherent than the independent-
-    source assumption behind root-sum-square, so real stacking there adds up
-    closer to the plain sum than to the root-sum-square estimate — measured
-    up to −10 dB (predicted *quieter* than the true render) on pure-tone
-    content at 10 concurrent placements, growing worse as concurrency grows,
-    where the plain sum it replaced stayed within half a dB. So the residual
-    error this leaves is two-sided and content-dependent: roughly balanced
-    and within about ±5.5 dB for broadband or percussive material, but
-    capable of leaning several dB quiet on strongly tonal material at heavy
-    overlap. Both directions are audible; a preview several dB quiet than the
-    render reads as more decayed than it is, the same corruption of judgement
-    the pre-task ~4 dB-hot defect caused, just pointed the other way.
+    lopsided failure mode worth stating precisely rather than gesturing at:
+    strongly tonal, near-periodic content can be far more phase-coherent
+    than the independent-source assumption behind root-sum-square, so real
+    stacking there adds up closer to the plain sum than to the root-sum-
+    square estimate — measured up to −10 dB (root-sum-square predicting the
+    peak that much *quieter* than the true render) on pure-tone content at
+    10 concurrent placements. That direction is the dangerous one: it makes
+    ``density_ratio`` too small, which makes ``gain = target / (peak *
+    ratio)`` too *large*, which makes the preview play **louder** than the
+    render — the same direction as the ~4 dB-hot defect this module exists
+    to fix, and at heavy overlap, more than twice its size.
+
+    That −10 dB is not a property of "tonal content" as a class, though — it
+    is a property of the *stride landing on a whole number of periods* of
+    the content's fundamental. The same pure tone moved off that lock
+    (220 Hz to 233 Hz, nothing else changed) erases the plain sum's apparent
+    advantage entirely: its own error there is +10.3 dB, no better than
+    root-sum-square's broadband case. A stride at a half-period offset can
+    also make coherent copies partially *cancel* rather than add — measured
+    true peak ratio 1.92 against a plain-sum prediction of 3.92. So "sum
+    wins on tonal material" was never a content rule; it was a knife-edge in
+    the stride that happened to land in every case measured until someone
+    swept it. There is no cheap content classifier this module could add to
+    pick the better formula per case, which is why one estimator is used
+    everywhere: root-sum-square is the standard estimate for how independent
+    sources combine, and sweeping its exponent against measured ground truth
+    puts the optimum at *p* ≈ 1.75 — about 0.9 dB better worst-case than
+    root-sum-square's *p* = 2 — not enough of a gain to trade a principled,
+    standard estimator for an unprincipled tuned constant.
+
+    So the residual error this leaves is two-sided: within about ±7.7 dB for
+    broadband or percussive material (mean bias +2.2 dB, toward a slightly
+    quiet preview), but capable of leaning the other way by up to 10 dB —
+    toward a *louder* preview — when a stride happens to lock onto the
+    period of strongly tonal content. Both directions corrupt the same
+    judgement a preview exists to protect: a quiet preview reads as more
+    decayed than the render, a loud one reads as less, and the tonal
+    direction is the larger of the two.
 
     That looseness is acceptable here — not eliminated, but tolerated —
     because of what this factor is *for*: the real render is peak-normalized

@@ -267,20 +267,25 @@ def concurrent_amplitude(placements: list[Placement], decay: StemDecayConfig) ->
     *coherent* — in phase, adding sample for sample, like duplicates of one
     signal — and they are much closer to independent sources: the same loop
     at different decay stages, offset in time by a full stride. Measured
-    against a real local sum of decayed placements across several content
-    types and concurrency counts, a plain sum over-predicted broadband and
-    percussive content badly enough to push the derived gain several dB
-    *below* where it should sit — worse than the ~4 dB defect this whole
-    module exists to fix, just pointed the other way. Root-sum-square is the
-    standard estimate for how independent sources combine and measured
-    closer to those same renders, though not uniformly: it still under-
-    predicts on strongly tonal, near-periodic content, which is more
-    phase-coherent than the independent-source assumption behind it. See
-    ``preview.master_gain``'s docstring for the actual measured numbers, both
-    directions, and why the residual is tolerated rather than eliminated.
-    With exactly one placement this is identical to that placement's own
-    ``decay_amplitude_proxy``, so the no-stacking case — every default
-    config — is unaffected."""
+    against real ``render_arrangement`` output — ground truth, not an
+    approximation — across many content types, stacking depths, and
+    strides, a plain sum badly over-predicted broadband and percussive
+    content, pushing the derived gain several dB *below* where it should
+    sit (a preview quieter than it should be) — worse than the ~4 dB defect
+    this whole module exists to fix, just pointed the other way. Root-sum-
+    square is the standard estimate for how independent sources combine and
+    measured much closer to those same renders on that content, though not
+    uniformly: it under-predicts on content whose stacking is more coherent
+    than the independent-source assumption, which turns out to be a
+    property of whether the stride happens to lock onto a whole number of
+    periods of the material's fundamental, not of the material being
+    "tonal" as a class — a nearby stride or frequency with no such lock
+    shows no such advantage for the plain sum either. See
+    ``preview.master_gain``'s docstring for the measured numbers, both
+    directions, the stride-locking finding, and why the residual is
+    tolerated rather than eliminated. With exactly one placement this is
+    identical to that placement's own ``decay_amplitude_proxy``, so the
+    no-stacking case — every default config — is unaffected."""
     return sum(decay_amplitude_proxy(p.decay_progress, decay) ** 2
                for p in placements) ** 0.5
 

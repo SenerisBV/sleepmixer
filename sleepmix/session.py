@@ -180,7 +180,7 @@ class RenderSession:
         it feeds ``target_frames``, which changes how many placements
         ``plan_arrangement`` lays down and therefore, in principle, which one
         ``densest_frame`` picks. Measured across a negative-gap config where
-        that could plausibly matter, it moves ``master_gain`` by 0.02 dB —
+        that could plausibly matter, it moves ``master_gain`` by 0.073 dB —
         noise next to the effects this key exists to catch. Left out on that
         measurement, not on the argument alone; if a future change to how
         density ranking works makes duration matter more, re-measure rather
@@ -202,7 +202,7 @@ class RenderSession:
         densest frame and *how many* are concurrent there. Measured on a
         ``gap_start_s = gap_end_s = -3.0`` config, sweeping
         ``cycle_crossfade_ms`` from 0 to 3000 ms moves ``master_gain`` across
-        a 14.0 dB span — not a rounding-edge effect. Confirmed the stale path
+        a ~7.0 dB span — not a rounding-edge effect. Confirmed the stale path
         too: compute the gain, change only ``cycle_crossfade_ms`` via
         ``update_config``, and without this field in the key the memo is
         served unchanged — the preview keeps the old level indefinitely,
@@ -221,9 +221,10 @@ class RenderSession:
         it off, so this field moves the value this key guards, where
         ``output.sample_rate`` measurably does not. What decides membership in
         this tuple was never whether a field is *read* by ``render_window`` in
-        the abstract — ``cycle_crossfade_ms`` is read and still excluded,
+        the abstract — ``output.duration_min`` is read, through
+        ``plan_arrangement``, and still excluded on the measurement above;
         ``output.sample_rate`` is not read at all — it is whether the
-        calibration window's own output depends on it.
+        calibration window's own output depends on it, and by how much.
 
         Confirmed by reverting only this line while leaving the bed in
         ``render_window``: ``test_toggling_the_bed_clears_the_memoised_gain``
