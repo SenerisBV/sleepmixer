@@ -296,12 +296,19 @@ def test_the_densest_frame_moves_when_repeats_stack():
 
     The gap here (-3.0s) overlaps repeats by far more than the default
     crossfade (``_DEFAULT_XFADE``, well under a second), so this is genuine
-    additive stacking, not an ordinary seam."""
-    from sleepmix.arrangement import densest_frame
+    additive stacking, not an ordinary seam. Asserted with
+    ``concurrent_placements``, not ``Arrangement.at`` (geometric containment)
+    — this test's whole subject is that geometric containment is the wrong
+    notion of concurrency, so checking the count with it would let a
+    regression back to counting every seam as two voices pass silently: a
+    ``densest_frame`` that used ``Arrangement.at`` again would still find
+    >= 2 placements there by ``plan.at``'s count, even where
+    ``concurrent_placements`` finds only 1."""
+    from sleepmix.arrangement import concurrent_placements, densest_frame
     from sleepmix.config import StemDecayConfig
 
     plan = plan_arrangement(
         [_seg()], _cfg(gap_start_s=-3.0, gap_end_s=-3.0), SR * 60, SR)
     frame = densest_frame(plan, StemDecayConfig(), _DEFAULT_XFADE)
     assert frame > 0
-    assert len(plan.at(frame)) >= 2
+    assert len(concurrent_placements(plan, frame, _DEFAULT_XFADE)) >= 2

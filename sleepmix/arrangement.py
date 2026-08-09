@@ -260,6 +260,31 @@ def concurrent_placements(plan: Arrangement, frame: int, xfade: int) -> list[Pla
             if start <= frame < end]
 
 
+def concurrent_amplitude(placements: list[Placement], decay: StemDecayConfig) -> float:
+    """Root-sum-square of ``decay_amplitude_proxy`` across ``placements``.
+
+    Not a plain sum. A plain sum assumes the concurrent repeats are
+    *coherent* — in phase, adding sample for sample, like duplicates of one
+    signal — and they are much closer to independent sources: the same loop
+    at different decay stages, offset in time by a full stride. Measured
+    against a real local sum of decayed placements across several content
+    types and concurrency counts, a plain sum over-predicted broadband and
+    percussive content badly enough to push the derived gain several dB
+    *below* where it should sit — worse than the ~4 dB defect this whole
+    module exists to fix, just pointed the other way. Root-sum-square is the
+    standard estimate for how independent sources combine and measured
+    closer to those same renders, though not uniformly: it still under-
+    predicts on strongly tonal, near-periodic content, which is more
+    phase-coherent than the independent-source assumption behind it. See
+    ``preview.master_gain``'s docstring for the actual measured numbers, both
+    directions, and why the residual is tolerated rather than eliminated.
+    With exactly one placement this is identical to that placement's own
+    ``decay_amplitude_proxy``, so the no-stacking case — every default
+    config — is unaffected."""
+    return sum(decay_amplitude_proxy(p.decay_progress, decay) ** 2
+               for p in placements) ** 0.5
+
+
 def densest_frame(plan: Arrangement, decay: StemDecayConfig, xfade: int) -> int:
     """The frame where the most amplitude is likely to coincide.
 
@@ -280,14 +305,19 @@ def densest_frame(plan: Arrangement, decay: StemDecayConfig, xfade: int) -> int:
 
     The proxy below only has to *rank* candidates; the level is still
     measured by rendering a real window (see ``master_gain``). Candidates are
-    the placement starts themselves, because the summed concurrent amplitude
-    only changes where a placement's effective span begins or ends, and every
-    effective span starts at its placement's own start."""
+    the placement starts themselves, because the combined concurrent
+    amplitude only changes where a placement's effective span begins or
+    ends, and every effective span starts at its placement's own start.
+    Ranked by ``concurrent_amplitude`` (root-sum-square, not a plain sum —
+    see that function) so the frame this picks agrees with how
+    ``master_gain`` weighs it; the two must use the same combining rule or
+    the frame that "wins" and the scaling applied to it stop meaning the same
+    thing."""
     best_frame, best = 0, -1.0
     for candidate in plan.placements:
         frame = candidate.start_frame
-        total = sum(decay_amplitude_proxy(p.decay_progress, decay)
-                    for p in concurrent_placements(plan, frame, xfade))
+        total = concurrent_amplitude(
+            concurrent_placements(plan, frame, xfade), decay)
         if total > best:
             best, best_frame = total, frame
     return best_frame

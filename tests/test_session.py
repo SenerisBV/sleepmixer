@@ -131,3 +131,35 @@ def test_changing_the_gap_clears_the_memoised_gain(tmp_path, stub_separation):
     changed.arrangement.gap_start_s = -2.0
     session.update_config(changed)
     assert session.master_gain == {}
+
+
+def test_changing_the_crossfade_clears_the_memoised_gain_when_repeats_overlap(
+        tmp_path, stub_separation):
+    """``cycle_crossfade_ms`` decides ``xfade``, which now decides which
+    overlaps ``densest_frame``/``concurrent_placements`` treat as an ordinary
+    seam versus genuine stacking — so it can move which placement dominates
+    the densest frame and how many are concurrent there. That was not true
+    before ``densest_frame`` existed, when ``master_gain`` always measured
+    placement 0 regardless of the crossfade, which is why this field used to
+    be safely excluded from the key. On a negative-gap config, where the
+    crossfade width genuinely changes the density ratio, a stale memo must
+    not survive a crossfade change."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    cfg.arrangement.gap_start_s = -3.0
+    cfg.arrangement.gap_end_s = -3.0
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+    before = master_gain(session, reverb=False)
+    assert session.master_gain  # memoised
+
+    changed = MixConfig()
+    changed.output.duration_min = 2.0
+    changed.arrangement.gap_start_s = -3.0
+    changed.arrangement.gap_end_s = -3.0
+    changed.output.cycle_crossfade_ms = 3000.0
+    session.update_config(changed)
+    assert session.master_gain == {}, \
+        "a crossfade change must not serve a stale factor once it can move the gain"
+    assert master_gain(session, reverb=False) != before

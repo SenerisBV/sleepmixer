@@ -19,10 +19,11 @@ from __future__ import annotations
 import numpy as np
 
 from .arrangement import (
-    SegmentInfo, concurrent_placements, decay_amplitude_proxy, densest_frame,
-    plan_arrangement, xfade_frames)
+    SegmentInfo, concurrent_amplitude, concurrent_placements,
+    decay_amplitude_proxy, densest_frame, plan_arrangement, xfade_frames)
 from .audio import AudioBuffer
-from .config import MixConfig, NothingToRender, StemConfig, plan_stem_configs
+from .config import (
+    MixConfig, NothingToRender, StemConfig, StemDecayConfig, plan_stem_configs)
 from .disintegration import decayed_iteration
 from .effects import apply_reverb, reverb_dry_offset
 from .session import RenderSession
@@ -90,26 +91,58 @@ def master_gain(session: RenderSession, reverb: bool = True) -> float:
     render two placements sounding together at once.
 
     What that single window's peak is missing is scaled back in rather than
-    ignored: the measured peak is multiplied by the ratio of the summed
-    amplitude proxy over every placement concurrent (in that same
-    seam-excluding sense) at the densest frame to the proxy of the one
+    ignored: the measured peak is multiplied by the ratio of
+    ``arrangement.concurrent_amplitude`` — the root-sum-square of the
+    amplitude proxy across every placement concurrent (in that same
+    seam-excluding sense) at the densest frame — to the proxy of the one
     placement actually rendered. With no overlap beyond an ordinary seam —
     which includes every default config — exactly one placement is concurrent
     there, the ratio is 1.0, and this is bit-identical to measuring iteration
     0 alone, as it always was.
 
-    This is an estimate, not a prediction. Repeats of the same loop at
-    different decay stages are the same material at different points in its
-    decay, not independent sources, so summing their amplitude proxies is an
-    upper-ish bound on how loud they truly sum to rather than the render's
-    actual peak. That looseness is acceptable here because of what this
-    factor is *for*: the real render is peak-normalized properly, from the
-    genuine rendered audio, by ``run_pipeline``'s ``normalize_peak`` — this
-    only has to put a preview window at roughly the render's level, not
-    protect the render from clipping. (A whole render's loudest moment is
-    also not necessarily the densest frame this proxy finds — fades and
-    inter-iteration crossfades move it too; see the level-matching entry in
-    ``docs/project-state.md``.)"""
+    Root-sum-square, not a plain sum: a plain sum was tried first and
+    measured wrong. It assumes the concurrent repeats are *coherent* — in
+    phase, adding sample for sample, like duplicates of one signal — and
+    stacked repeats are much closer to independent sources: the same loop at
+    different decay stages, offset in time by a full stride. Measured against
+    a real local sum of decayed placements (not a plain proxy sum) across
+    four synthetic content types — a pure tone, white noise, a five-partial
+    pad, and a sparse pulse train — at 2, 3, 4 and 10 concurrent placements,
+    the plain-sum ratio over-predicted broadband/percussive content by as
+    much as +13.2 dB (a preview that much *quieter* than the render once the
+    scaled-up peak is divided out), which is worse than the ~4 dB defect this
+    module exists to fix in the first place. Root-sum-square brought that
+    worst case on the same content down to +5.3 dB, with the signed error
+    across broadband/percussive configurations averaging close to zero
+    (+0.2 dB) rather than consistently over-predicting.
+
+    This is an estimate, not a prediction, and it still has a known,
+    lopsided failure mode worth stating rather than glossing over: strongly
+    tonal or near-periodic content (a sustained tone or drone, more than a
+    typical separated stem) is more phase-coherent than the independent-
+    source assumption behind root-sum-square, so real stacking there adds up
+    closer to the plain sum than to the root-sum-square estimate — measured
+    up to −10 dB (predicted *quieter* than the true render) on pure-tone
+    content at 10 concurrent placements, growing worse as concurrency grows,
+    where the plain sum it replaced stayed within half a dB. So the residual
+    error this leaves is two-sided and content-dependent: roughly balanced
+    and within about ±5.5 dB for broadband or percussive material, but
+    capable of leaning several dB quiet on strongly tonal material at heavy
+    overlap. Both directions are audible; a preview several dB quiet than the
+    render reads as more decayed than it is, the same corruption of judgement
+    the pre-task ~4 dB-hot defect caused, just pointed the other way.
+
+    That looseness is acceptable here — not eliminated, but tolerated —
+    because of what this factor is *for*: the real render is peak-normalized
+    properly, from the genuine rendered audio, by ``run_pipeline``'s
+    ``normalize_peak``, which reads the true peak wherever it actually falls
+    and cannot be fooled by this module's estimate. This only has to put a
+    preview window in the neighborhood of the render's level for tuning
+    judgement to stay meaningful; it does not, and from one rendered window
+    cannot, protect the render from clipping. (A whole render's loudest
+    moment is also not necessarily the densest frame this proxy finds —
+    fades and inter-iteration crossfades move it too; see the level-matching
+    entry in ``docs/project-state.md``.)"""
     cached = session.master_gain.get(reverb)
     if cached is None:
         cfg = session.config
@@ -119,7 +152,18 @@ def master_gain(session: RenderSession, reverb: bool = True) -> float:
         plan = plan_arrangement(
             [SegmentInfo(source_id="mix", index=0, n_frames=loop.n_frames)],
             cfg, target_frames, loop.sr)
-        decay = cfg.stems[0].decay
+        # The stem the render actually processes, not cfg.stems[0]
+        # unconditionally: ``cfg.stems`` may be empty (``MixConfig.from_dict(
+        # {"stems": []})`` is a supported state — see ``plan_stem_configs``'s
+        # own docstring), which made ``cfg.stems[0]`` an ``IndexError`` this
+        # module raised and nothing above it caught, reachable as a 500 from
+        # ``POST /api/preview``. It also mattered even when non-empty:
+        # ``cfg.stems[0]`` defaults to "vocals", so if separation fell back
+        # to a single "mix" stem this proxy was reading vocals' curve for a
+        # stem that does not exist. ``plan_stem_configs`` is the one place
+        # that already resolves both cases the same way the render does.
+        planned = plan_stem_configs(session.stem_names(), cfg)
+        decay = planned[0].decay if planned else StemDecayConfig()
         xfade = xfade_frames(cfg.output.cycle_crossfade_ms, loop.n_frames, loop.sr)
         frame = densest_frame(plan, decay, xfade)
         here = concurrent_placements(plan, frame, xfade)
@@ -131,7 +175,7 @@ def master_gain(session: RenderSession, reverb: bool = True) -> float:
             session, dominant.decay_progress, reverb=reverb, master=False)
         peak = float(np.abs(loudest.data).max())
         single = decay_amplitude_proxy(dominant.decay_progress, decay)
-        total = sum(decay_amplitude_proxy(p.decay_progress, decay) for p in here)
+        total = concurrent_amplitude(here, decay)
         density_ratio = total / single if single > 1e-12 else 1.0
         effective_peak = peak * density_ratio
         target = db_to_amp(session.config.output.peak_db)

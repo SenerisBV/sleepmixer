@@ -172,17 +172,42 @@ class RenderSession:
         cannot change the value this key guards; it only makes the operator pay
         a whole extra calibration window on a rate change, which is the exact
         cost this docstring exists to avoid. The same measurement clears
-        ``fade_in_s``/``fade_out_s`` and ``cycle_crossfade_ms`` — both are
-        bit-identical too, but for two different reasons worth stating rather
-        than waving at a branch. The fades: ``preview.py`` imports no fade
-        function and no ``normalize_peak`` at all, so ``render_window`` cannot
-        see them at any progress. The crossfade: ``cycle_crossfade_ms`` *is*
-        read on the preview path — ``preview_iteration_index`` passes it,
-        via ``config``, into ``plan_arrangement``, which uses it (through
-        ``xfade_frames``) to size the stride between placements — but it only
-        changes the placement *count*, and ``plan_arrangement`` assigns decay
-        progress by ``i / max(len(positions) - 1, 1)``, which is 0 at
-        placement 0 whatever the count turns out to be. See the
+        ``fade_in_s``/``fade_out_s`` — bit-identical, because ``preview.py``
+        imports no fade function and no ``normalize_peak`` at all, so
+        ``render_window`` cannot see them at any progress.
+
+        ``output.duration_min`` is measured and left out too, but only just:
+        it feeds ``target_frames``, which changes how many placements
+        ``plan_arrangement`` lays down and therefore, in principle, which one
+        ``densest_frame`` picks. Measured across a negative-gap config where
+        that could plausibly matter, it moves ``master_gain`` by 0.02 dB —
+        noise next to the effects this key exists to catch. Left out on that
+        measurement, not on the argument alone; if a future change to how
+        density ranking works makes duration matter more, re-measure rather
+        than assume this still holds.
+
+        ``output.cycle_crossfade_ms`` is **not** in that safe set, and used to
+        be excluded here on an argument that has since been overtaken by
+        events. It reads: ``cycle_crossfade_ms`` only changes the placement
+        *count*, and ``plan_arrangement`` assigns decay progress by
+        ``i / max(len(positions) - 1, 1)``, which is 0 at placement 0
+        whatever the count turns out to be — so however many placements
+        there are, the window ``master_gain`` measures was always the same
+        one. That was airtight while ``master_gain`` always measured
+        placement 0. It no longer does: ``densest_frame`` and
+        ``concurrent_placements`` take ``xfade`` — derived from
+        ``cycle_crossfade_ms`` — and use it to decide which overlaps are an
+        ordinary seam (folded into one voice) versus genuine stacking (summed
+        as two or more), which changes both *which* placement dominates the
+        densest frame and *how many* are concurrent there. Measured on a
+        ``gap_start_s = gap_end_s = -3.0`` config, sweeping
+        ``cycle_crossfade_ms`` from 0 to 3000 ms moves ``master_gain`` across
+        a 14.0 dB span — not a rounding-edge effect. Confirmed the stale path
+        too: compute the gain, change only ``cycle_crossfade_ms`` via
+        ``update_config``, and without this field in the key the memo is
+        served unchanged — the preview keeps the old level indefinitely,
+        exactly the defect ``config.arrangement`` below exists to prevent,
+        introduced by the same commit that added ``densest_frame``. See the
         level-matching entry in ``docs/project-state.md``.
 
         ``config.soundbed`` *is* here, and that is the opposite case from
@@ -222,6 +247,7 @@ class RenderSession:
             tuple(sorted(asdict(config.reverb).items())),
             config.output.peak_db,
             config.output.channels,
+            config.output.cycle_crossfade_ms,
             tuple((sc.name, sc.enabled, sc.gain_db, sc.reverb_send)
                   for sc in config.stems),
             tuple(sorted(asdict(config.soundbed).items())),

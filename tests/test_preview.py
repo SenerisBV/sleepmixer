@@ -437,6 +437,27 @@ def test_master_gain_is_computed_once_per_config(tmp_path, stub_separation):
     assert s.master_gain == {}, "a config change must invalidate the gain"
 
 
+def test_master_gain_survives_an_empty_stems_list(tmp_path, stub_separation):
+    """``MixConfig.from_dict({"stems": []})`` is a supported state —
+    ``plan_stem_configs`` documents it explicitly, falling back to every
+    available stem at defaults — and ``render_window(..., master=False)``
+    already handles it. ``cfg.stems[0].decay``, read directly rather than
+    through ``plan_stem_configs``, does not: it raised a bare ``IndexError``
+    with no message, reachable as a 500 from ``POST /api/preview`` (that
+    endpoint catches ``ValueError``, not ``IndexError``). At the parent
+    commit — before ``master_gain`` read ``cfg.stems`` at all — this same
+    call returned a number."""
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig.from_dict({"stems": []})
+    cfg.output.duration_min = 2.0
+    session = RenderSession(str(song), cfg, separate_fn=stub_separation)
+
+    from sleepmix.preview import master_gain
+    gain = master_gain(session)
+    assert gain > 0 and np.isfinite(gain)
+
+
 def test_master_gain_is_calibrated_per_signal_path(tmp_path, stub_separation):
     """A dry preview must not be mastered with a wet-calibrated factor.
 
@@ -496,8 +517,9 @@ def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
     import pytest
 
     from sleepmix.arrangement import (
-        SegmentInfo, concurrent_placements, decay_amplitude_proxy,
-        densest_frame, plan_arrangement, xfade_frames)
+        SegmentInfo, concurrent_amplitude, concurrent_placements,
+        decay_amplitude_proxy, densest_frame, plan_arrangement, xfade_frames)
+    from sleepmix.config import plan_stem_configs
     from sleepmix.preview import master_gain
     from sleepmix.util import db_to_amp
 
@@ -513,7 +535,7 @@ def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
     target_frames = int(cfg.output.duration_min * 60 * loop.sr)
     plan = plan_arrangement(
         [SegmentInfo("mix", 0, loop.n_frames)], cfg, target_frames, loop.sr)
-    decay = cfg.stems[0].decay
+    decay = plan_stem_configs(session.stem_names(), cfg)[0].decay
     xfade = xfade_frames(cfg.output.cycle_crossfade_ms, loop.n_frames, loop.sr)
     frame = densest_frame(plan, decay, xfade)
     here = concurrent_placements(plan, frame, xfade)
@@ -522,7 +544,7 @@ def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
 
     dominant = min(here, key=lambda p: p.decay_progress)
     single = decay_amplitude_proxy(dominant.decay_progress, decay)
-    total = sum(decay_amplitude_proxy(p.decay_progress, decay) for p in here)
+    total = concurrent_amplitude(here, decay)  # root-sum-square, not a sum
     ratio = total / single
     assert ratio > 1.0, "overlap should raise the density ratio above 1"
 
