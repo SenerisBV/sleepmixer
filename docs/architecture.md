@@ -683,17 +683,39 @@ produce; a `reverb=False` one is a level-matched view of the dry path, not a
 simulation of any render, since every real render applies reverb.
 
 `RenderSession._master_key` decides when the memoized factor is stale.
-Deliberately excluded: every stem's `decay` settings, `seed`,
-`output.sample_rate`, the two fades, and — narrowly, on a measurement rather
-than an argument — `output.duration_min`, which does feed `target_frames` and
-so how many placements there are, but was measured moving the gain by 0.073 dB
-on a negative-gap config, noise next to what this key exists to catch.
-Included: `reverb` (as the dict's own key), `output.peak_db`,
+Deliberately excluded: `output.sample_rate`, the two fades, and — narrowly, on
+a measurement rather than an argument — `output.duration_min`, which does feed
+`target_frames` and so how many placements there are, but was measured moving
+the gain by 0.073 dB on a negative-gap config, noise next to what this key
+exists to catch. Included: `reverb` (as the dict's own key), `output.peak_db`,
 `output.channels`, each stem's `enabled`/`gain_db`/`reverb_send`, — since Plan
-3g — `soundbed`, and — since Plan 4a — `output.cycle_crossfade_ms` and the
-whole of `arrangement`.
+3g — `soundbed`, and — since Plan 4a — `output.cycle_crossfade_ms`, the whole
+of `arrangement`, every stem's `decay`, and `seed`.
 
-Those last two are the same lesson arriving twice more. `arrangement` belongs
+**`decay` and `seed` were on the excluded list until Plan 4a's final review,
+and that is the same lesson again.** `decay` was excluded on an explicit claim:
+the gain is measured from iteration 0, where `apply_decay` returns the loop
+untouched, so no decay setting can move it. `master_gain` stopped measuring
+iteration 0 the moment it started asking `densest_frame` which window to
+measure — observed as far along the arc as progress 0.29 on ordinary gap arcs —
+and it weights that measurement by `concurrent_amplitude`, a function of
+`amp_start_db`, `amp_end_db`, `curve` and `enabled`. Measured stale-memo error
+after a decay-only edit through `update_config`: −3.00 dB at a −2 s gap,
+−6.00 dB at −4 s, −9.98 dB at −6 s, and +6.94 dB for switching decay off
+entirely on a 4/−6 s arc. The registry calls `update_config` on every
+`POST /api/preview`, so the operator drags a decay slider and the preview keeps
+the old level indefinitely. `seed` belongs for a smaller, older reason:
+`render_window` builds the calibration window's sound bed from
+`np.random.default_rng(cfg.seed)`, worth +0.02 dB on the default bed here and
+up to +0.343 dB measured elsewhere. The cost of both is one extra calibration
+window per decay or seed edit — exactly what the exclusion was protecting —
+against a silent 10 dB error in the one number a preview exists to make
+judgeable. `docs/project-state.md`'s rule for this tuple is the one that
+applies: *a field's absence from this key is a measurement with an expiry date,
+not a theorem*.
+
+`arrangement` and `cycle_crossfade_ms` are the same lesson arriving twice
+before that. `arrangement` belongs
 because the gap decides which window `densest_frame` picks, so a changed gap
 can move the measurement to a different point in the arc entirely.
 `cycle_crossfade_ms` used to be excluded on an argument that was airtight until

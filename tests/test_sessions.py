@@ -77,22 +77,40 @@ def test_a_changed_source_path_rebuilds(tmp_path, registry):
     assert second is not first
 
 
-def test_master_gain_survives_a_decay_only_change(tmp_path, registry):
-    """A decay slider drag must not invalidate the gain.
+def test_master_gain_is_cleared_by_a_decay_only_change(tmp_path, registry):
+    """A decay slider drag must invalidate the gain, through the registry.
 
-    master_gain is measured at progress 0, where apply_decay is a passthrough,
-    so decay cannot move it — and recomputing would double the cost of every
-    preview during a drag."""
+    **This test used to assert the opposite**, on the reasoning
+    ``_master_key``'s docstring carried until Plan 4a's final review:
+    ``master_gain`` is measured at progress 0, where ``apply_decay`` is a
+    passthrough, so decay cannot move it — and recomputing would cost a
+    second window render on every preview during a drag.
+
+    The first half of that stopped being true when ``master_gain`` began
+    asking ``arrangement.densest_frame`` which window to measure and weighting
+    the result by ``concurrent_amplitude``, which reads the amplitude arc
+    directly. Measured stale-memo error after a decay-only edit: −3.00 dB at a
+    −2 s gap, −9.98 dB at −6 s, +6.94 dB for switching decay off on a 4/−6 s
+    arc. The second half is still true and is the price now being paid
+    deliberately — one extra calibration window per decay edit, against a
+    silent level error of up to about 10 dB in the one quantity a preview
+    exists to make judgeable.
+
+    This is the registry's half of the property: ``get`` calls
+    ``update_config`` on every ``POST /api/preview``, so it is the path an
+    actual slider drag takes. ``tests/test_session.py`` holds the measured
+    version, asserting the recomputed gain matches a fresh session's."""
     from sleepmix.preview import master_gain
 
     path = _song(tmp_path / "a.wav")
     session = registry.get("a", path, MixConfig())
-    gain = master_gain(session)
+    master_gain(session)
 
     changed = MixConfig()
     changed.stems[0].decay.amp_end_db = -30.0
     registry.get("a", path, changed)
-    assert session.master_gain[True] == gain, "a decay change must not clear the gain"
+    assert session.master_gain == {}, \
+        "a decay change must not serve a stale factor once it can move the gain"
 
 
 def test_master_gain_is_cleared_by_a_reverb_change(tmp_path, registry):

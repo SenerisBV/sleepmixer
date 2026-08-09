@@ -1731,6 +1731,41 @@ alongside them and is closed.
      had left the memo stale. `config.arrangement` itself is in the key for
      the same reason and was there from the start.
 
+     **Every stem's `decay`, and `seed`, are the third exception — added in
+     Plan 4a's final fix wave, and the largest field this rule has yet been
+     turned on.** `decay` was not excluded on a measurement at all; it was
+     excluded on an explicit claim written into `_master_key`'s own
+     docstring: *"It is measured from iteration 0, where `apply_decay`
+     returns the loop untouched — so no decay setting can move it."* That
+     claim expired in the same commit that added `densest_frame`.
+     `master_gain` no longer measures iteration 0 — it renders at
+     `dominant.decay_progress`, observed as far along as **0.29** on ordinary
+     gap arcs — and it weights the result by `concurrent_amplitude`, a
+     function of `amp_start_db`, `amp_end_db`, `curve` and `enabled`. Measured
+     stale-memo error, by the standard method (compute the gain, change only
+     a decay field through `update_config`, compare against a session built
+     fresh on the new config): **−3.00 dB** at a −2 s gap, **−6.00 dB** at
+     −4 s, **−9.98 dB** at −6 s, and **+6.94 dB** for switching decay off on a
+     4/−6 s arc. `server/sessions.py` calls `update_config` on every
+     `POST /api/preview`, so every one of those persisted for the life of the
+     session. Re-measured after the fix, all of them are +0.00 dB.
+
+     `seed` joined in the same change on a much smaller measurement and an
+     older cause: `render_window` builds the calibration window's sound bed
+     from `np.random.default_rng(cfg.seed)`, worth +0.02 dB on the default bed
+     and up to +0.343 dB on a louder one. Pre-existing since Plan 3g rather
+     than introduced by the arrangement work.
+
+     **The cost is accepted knowingly, and it is the exact cost the exclusion
+     existed to avoid**: a decay-slider drag now pays one extra calibration
+     window — a single `render_window` call — where before it paid nothing.
+     Against a silent level error of up to about 10 dB, in the one number a
+     preview exists to make judgeable, that is not a close call. What makes
+     it stranger than the earlier two exceptions is that this one was never a
+     measurement that expired; it was an argument that was wrong the moment a
+     neighbouring function changed, and nothing re-derived it. The lesson
+     below applies with more force to a *claim* than to a measurement.
+
      **So read the paragraph below as history, not as instruction.** Of the
      four fields it names as safely excluded, `cycle_crossfade_ms` is no
      longer one of them; `output.duration_min` is still excluded but only
