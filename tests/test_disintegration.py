@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from sleepmix import disintegration
 from sleepmix.arrangement import Arrangement, Placement
@@ -269,3 +270,41 @@ def test_a_seam_after_a_stack_keeps_the_stacked_voice():
         f"region mean {region.mean():.4f} is at or below the level a "
         "seam that drops the stacked voice would produce (~1.082); "
         "placement 0's tail did not survive the crossfade with placement 2")
+
+
+def test_the_amplitude_proxy_matches_what_apply_decay_actually_does():
+    """``arrangement.decay_amplitude_proxy`` models this function. Check it.
+
+    The proxy exists to rank and weight placements for ``densest_frame`` and
+    ``preview.master_gain``, and it is only worth anything if it agrees with
+    the amplitude ``apply_decay`` really applies. It did not, at one point:
+    ``apply_decay`` short-circuits on ``progress <= 0`` and hands back the
+    loop untouched, while the proxy returned ``db_to_amp(amp_start_db)``
+    there. Invisible on a falling arc from the default 0 dB — both are 1.0 —
+    and inverted on a rising one.
+
+    Measured rather than argued: a constant-valued buffer through
+    ``apply_decay`` with everything *except* the amplitude stage turned off
+    (lowpass parked above the working Nyquist so ``_lowpass`` passes it
+    through, no holes, no dropouts, noise floor inaudible) comes out scaled
+    by exactly the gain the arc asks for, so the output/input ratio is the
+    ground truth the proxy has to reproduce. Progress 0 is in the list on
+    purpose — it is the case that was wrong."""
+    from sleepmix.arrangement import decay_amplitude_proxy
+
+    sr = 22050
+    buf = AudioBuffer(np.full((sr, 1), 0.5, dtype=np.float32), sr)
+    for start, end in ((0.0, -16.0), (-30.0, -16.0), (-40.0, -24.0)):
+        decay = StemDecayConfig(
+            curve="linear", lowpass_start_hz=20000.0, lowpass_end_hz=20000.0,
+            spectral_hole_start=0.0, spectral_hole_end=0.0,
+            dropout_start=0.0, dropout_end=0.0,
+            noise_start_db=-200.0, noise_end_db=-200.0,
+            amp_start_db=start, amp_end_db=end)
+        for progress in (0.0, 0.25, 0.5, 1.0):
+            out = apply_decay(buf, progress, decay, np.random.default_rng(0))
+            actual = float(np.abs(out.data).max()) / 0.5
+            assert decay_amplitude_proxy(progress, decay) == pytest.approx(
+                actual, rel=1e-5), (
+                f"proxy disagrees with apply_decay at progress {progress} on "
+                f"the arc {start} -> {end} dB")

@@ -502,6 +502,51 @@ def test_master_gain_matches_the_old_formula_when_nothing_overlaps(tmp_path, stu
     assert gain == target / peak
 
 
+def test_a_rising_amplitude_arc_still_calibrates_on_the_first_repeat(
+        tmp_path, stub_separation):
+    """One slider drag used to put the preview 3.85 dB above the render.
+
+    ``amp_start_db`` and ``amp_end_db`` are independent sliders over the same
+    −60…0 range, so ``amp_start_db < amp_end_db`` — the stem *growing* across
+    the arc rather than fading — is a state the mixer can reach from stock
+    settings in one drag. The arrangement here is the default one: zero gap,
+    nothing overlapping, so this is not about stacking at all.
+
+    ``arrangement.decay_amplitude_proxy`` used to report the first repeat as
+    the quietest on such an arc, because it applied ``amp_start_db`` at
+    progress 0 where ``apply_decay`` applies nothing. ``densest_frame`` then
+    picked the *last* placement and ``master_gain`` calibrated against a
+    window from the far end of the arc — measured here as a mastered dry
+    preview peaking at 1.3883 against the render's 0.8913 normalisation.
+
+    So: with no overlap, the gain must still be exactly the old
+    "measure the first repeat alone" formula, whichever way the arc runs."""
+    import pytest
+
+    from sleepmix.preview import master_gain
+    from sleepmix.util import db_to_amp
+
+    song = tmp_path / "s.wav"
+    _song(song)
+    cfg = MixConfig()
+    cfg.output.duration_min = 2.0
+    for sc in cfg.stems:
+        sc.decay.amp_start_db = -30.0
+        sc.decay.amp_end_db = -16.0
+    s = RenderSession(str(song), cfg, separate_fn=stub_separation)
+
+    gain = master_gain(s, reverb=False)
+    first = render_window(s, 0.0, reverb=False, master=False)
+    peak = float(np.abs(first.data).max())
+    target = db_to_amp(cfg.output.peak_db)
+    assert gain == target / peak
+
+    mastered = float(np.abs(render_window(s, 0.0, reverb=False).data).max())
+    assert mastered == pytest.approx(target, abs=1e-4), (
+        f"a rising arc mastered the first window to {mastered:.4f}, "
+        f"{20 * np.log10(mastered / target):+.2f} dB off the render's target")
+
+
 def test_master_gain_accounts_for_concurrent_repeats(tmp_path, stub_separation):
     """The regression this task fixes, checked against the corrected formula
     directly rather than against a full render — ``_preview_to_render_ratio``

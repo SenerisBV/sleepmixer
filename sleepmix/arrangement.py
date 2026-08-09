@@ -197,8 +197,38 @@ def decay_amplitude_proxy(progress: float, decay: StemDecayConfig) -> float:
     accounts for. It exists only to *rank and weight* placements relative to
     one another, which is all ``densest_frame`` and ``preview.master_gain``
     ask of it. Shared between the two rather than duplicated so they cannot
-    silently diverge on what "louder" means."""
-    if not decay.enabled:
+    silently diverge on what "louder" means.
+
+    **The ``progress <= 0`` branch is a deliberate mirror of
+    ``disintegration.apply_decay``, not an oversight — do not "simplify" it
+    away.** ``apply_decay`` short-circuits on ``not decay.enabled or
+    progress <= 0`` and returns the loop *untouched*, so at progress 0 the
+    amplitude actually applied is 1.0 and ``amp_start_db`` is never reached.
+    This function models that amplitude effect and is therefore only correct
+    if it short-circuits on exactly the same condition. It used not to, and
+    the disagreement was invisible for as long as every amplitude arc fell:
+    with ``amp_start_db >= amp_end_db`` the old expression returned
+    ``db_to_amp(amp_start_db)``, which at the default ``amp_start_db = 0`` is
+    1.0 anyway, and where it was not 1.0 it was still the largest value the
+    arc took, so ``densest_frame`` still ranked placement 0 first.
+
+    A *rising* arc (``amp_start_db < amp_end_db`` — one drag of the Amplitude
+    start slider, whose range is −60…0) inverted that ranking: the proxy
+    called the first placement the quietest, ``densest_frame`` picked the last
+    placement instead, and ``master_gain`` calibrated on a window from the
+    wrong end of the arc. Measured on a stock ``MixConfig`` at the default
+    zero gap, with the arrangement untouched, dropping ``amp_start_db`` from 0
+    to −30: a mastered dry preview peaked at 1.3883 against a render
+    normalised to 0.8913 — +3.85 dB, from one slider.
+
+    That leaves this function discontinuous at 0: it jumps from 1.0 to
+    ``db_to_amp(amp_start_db)`` the instant progress exceeds 0. So does
+    ``apply_decay``. That discontinuity is pre-existing, audible in every
+    render this program has ever made, and not this function's to smooth —
+    smoothing it here would only put the proxy back into disagreement with
+    the thing it models. Fixing it, if it is ever worth fixing, means changing
+    ``apply_decay``, which changes what every existing render produces."""
+    if not decay.enabled or progress <= 0:
         return 1.0
     shaped = shape_progress(progress, decay.curve)
     return db_to_amp(lerp(decay.amp_start_db, decay.amp_end_db, shaped))

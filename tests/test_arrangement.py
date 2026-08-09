@@ -312,3 +312,53 @@ def test_the_densest_frame_moves_when_repeats_stack():
     frame = densest_frame(plan, StemDecayConfig(), _DEFAULT_XFADE)
     assert frame > 0
     assert len(concurrent_placements(plan, frame, _DEFAULT_XFADE)) >= 2
+
+
+def test_the_densest_frame_stays_at_the_start_when_the_amplitude_arc_rises():
+    """A rising amplitude arc must not send the calibration to the far end.
+
+    ``amp_start_db`` and ``amp_end_db`` are two independent sliders over the
+    same −60…0 range, so ``amp_start_db < amp_end_db`` is one drag away from
+    any stock config — and it used to invert this ranking outright.
+    ``decay_amplitude_proxy`` returned ``db_to_amp(amp_start_db)`` at progress
+    0 where ``apply_decay`` actually applies nothing at all, so the first
+    repeat was scored as the *quietest*, the last one won, and
+    ``preview.master_gain`` measured a window from the wrong end of the arc.
+    Measured end to end at the time: +3.85 dB on a stock ``MixConfig`` with
+    the arrangement untouched.
+
+    At the default zero gap every pair of placements is an ordinary seam, so
+    exactly one placement is concurrent everywhere and this is a pure test of
+    the ranking — nothing about stacking is involved."""
+    from sleepmix.arrangement import densest_frame
+    from sleepmix.config import StemDecayConfig
+
+    rising = StemDecayConfig(amp_start_db=-30.0, amp_end_db=-16.0)
+    plan = plan_arrangement([_seg()], _cfg(), SR * 60, SR)
+    assert len(plan.placements) > 1, "a single placement would make this vacuous"
+    assert densest_frame(plan, rising, _DEFAULT_XFADE) == 0
+
+
+def test_the_amplitude_proxy_is_untouched_at_progress_zero():
+    """The proxy models ``apply_decay``, which does nothing at progress 0.
+
+    ``apply_decay`` short-circuits on ``progress <= 0`` and returns the loop
+    untouched, so the amplitude in effect on the first repeat is 1.0 and
+    ``amp_start_db`` is never applied to it. Asserted against the literal
+    1.0 rather than against anything derived from ``amp_start_db``, because
+    the whole failure mode was the proxy agreeing with the *settings* instead
+    of with the *code*.
+
+    Both arcs are checked on purpose. The falling one passed before this was
+    fixed too — ``db_to_amp(0.0)`` is 1.0 — which is exactly why the defect
+    survived: at every default config the wrong expression returned the right
+    number. Only the rising arc tells the two apart."""
+    from sleepmix.arrangement import decay_amplitude_proxy
+    from sleepmix.config import StemDecayConfig
+
+    falling = StemDecayConfig(amp_start_db=0.0, amp_end_db=-16.0)
+    rising = StemDecayConfig(amp_start_db=-30.0, amp_end_db=-16.0)
+    assert decay_amplitude_proxy(0.0, falling) == 1.0
+    assert decay_amplitude_proxy(0.0, rising) == 1.0
+    # …and disabled decay is untouched everywhere, as it always was.
+    assert decay_amplitude_proxy(0.5, StemDecayConfig(enabled=False)) == 1.0
