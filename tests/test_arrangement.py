@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 
 from sleepmix.arrangement import (
-    Arrangement, Placement, SegmentInfo, plan_arrangement, xfade_frames)
+    MIN_STRIDE_FRACTION, Arrangement, Placement, SegmentInfo, plan_arrangement,
+    xfade_frames)
 from sleepmix.config import ArrangementConfig, MixConfig, NothingToRender
 from sleepmix.disintegration import plan_iterations
 from sleepmix.util import lerp, shape_progress
@@ -139,7 +140,7 @@ def test_gap_widens_by_elapsed_time_not_by_repeat_index():
     seg = _seg()
     target = SR * 90
     xfade = xfade_frames(MixConfig().output.cycle_crossfade_ms, seg.n_frames, SR)
-    floor = max(int(seg.n_frames * 0.1), 1)
+    floor = max(int(seg.n_frames * MIN_STRIDE_FRACTION), 1)
 
     expected = []
     pos = 0
@@ -194,7 +195,7 @@ def test_stride_is_floored_so_a_huge_negative_gap_cannot_explode():
         [seg], _cfg(gap_start_s=-999.0, gap_end_s=-999.0), SR * 120, SR)
     starts = [p.start_frame for p in plan.placements]
     strides = np.diff(starts)
-    assert strides.min() >= int(seg.n_frames * 0.1)
+    assert strides.min() >= int(seg.n_frames * MIN_STRIDE_FRACTION)
 
 
 @pytest.mark.parametrize(

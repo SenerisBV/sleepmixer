@@ -196,7 +196,16 @@ def test_a_gap_between_repeats_leaves_actual_silence():
 
 def test_an_overlap_within_the_crossfade_is_a_crossfade_not_a_sum():
     """Equal-power crossfade of two equal constants stays near the constant.
-    Summing them would nearly double it."""
+    Summing them would nearly double it.
+
+    Bounded on both sides, because the upper bound alone does not say which
+    crossfade this is. Two constant 0.5 signals blended with ``cos``/``sin``
+    weights peak at ``0.5 * (cos(pi/4) + sin(pi/4))`` = 0.7071 at the midpoint
+    and sit at 0.5 at either end; a *linear* crossfade of the same two would
+    hold a flat 0.5 throughout — well under the old ``< 0.75`` ceiling, so
+    swapping equal-power for linear used to pass here unnoticed. The lower
+    bound is what pins the sin/cos shape: 0.65 sits between the two with
+    margin on both sides."""
     sr = 22050
     seg = _dc(sr, 1.0, value=0.5)
     xfade_ms = 100.0
@@ -205,6 +214,7 @@ def test_an_overlap_within_the_crossfade_is_a_crossfade_not_a_sum():
     out = render_arrangement(seg, plan, _FLAT, crossfade_ms=xfade_ms, seed=0)
     seam = out.data[stride: stride + int(xfade_ms / 1000.0 * sr)]
     assert seam.max() < 0.75          # nothing like 1.0
+    assert seam.max() > 0.65          # …but equal-power's 0.707, not linear's 0.5
     assert seam.min() > 0.4           # and no dip to silence
 
 
