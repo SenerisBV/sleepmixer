@@ -51,6 +51,10 @@ A `curve` (`linear` / `exp` ease-in / `log` ease-out) shapes how fast a stem
 gives way. Defaults: **vocals** dissolve on an ease-in curve while **bass** holds
 steady and **drums** are off — but it's all per-stem config (see below).
 
+Where those repeats land is its own setting: back to back by default, or with a
+gap that grows as the mix goes on, or overlapping so the loop plays over itself.
+See "Spacing the repeats" below.
+
 ## Music you didn't make
 
 sleepmix takes a recording you already have and produces a derivative of it.
@@ -278,6 +282,34 @@ stems:
   - name: drums
     enabled: false              # usually too rhythmic for sleep
 ```
+
+### Spacing the repeats
+
+By default each repeat begins where the last one leaves off, which is what
+every mix this program has made so far sounds like: the loop, back to back,
+eroding a little more each pass. The `arrangement` block puts space between
+them, and lets that space change as the mix goes on:
+
+```yaml
+arrangement:
+  gap_start_s: 0.0      # space between one repeat and the next, early in the mix
+  gap_end_s: 30.0       # ...and late in it
+  gap_curve: linear     # linear | exp | log — how it travels between the two
+```
+
+A **positive** gap is silence between repeats: the loop breathes, arriving less
+often as it dissolves, with the reverb tail of one pass bleeding into the
+quiet before the next. A **negative** gap overlaps them instead — a repeat
+starts before the one before it has ended, and they play over each other; past
+the crossfade width (`output.cycle_crossfade_ms`) that stops being a seam and
+becomes two voices deliberately stacked rather than blended into one. Both are
+in seconds, bounded to −30…120, and both default to `0.0`, which reproduces the
+back-to-back mix exactly.
+
+`gap_curve` is the same `linear` / `exp` / `log` vocabulary the decay curves
+use, rather than a second set of names to remember: `exp` holds the early
+spacing longer and opens up late, `log` opens up quickly and then settles. It
+does nothing while `gap_start_s` and `gap_end_s` are equal.
 
 See `sleepmix/config.example.yaml` for every field with comments.
 

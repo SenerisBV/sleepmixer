@@ -584,6 +584,10 @@ git commit -m "feat: a plan for where every repeat lands"
 
 Crossfading a deliberate four-second stack would duck both voices through the overlap, which is the opposite of what "play over each other" means.
 
+> **Correction, made during execution — read this before reusing Task 3's code in Plan 4b.** As originally written, this task's `render_arrangement` *assigned* into the overlap region in the crossfade branch, and justified it with a proof that no third repeat could reach that region: the branch runs when the overlap is at most `xfade`, `xfade` is clamped to half a segment, therefore the stride is at least half a segment, therefore the repeat two back has already ended. **The proof is false.** The branch condition constrains only the stride *into this placement*; the stride into the one before it is bounded by nothing there except `MIN_STRIDE_FRACTION`, a tenth of a segment. The two can sum to 0.6 of a segment with a third repeat still sounding — a heavy stack immediately followed by a seam, which a gap arc crossing from negative to positive produces from ordinary settings at the default `cycle_crossfade_ms` of 800 ms. It ducked up to ~0.92 s of that third voice to silence and snapped it back. Every test in the task used two placements, or three with no overlap, so none of them saw it.
+>
+> The docstring and the code below have been corrected to what shipped: the crossfade branch blends against the previous placement's *own chunk* and adds the difference, which is additive-safe by construction and needs no reachability argument at all. `test_a_seam_after_a_stack_keeps_the_stacked_voice` in `tests/test_disintegration.py` pins the case. Two further deviations from the code below also shipped and are not reflected here: `render_arrangement` calls `decayed_iteration` rather than `apply_decay` with an inline key (composing the rng key in exactly one place, so the preview and render paths cannot drift), and it raises `MalformedArrangement` for a placement that does not fit its buffer. See `docs/project-state.md`'s Plan 4a section for both incidents.
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `tests/test_disintegration.py`:
@@ -693,12 +697,18 @@ def render_arrangement(
     would duck both through the overlap, which is the opposite of playing over
     each other. A gap gets nothing, and the silence is the point.
 
-    The crossfade branch *assigns* into the overlap region rather than adding,
-    which is only safe because no third repeat can reach it: the crossfade
-    branch runs when the overlap is at most ``xfade``, ``xfade`` is clamped to
-    half a segment, so the stride is at least half a segment and the repeat
-    two back has already ended by ``start``. Heavier stacking than that takes
-    the additive branch, where nothing is overwritten.
+    The crossfade branch blends against the *previous placement's own chunk*
+    and adds the difference in, never assigning over whatever the accumulator
+    already holds: ``out[region] += crossfade(prev_tail, chunk[:overlap]) -
+    prev_tail``, where ``prev_tail`` is placement i-1's own last ``overlap``
+    samples. The delta only ever replaces i-1's contribution, so anything
+    else already in that region — i-2, i-3, any number of earlier voices the
+    additive branch stacked there — survives untouched, for any existing
+    content ``d``: ``d + prev_tail + (crossfade(prev_tail, b) - prev_tail) =
+    d + crossfade(prev_tail, b)``. That is additive-safe by construction,
+    with no argument about how far back an overlap can reach. Heavier
+    stacking than the crossfade window takes the additive branch, where
+    nothing is overwritten or subtracted.
 
     Randomness is still keyed per repeat through ``util.iteration_rng`` so a
     single repeat reproduces in isolation; see ``decayed_iteration``."""
@@ -709,6 +719,7 @@ def render_arrangement(
 
     out = np.zeros((plan.n_frames + seg_len, ch), dtype=np.float32)
     prev_end = None
+    prev_chunk = None
     for i, placement in enumerate(plan.placements):
         if cancel is not None:
             cancel.check()
@@ -719,12 +730,14 @@ def render_arrangement(
         start = placement.start_frame
         overlap = 0 if prev_end is None else max(prev_end - start, 0)
         if 0 < overlap <= xfade:
-            out[start:start + overlap] = equal_power_crossfade(
-                out[start:start + overlap], chunk[:overlap])
+            prev_tail = prev_chunk[-overlap:]
+            blended = equal_power_crossfade(prev_tail, chunk[:overlap])
+            out[start:start + overlap] += blended - prev_tail
             out[start + overlap:start + seg_len] += chunk[overlap:]
         else:
             out[start:start + seg_len] += chunk
         prev_end = start + seg_len
+        prev_chunk = chunk
 
     return AudioBuffer(out[:plan.n_frames], sr)
 

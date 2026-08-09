@@ -1,6 +1,9 @@
 # Project state
 
-Status as of the end of the `feat/presets` branch (Plan 3d of the spec, all
+Status as of the end of the `feat/arrangement` branch (Plan 4a of the
+arrangement design, all 7 tasks complete), on top of `feat/finishing-touches`
+(Plan 3g), `feat/legibility` (Plan 3f), and the `feat/presets` branch (Plan 3d
+of the spec, all
 6 tasks complete), on top of `feat/render-queue` (Plan 3c, all 9 tasks
 complete), on top of `feat/mixer` (Plan 3b, all 7 tasks complete), on top of
 `feat/elm-shell` (Plan 3a of the spec, all 6 tasks complete), on top of
@@ -51,9 +54,293 @@ help text Plan 3f made visible is now findable by a screen reader**: every
 control has an `id`, every label a real `for`, and every control with help an
 `aria-describedby` pointing at it.
 
+Plan 4a (`feat/arrangement`, 7 tasks) sits on top of all of that and is the
+first change since Plan 1 to touch the shape of the mix itself rather than the
+interface to it. **The gap between one repeat of the loop and the next is now a
+setting**, it can grow across the mix, and it can be negative — which makes
+repeats overlap and stack instead of handing over. Underneath that, placement
+stopped being a constant: a pure planner (`sleepmix/arrangement.py`) decides
+where every repeat lands and how decayed it is, the renderer and the preview
+both read that plan, and 348 tests pass against a 299-test baseline at the
+start of the branch. Its own section below is the record.
+
 Read `docs/architecture.md` first for how the pieces fit together; this document
 is about what's true right now, what was traded off to get here, and what's
 explicitly not done yet.
+
+## Plan 4a: placement becomes a plan
+
+`feat/arrangement`, 7 tasks, complete. This is the first third of a three-part
+design (`docs/superpowers/specs/2026-08-08-arrangement-design.md`): 4b gives one
+song several segments dissolving on their own clocks, 4c blends several source
+files into one mix. 4a is the smallest of the three and was deliberately built
+first, for a reason the spec states up front — it is also the piece most likely
+to lock in a placement model the other two cannot live inside, so the whole arc
+was specified in one document before the smallest part of it was built.
+
+What shipped: `ArrangementConfig` with three fields; `sleepmix/arrangement.py`,
+a pure planner with no audio anywhere in it; `disintegration.render_arrangement`
+rendering a plan and applying the seam rule; `pipeline` and `preview` both
+reading the same plan; `preview.master_gain` finding the window it measures
+instead of assuming it; and the regression that made the whole thing safe to
+land — at default gaps the planner places repeats at exactly the frames the
+previous renderer did. **No frontend work whatsoever**: the mixer generates the
+new section from `/api/schema`, which is what the schema-driven design in
+`ui/README.md` exists to buy. `docs/architecture.md`'s new section, "The
+arrangement seam", has the mechanics and the arguments; this section is what a
+reader needs that is not mechanics.
+
+### `ArrangementConfig` ships three fields, and four more are deliberately withheld until Plan 4b
+
+The design spec's config block has seven fields. Three of them shipped —
+`gap_start_s`, `gap_end_s`, `gap_curve`. The other four — **`segments`,
+`segment_overlap`, `lifetime_jitter`, `order`** — are Plan 4b's, and they are
+deliberately *not* present in the dataclass, not even as unused defaults.
+**This is the placeholder record, written here so it is not lost**, and the
+reason it is a real decision rather than tidiness is a specific property of
+this codebase:
+
+**every field on a dataclass registered in `config._SECTION_TYPES` automatically
+becomes a control in the mixer.** That is the whole point of the schema-driven
+frontend — `config_schema()` walks the fields, `Page.Mixer` turns each one into
+a slider, a select or a typed box by one rule, and nothing in Elm names a
+config parameter. Add a field to `sleepmix/config.py` and it appears on screen,
+editable and round-tripping, with no frontend change at all. So a field added
+early "ready for 4b" is not inert and is not harmless: it is four controls in
+front of the operator that do nothing, and — worse — that *look* like they
+work. The schema would carry their labels, bounds and help text, `Config.set`
+would clamp and round-trip them, a preview would come back at 200, and the only
+thing that would not happen is the sound changing. There is exactly one other
+way to withhold a control — have `Page.Mixer` name the field and refuse it, as
+it does for `separation_model` — and that means a frontend change and four more
+names written into Elm, against a frontend whose whole rule is that it names no
+config parameter it does not have to, for four fields that become real in the
+very next plan. Not having the
+field is cheaper and says the same thing. The cost of
+adding them in 4b instead is one dataclass edit; the cost of adding them now is
+a lie on screen for however long 4b takes.
+
+The same policy runs one level down: `plan_arrangement` raises
+`NotImplementedError` naming Plan 4b when handed anything other than exactly
+one `SegmentInfo`, rather than quietly planning the first one. `MIN_STRIDE_FRACTION` (a tenth of a
+segment) is a floor on the stride for the same family of reasons — below it an
+overlap stops being an overlap and starts being a comb filter, and one config
+could turn a twenty-minute target into millions of placements.
+
+### `plan_iterations` has no production caller left, and it must not be deleted
+
+`disintegration.plan_iterations` is now reachable in production from nothing.
+`run_pipeline` goes through `plan_arrangement` and `render_arrangement`;
+`preview.preview_iteration_index`, which used to call it, reads the plan
+instead. Its one remaining caller is `build_disintegrating_stream`, which is
+itself now only called from the test suite.
+
+**It is retained on purpose, as the regression oracle.**
+`tests/test_arrangement.py::test_defaults_reproduce_todays_positions` asserts
+that at default gaps the planner produces exactly the frames and exactly the
+count `plan_iterations` does — parametrised over six targets rather than one,
+because mutating the stopping rule's `>=` to `>` only diverges when the target
+lands exactly on `L + k * stride`, which an arbitrary round-seconds duration
+essentially never does by chance. That test is the thing that made it safe to
+replace the one line this whole plan lives at. An oracle deleted as dead code
+takes its regression with it, and the regression is not re-derivable from the
+new code, because the new code is what it exists to check.
+
+One small inaccuracy is left standing rather than fixed, because Task 7 changed
+no code: `plan_iterations`' own docstring still says it is "shared by the batch
+stream builder and the preview path". The preview half has not been true since
+Task 5.
+
+### A false safety proof shipped in the plan document, and it would have discarded a voice
+
+This is the incident this branch is most worth remembering for, and it
+originated in the plan text rather than in the implementation.
+
+Task 3's `render_arrangement` docstring, as written in
+`docs/superpowers/plans/2026-08-08-arrangement-placement.md`, argued that the
+crossfade branch may *assign* into the overlap region rather than adding to it,
+"which is only safe because no third repeat can reach it: the crossfade branch
+runs when the overlap is at most `xfade`, `xfade` is clamped to half a segment,
+so the stride is at least half a segment and the repeat two back has already
+ended."
+
+**Every step of that is true about the wrong stride.** The branch condition
+constrains only the stride *into this placement* — the one from `i-1` to `i`.
+It says nothing at all about the stride from `i-2` to `i-1`, which is floored
+at `MIN_STRIDE_FRACTION`, a tenth of a segment. Those two can therefore sum to
+0.6 of a segment while a third repeat is still sounding: a heavy stack
+immediately followed by a seam, which is exactly what a gap arc crossing from
+negative to positive produces, from ordinary settings, at the **default**
+`output.cycle_crossfade_ms` of 800 ms. The assigning version ducked that third
+voice to silence through the overlap and snapped it back afterwards — up to
+**~0.92 s of a third voice discarded** in the worst case observed. No test saw
+it, because every test in that file used two placements, or three with no
+overlap at all.
+
+The shipped code does not assign. It blends against the *previous placement's
+own chunk* and adds the difference in — so whatever else already sits in that
+region survives untouched, however many earlier voices put it there. That is
+**additive-safe by construction**, which is a strictly stronger property than
+the one the proof was reaching for, because it does not depend on any bound on
+how far back an overlap can reach.
+`tests/test_disintegration.py::test_a_seam_after_a_stack_keeps_the_stacked_voice`
+pins the case the argument would have silently dropped.
+
+**The plan document has been corrected in place**, not annotated with a note
+beside the original, because Plan 4b will be written against that document and
+would otherwise inherit the proof intact. The generalisable lesson is not
+"check the crossfade branch": it is that a *reachability* argument — nothing
+else can be here, therefore overwriting is safe — is worth exactly as much as
+the bound it rests on, and this one rested on a bound that constrained a
+different quantity than the one the conclusion needed. Where a cheap
+construction is safe unconditionally, prefer it over a proof that it is safe
+conditionally.
+
+A second defect of the same family was found in the same task's review and is
+worth recording beside it, because the shape repeats: `plan_arrangement`
+appended a position to the list and only *then* checked whether it was still
+short of the target. At zero gaps the two orderings are indistinguishable —
+every stride is at most a segment length, so a position computed from an
+in-range one is still in range — which is why the tests, all of which ran at
+default gaps, never saw it. Once the gap arc goes positive a single stride can
+leap clean past what is left of the target, and `render_arrangement` then wrote
+past the end of a buffer sized from `target_frames`, surfacing as a bare numpy
+broadcast error naming nothing. A sweep found 320 of 972 legal configs
+affected. The fix lays a position down only while it is still in range, and
+`MalformedArrangement` was added as a named guard for any `Arrangement` that
+arrives from somewhere other than the planner; the re-review swept 13,608
+configs with real rendering and found none failing.
+
+### The density ratio is an estimate, and this is its measured error
+
+`preview.master_gain` now measures the window carrying the most concurrent
+amplitude rather than assuming it is the first one, and scales that window's
+measured peak by a **density ratio** — how much more amplitude is sounding at
+that frame than in the single window it actually rendered. The ratio is
+computed by combining per-placement amplitude proxies by **root-sum-square**:
+the standard estimate for how *independent* sources add, which is close to what
+stacked repeats are (the same loop at different decay stages, offset by a full
+stride) and not identical to it. This is an estimate, so its error is recorded
+as a quantity rather than as a caveat.
+
+Ground truth for all of the figures below is the actual peak of 40 real
+`render_arrangement` streams — 8 content types × 5 stacking depths — not a
+model of one.
+
+- **Root-sum-square, broadband and percussive content:** worst case **±7.7 dB**,
+  signed mean **+2.2 dB**. The sign matters: over-predicting the concurrent
+  amplitude makes the ratio too large, the gain too small, and the preview a
+  little *quiet* — which reads as more decayed than the render is.
+- **Root-sum-square, tonal content:** it *under*-predicts, by up to **≈10 dB**
+  at ten concurrent placements. That direction is the dangerous one. Too small
+  a ratio makes `gain = target / (peak × ratio)` too *large*, so the preview
+  plays **louder** than the render — the same direction as the ~4 dB-hot defect
+  `master_gain` exists to correct in the first place, at more than twice the
+  size.
+- **Plain summation**, which was implemented first and measured wrong: worst
+  case **+17.7 dB**. It assumes the concurrent repeats are coherent — in phase,
+  adding sample for sample — and mostly they are not.
+- **An exponent sweep** against the same ground truth puts the empirical
+  optimum at **p ≈ 1.75**, about 0.9 dB better worst-case than root-sum-square's
+  p = 2. `p = 2` ships anyway. Trading a principled, standard estimator for a
+  tuned constant fitted to 40 measurements buys about a decibel and costs the
+  ability to say why the formula is that formula.
+
+**The stride-locking finding is the most useful thing learned here, and nobody
+is going to re-derive it.** Two reviews disputed whether summation or
+root-sum-square was right, one arguing from broadband measurements and one from
+a tonal counter-case, and both were describing the same effect from different
+sides. **Whether stacked repeats add coherently is a property of the *stride*,
+not of the content.** A 220 Hz tone whose gap makes the stride an exact whole
+number of periods gives a plain-sum error within **0.07 dB** — summation is
+essentially exact there. The same tone at **233 Hz**, nothing else changed, and
+the plain sum is **+10.3 dB** out, no better than its broadband case. Coherent
+copies can also *cancel* rather than add: one configuration whose stride landed
+on a half period measured a true peak ratio of **1.92** against a plain-sum
+prediction of **3.92**. So "summation wins for tonal material" was never a
+content rule — it is "summation wins when the stride locks to the period",
+which is a knife-edge in a continuous parameter rather than a class of audio.
+There is no cheap classifier that could pick the better formula per case, which
+is why one estimator is used everywhere.
+
+The looseness is tolerated rather than closed, and the reason is what the factor
+is *for*: a real render is peak-normalized from its own genuine audio by
+`normalize_peak`, which reads the true peak wherever it falls and cannot be
+fooled by this estimate. The density ratio only has to put a preview window in
+the neighbourhood of the render's level for a tuning judgement to stay
+meaningful. It does not, and from one rendered window cannot, protect a render
+from clipping.
+
+### Open question for the operator: a repeat with nothing after it stops dead
+
+**This is a design question the spec never decided, not a defect, and it is
+recorded here rather than answered unilaterally.**
+
+With gaps in play, a repeat that has nothing following it now simply ends at
+whatever amplitude it had reached — a hard step to zero, which will click. It
+is most audible on a heavily stacked configuration, where a stacked voice ends
+in the middle of everything else rather than at the end of the mix.
+
+This could not happen before Plan 4a: every repeat crossfaded into the next one,
+so the amplitude was always handed over rather than dropped. The arrangement
+design spec specifies the seam rule for repeats that *do* have a neighbour —
+crossfade, sum, or silence — and says nothing about the case where nothing
+follows. The options are roughly: fade every placement out over the crossfade
+width when nothing overlaps its tail; fade only in the additive branch; or leave
+it, on the grounds that at the default zero gap every repeat still has a
+successor and the click only appears in configurations the operator reached for
+deliberately. Each has an audible consequence, and choosing between them is a
+taste decision about what stacking should sound like, which is the operator's.
+
+### Three smaller things found and deliberately left
+
+None of these is audible today and each will be reached by Plan 4b, so they are
+written down rather than fixed.
+
+- **`gap_end_s` is never quite fully applied.** The gap is shaped by
+  `elapsed = pos / target_frames`, and the layout loop stops before `pos`
+  reaches the target — the last repeat begins a segment-length short of it — so
+  `elapsed` tops out a little below 1.0 and the final gap lands a little short
+  of `gap_end_s`. The shortfall is roughly one segment's worth of the mix —
+  with a ~17 s loop in a twenty-minute mix, a couple of percent of the way up
+  the curve: inaudible, and the `min(..., 1.0)` clamp in the
+  code is dead as a result. It is the same shape as the decay-progress defect
+  the two-pass layout exists to avoid, at a scale that does not matter, and
+  fixing it means normalising `elapsed` over the last *placed* position, which
+  is not knowable in pass one.
+- **`render_arrangement` reads the loop's length, not the placement's.** It
+  renders `loop.n_frames` per placement and ignores `Placement.n_frames`
+  entirely. Today those are always equal — one segment, one length — so the
+  plan's self-description and the renderer disagree only in principle. Plan 4b,
+  where different segments have different lengths, hits it immediately.
+- **A hand-built `Arrangement` is only partly checked.** `MalformedArrangement`
+  catches a placement that does not fit the buffer, but nothing checks that the
+  placements are sorted or that an overlap does not exceed a segment length; an
+  unsorted plan still fails somewhere inside numpy rather than by name.
+  `plan_arrangement` cannot produce either, so this only matters to a future
+  planner or a test.
+
+### What Plan 4a deliberately does not do
+
+- **One segment, one source.** `find_loops`, per-segment lifetimes,
+  `RenderSession` rekeyed to `(segment_index, stem)`, and the
+  segments-found-versus-requested report are all Plan 4b; `ArrangementSession`,
+  multi-source `run_pipeline`, the N-separations job model and the source cap
+  are Plan 4c.
+- **No arrangement preview.** `render_arrangement_window` — auditioning a real
+  window of the arrangement at a chosen moment, overlaps included — belongs to
+  4b, because it is not useful with one segment and it is essential the moment
+  there is more than one thing sounding. Today's seamless single-iteration
+  preview is unchanged, and remains the right tool for tuning a stem's decay by
+  ear.
+- **No visual arrangement editor, and no explicit placement list.** Both were
+  ruled out in the design: the arrangement is parametric and seeded, so the same
+  config plus the same seed produces the same mix and a preset stays a handful
+  of numbers. A config naming every repeat would run to roughly two hundred
+  entries for a twenty-minute mix, and a hybrid (generate, then patch individual
+  repeats) is worse than either, because an override indexes into a generated
+  list and changing any upstream parameter silently re-points every override at
+  a different repeat.
 
 ## Plan 3d: presets, and the server's own defaults
 
@@ -1077,6 +1364,24 @@ its tip. Byte-reproducibility was already deliberately forfeited above, so
 this was accepted rather than worked around; but if you are diffing renders to
 investigate something else, check which commit produced them first.
 
+**Render output changed a third time, in Plan 4a, and this one was chosen
+rather than discovered.** The per-repeat RNG key composed for
+`util.iteration_rng` went from `stem` to `f"{source_id}:{index}:{stem}"` —
+`"mix:0:vocals"` where it used to be `"vocals"`. It hashes differently, so
+every noise draw in every render moves, so the samples move. Nothing about the
+*arrangement* required this: at default gaps the repeats land on exactly the
+frames they always did, and the regression test that proves it compares
+placements, not audio bytes. The key changed because Plan 4c will add a second
+source, and a key that did not name the source would have reshuffled the noise
+in every existing source the moment a new one was added — which is the property
+`util.iteration_rng` exists to provide, applied one level up. Paying that
+break now, while a render is one source and one segment, costs a byte
+comparison nobody is running; paying it in 4c would mean changing the sound of
+every mix at the same moment as changing what a mix *is*. Anyone reading the
+arrangement design spec's "bit-identical to the current renderer" phrasing
+should read it as the placement claim it is: the number of repeats, their
+frames, and their decay progress are unchanged, and the sample values are not.
+
 **A preview window is bit-identical to the corresponding render iteration
 pre-reverb, but only representative of it with reverb on.** `render_window`
 applies each stem's decay and reverb (with that stem's `reverb_send`) in the
@@ -1128,11 +1433,29 @@ entry rather than this sentence. A third (the `shutil` import) was found
 alongside them and is closed.
 
 - **Four things contribute to a render's final peak that `master_gain`'s
-  calibration window never sees.** `preview.master_gain` measures one window,
-  `render_window(session, 0.0, reverb=<the flag>, master=False)`, and derives
-  a gain from its peak. `pipeline.run_pipeline` peak-normalizes something
-  rather different, and each difference moves a preview off the render's
-  level. Listed by measured magnitude, largest first, with a caveat the first
+  calibration window never sees.** `preview.master_gain` measures one window
+  and derives a gain from its peak. `pipeline.run_pipeline` peak-normalizes
+  something rather different, and each difference moves a preview off the
+  render's level.
+
+  **Which window that is changed in Plan 4a, and everything below was measured
+  before it.** This entry was written when the window was always
+  `render_window(session, 0.0, reverb=<the flag>, master=False)` — iteration 0,
+  on the argument that decay only removes energy so nothing later can be
+  louder. Overlapping repeats disproved that argument (see the Plan 4a section
+  above): `master_gain` now asks `arrangement.densest_frame` which frame
+  carries the most concurrent amplitude, renders the window at the decay
+  progress of whichever placement dominates there, and multiplies the measured
+  peak by a density ratio. **At every configuration these four items were
+  measured under — no gaps, no overlap beyond an ordinary crossfade seam — that
+  resolves to frame 0, a ratio of exactly 1.0, and the same window this entry
+  describes, bit-identically.** So the four figures below stand as measured.
+  What does not automatically carry over is the *reasoning*: an argument here
+  of the form "nothing can move a number measured at progress 0" is now an
+  argument about the default arrangement rather than about the decay arc, and
+  a gap or an overlap can move which window is measured at all.
+
+  Listed by measured magnitude, largest first, with a caveat the first
   entry itself is now the record of: the largest number here had the wrong
   story attached to it for a whole branch, corrected only once someone
   measured directly instead of inferring. All four were measured the same
@@ -1276,13 +1599,19 @@ alongside them and is closed.
      recording has no such guarantee — its loudest moment is wherever the
      music happens to be loudest, and at this stem set that turns out to be
      3.65 s into the render's second pass through the loop, nowhere near
-     either fade, at both output lengths tested. `master_gain`'s own
-     docstring assumption — "decay only removes energy, so the peak falls
-     monotonically across the arc and iteration 0 is the loudest window this
-     module can produce" — is true of the synthetic signal it is usually
-     verified against and not reliably true of real material, where decay is
-     negligible this early in the arc and which of the first several
-     iterations is loudest tracks the music, not iteration order.
+     either fade, at both output lengths tested. The assumption `master_gain`
+     used to carry in its own docstring — "decay only removes energy, so the
+     peak falls monotonically across the arc and iteration 0 is the loudest
+     window this module can produce" — is true of the synthetic signal it is
+     usually verified against and was never reliably true of real material,
+     where decay is negligible this early in the arc and which of the first
+     several iterations is loudest tracks the music, not iteration order.
+     **Plan 4a has since removed that assumption outright**, for a second and
+     independent reason: overlapping repeats can put more amplitude at a later
+     frame than at frame 0, so the window is now found rather than assumed
+     (see the Plan 4a section above). The measurement recorded here is the
+     earlier of the two disproofs and the milder one — it says the assumption
+     was unreliable on real content; overlap says it is false outright.
 
      Both explanations this document has carried for the 1.82 dB are
      therefore not simply wrong: the transient-at-t=0 guess is wrong outright
@@ -1383,6 +1712,34 @@ alongside them and is closed.
      way: the render genuinely resamples before normalizing, and the field
      still does not belong here, because the window does not.
 
+     **`output.cycle_crossfade_ms` is the second exception, as of Plan 4a,
+     and it is the same lesson arriving a third time — this time by having
+     the ground move under a measurement that was correct when it was
+     taken.** The paragraph immediately below still records why that field
+     could not move the calibration window: the crossfade changed only the
+     iteration *count*, and progress at iteration 0 is 0 whatever the count.
+     That was airtight while `master_gain` always measured iteration 0. It
+     does not any more. `arrangement.densest_frame` and
+     `concurrent_placements` take the crossfade width and use it to decide
+     which overlaps are an ordinary seam (blended into one voice) and which
+     are genuine stacking (summed as two or more), which changes both *which*
+     placement dominates the densest frame and *how many* are concurrent
+     there. Re-measured on a `gap_start_s = gap_end_s = -3.0` config,
+     sweeping `cycle_crossfade_ms` from 0 to 3000 ms moves `master_gain`
+     across a **~7.0 dB** span. It joined `_master_key` in the same fix wave
+     that found this — one commit after the commit that made it matter, which
+     had left the memo stale. `config.arrangement` itself is in the key for
+     the same reason and was there from the start.
+
+     **So read the paragraph below as history, not as instruction.** Of the
+     four fields it names as safely excluded, `cycle_crossfade_ms` is no
+     longer one of them; `output.duration_min` is still excluded but only
+     just, on a re-measurement (0.073 dB on a negative-gap config, where it
+     does now feed the placement count through `plan_arrangement`); the two
+     fades remain excluded on the original, undisturbed reason. **A field's
+     absence from this key is a measurement with an expiry date, not a
+     theorem.**
+
      **Two different reasons, and an earlier draft of this paragraph got
      both wrong** — in the entry whose whole lesson is *measure, do not
      trace*. It said `render_window` "takes the empty-context branch
@@ -1396,18 +1753,20 @@ alongside them and is closed.
        progress, not merely at 0. (**This said "and no `build_soundbed`"
        until Plan 3g**, which imported exactly that — which is why the bed is
        now in the key and the fades still are not.)
-     - *The crossfade.* `preview_iteration_index` does pass
-       `cfg.output.cycle_crossfade_ms` to `plan_iterations`
-       (`sleepmix/preview.py:38-39`), so changing it genuinely changes
-       `n_iterations`. It still cannot move the calibration window, because
-       `decayed_iteration` computes `progress = iteration / max(n_iterations
-       - 1, 1)` (`sleepmix/disintegration.py:145`) — which is 0 at iteration
-       0 for every `n_iterations`. The window is the undecayed loop either
-       way.
+     - *The crossfade.* `preview_iteration_index` did pass
+       `cfg.output.cycle_crossfade_ms` to `plan_iterations`, so changing it
+       genuinely changed `n_iterations`. It still could not move the
+       calibration window, because `decayed_iteration` computes
+       `progress = iteration / max(n_iterations - 1, 1)` — which is 0 at
+       iteration 0 for every `n_iterations`. The window was the undecayed
+       loop either way. (Both halves of that have moved since:
+       `preview_iteration_index` reads `plan_arrangement` now, and the
+       conclusion is overturned outright — see the exception above.)
 
      **The
-     memo is sound as written and these four fields must not be added to
-     `_master_key`** — doing so would buy nothing and cost a calibration
+     memo was sound as written and three of these four fields must not be
+     added to `_master_key`** — doing so would buy nothing and cost a
+     calibration
      window each, which is how item 3 got closed wrongly the first time.
      The calibration-window gaps those same fields *do* cause are items 1, 2
      and 4; that they name the same fields is a coincidence of which stage

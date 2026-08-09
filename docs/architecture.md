@@ -16,8 +16,9 @@ that point in the arc — with no dependency on any other iteration. Repetition
 400 of 1200 does not need repetitions 1 through 399 to have been computed
 first. `disintegration.decayed_iteration` is the thin wrapper that turns an
 `(iteration, n_iterations)` pair into a progress value and an
-iteration-specific RNG, and `build_disintegrating_stream` is just a loop that
-calls it once per repetition and crossfades the results together
+iteration-specific RNG, and the batch path — `render_arrangement`, and
+`build_disintegrating_stream` on top of it — is just a loop that calls it once
+per repetition and joins the results together
 (`sleepmix/disintegration.py`).
 
 This is what makes a preview cheap. `preview.render_window` answers "what does
@@ -41,7 +42,7 @@ generator from `(seed, stem, iteration)` alone, via `np.random.default_rng`
 seeded with a tuple of `(seed, sha256(stem)[:8 bytes as int], iteration)`. Any
 iteration of any stem can be reconstructed in isolation, forever. This is also
 why `RenderSession` and `render_window` exist at all as separate objects
-instead of just being a slice into `build_disintegrating_stream`'s loop: the
+instead of just being a slice into the batch renderer's loop: the
 purity means there is no "stream" a preview needs access to, only a loop and
 an iteration index.
 
@@ -49,6 +50,111 @@ The accepted cost of this change is that renders on this branch are not
 byte-for-byte reproducible against renders from before it, because the
 randomness now comes from a different source. See `docs/project-state.md`
 for why that trade was made deliberately.
+
+## The arrangement seam: placement is a plan, not a constant
+
+Until Plan 4a there was exactly one line in this codebase that decided when a
+repetition happened — `plan_iterations`' `stride = max(loop_frames - xfade, 1)`
+— and it was a constant. Everything upstream of it produced *a loop*;
+everything downstream (reverb, gain, sum, bed, master) never learned how many
+repeats there were or where they sat. `sleepmix/arrangement.py` is that seam
+made explicit: a pure planner that decides, before any audio is touched, where
+every repeat lands and how far through its own decay it is.
+
+`plan_arrangement(segments, config, target_frames, sr)` returns an
+`Arrangement` — a flat list of `Placement` records (`source_id`, `index`,
+`start_frame`, `decay_progress`, `n_frames`) and the length of the mix. It
+imports nothing that decodes audio. Segment *lengths* come in as data
+(`SegmentInfo.n_frames`, the length after time-stretching), which is what lets
+the whole module be exercised against invented numbers in milliseconds, with
+no Demucs, no librosa and no WAV files anywhere near it. `render_arrangement`
+in `disintegration.py` renders that list; `pipeline._process_stem` builds one
+plan per stem from the same loop length, so every stem's repeats land on the
+same frames and stay phase-aligned — the same reason the loop point is found
+once, on the summed reference signal, in the first place.
+
+**A plan rather than a smarter renderer, because of the property at the top of
+this document.** An arrangement has to stay queryable at an arbitrary point in
+time *without rendering what precedes it*, or the interactive half of the
+program stops working: a preview costs one iteration rather than twenty
+minutes only because nothing about iteration 400 depends on iterations 1–399.
+Two implementations were rejected on exactly that. Adding gap and overlap
+parameters to `build_disintegrating_stream` in place would have computed the
+layout *while* rendering, so answering "what sounds at 12:30" would mean
+running the render loop up to 12:30. A lazy generator yielding placements is
+memory-light and can only be advanced from the start, which is the same fatal
+flaw — and memory was never the constraint here: the plan for a twenty-minute
+mix is a few hundred small records. A flat list answers "what sounds at 12:30"
+with a filter over tuples, in microseconds (`Arrangement.at`, and
+`arrangement.concurrent_placements` for the sharper notion of "sounding" the
+seam rule needs).
+
+**The renderer and the preview read the same plan, so they cannot drift.**
+This is the house pattern, one level up from where it already lives:
+`pipeline._plan_jobs` defers to `config.plan_stem_configs` so that preview and
+render cannot select different stems, and `session.RenderSession` derives its
+loop point from the same `sum_buffers` the pipeline does so a preview cannot
+audition a different part of the song. `preview.preview_iteration_index` and
+`preview.master_gain` both call `plan_arrangement` with the session's own
+config; `pipeline._process_stem` calls it with the render's. Two code paths
+deriving positions independently would be two places for the same decision to
+disagree, and the disagreement would be inaudible in a diff and obvious only
+in a twenty-minute render nobody re-listens to. `preview_iteration_index` used
+to read `plan_iterations`, which is correct only while every repeat sits one
+stride from the last; with a gap in play the render produces fewer repeats,
+and a preview scrubbed to the end auditioned one that does not exist.
+
+**Repeats are laid out in two passes, and the count is the reason.** Pass one
+places them: start at frame 0, and step forward by
+`seg.n_frames - xfade + gap(elapsed)` until the *write head* — the end of the
+repeat just placed — reaches the target. That stopping rule is the one
+`build_disintegrating_stream` already applied, which is what makes the default
+gaps reproduce today's positions exactly. Pass two assigns decay progress by
+`i / max(n - 1, 1)`. The count is not known until the positions are laid out,
+and the progress of the first repeat depends on how many follow it, so this
+cannot be folded into one walk.
+
+**Decay indexes by repeat; the gap is shaped by elapsed time.** These are
+different axes on purpose. Normalising a repeat's *position* over the mix —
+`(pos[i] - t0) / (t1 - t0)` — is the obvious alternative for decay and it is
+wrong: the last repeat begins a segment-length short of the end, so progress
+would top out below 1.0 and the arc would never reach full decay in output.
+That is precisely the defect `plan_iterations`' own docstring records having
+been fixed once already, pointing the other way — an earlier version put
+`n_iterations - 1` a full iteration past anything a render produced, so a
+preview scrubbed to maximum decay auditioned an iteration that did not exist.
+Indexing by repeat is also the truer reading of the metaphor: each *pass*
+through the tape machine erodes it, and a mix should not decay faster per
+repeat merely because the repeats have moved further apart. The gap is the
+opposite case. Gaps widening is something heard in seconds — "it is spacing
+out as it goes" — not in repeat counts, and shaping it by elapsed time also
+sidesteps the chicken-and-egg the progress pass has to solve with a second
+walk. `gap_curve` reuses `util.shape_progress`, the same linear/exp/log
+vocabulary decay already speaks, rather than inventing a second set of curve
+names for the operator to remember.
+
+**The seam rule.** Consecutive repeats can now relate three ways, and only one
+of them is the join this renderer used to assume. An overlap no larger than
+`xfade` is a seam and gets the equal-power crossfade, exactly as before. An
+overlap *larger* than `xfade` is deliberate stacking — the operator asked for
+two voices — and is summed, because crossfading a four-second stack would duck
+both voices through the overlap, which is the opposite of what "play over each
+other" means. A gap gets nothing, and the silence is the point.
+
+The crossfade branch blends against the **previous placement's own chunk**,
+not against whatever the accumulator holds, and adds the difference in:
+`out[region] += crossfade(prev_tail, chunk[:overlap]) - prev_tail`. The delta
+only ever replaces placement *i-1*'s own contribution, so anything else
+already sitting in that region — placement *i-2*, *i-3*, any number of earlier
+voices the additive branch stacked there — survives untouched. That is
+additive-safe by construction rather than by an argument about how far back an
+overlap can reach; an earlier version of this code assigned into the region on
+exactly such an argument, and the argument was false. See
+`docs/project-state.md` for the incident.
+
+`arrangement.xfade_frames` is the single source of the crossfade clamp (half a
+segment), extracted so the planner, the renderer and the density measurement
+cannot disagree about it.
 
 ## What each module owns
 
@@ -75,10 +181,10 @@ for why that trade was made deliberately.
   stem an even slice of the 0.15–0.85 range. `CancelToken` is a flag with a
   `check()` that raises `Cancelled`. It is polled at three points, listed in
   full under "Progress and cancellation contract" below; the one that carries
-  the weight is inside `build_disintegrating_stream`'s per-iteration loop,
-  because that is where a long render spends its time. Polling happens
-  *between* iterations, since that is where abandoning the work is safe —
-  mid-iteration cancellation is not supported. Note that `run_pipeline`'s
+  the weight is inside `render_arrangement`'s per-placement loop (per-iteration
+  until Plan 4a made a repeat a placement), because that is where a long render
+  spends its time. Polling happens *between* placements, since that is where
+  abandoning the work is safe — cancelling mid-repeat is not supported. Note that `run_pipeline`'s
   per-stem loop does **not** itself call `cancel.check()`; it threads the
   token down into `_process_stem` instead.
 
@@ -100,9 +206,11 @@ for why that trade was made deliberately.
   `config.plan_stem_configs` to pick which stems apply — the same function
   `pipeline._plan_jobs` calls — so preview and batch render cannot select
   different stems for the same config. `preview_iteration_index` maps a
-  `progress` fraction to a concrete `(iteration, n_iterations)` pair using the
-  same `disintegration.plan_iterations` the batch renderer uses, so the two
-  paths agree on which repetition a given point in the arc corresponds to.
+  `progress` fraction to a concrete `(index, n_placements)` pair by building
+  the same `arrangement.plan_arrangement` the batch renderer builds, so the
+  two paths agree on which repetition a given point in the arc corresponds to
+  — it read `disintegration.plan_iterations` until Plan 4a, which is correct
+  only while the repeats are evenly strided.
   `_reverbed_window` handles the one part of a window that cannot be computed
   from the window alone — see "Reverb on a window that has to loop" below.
 
@@ -127,10 +235,19 @@ for why that trade was made deliberately.
 
 - **`disintegration.py`** — the decay engine itself: lowpass sweep, spectral
   holes, dropouts, amplitude fade, and rising noise floor, each interpolated
-  from a stem's `*_start` to `*_end` config across the arc. `plan_iterations`
-  computes how many loop repetitions a target duration needs given the
-  crossfade length; `build_disintegrating_stream` is the batch path that runs
-  every iteration and crossfades them together into one buffer.
+  from a stem's `*_start` to `*_end` config across the arc.
+  `render_arrangement` is the batch path: it renders every `Placement` in an
+  `Arrangement` at that placement's own decay progress and joins them by the
+  seam rule above. `build_disintegrating_stream` is retained as the zero-gap
+  case of it — a wrapper that builds an evenly-strided plan — because that is
+  what every caller predating the arrangement wants and what
+  `tests/test_disintegration.py` already pins down. `plan_iterations`, which
+  computes how many evenly-strided repetitions a target duration needs, is
+  retained for that wrapper and as the regression oracle; see
+  `docs/project-state.md` before deleting it as dead code. Every placement is
+  decayed through `decayed_iteration` rather than `apply_decay` directly, so
+  this path and `preview.render_window` compose the per-repeat RNG key in one
+  place and cannot drift apart.
 
 - **`config.py`** — `MixConfig` and its nested dataclasses, with per-field
   metadata (`label`, `unit`, `min`/`max`/`step`, `choices`, `help`) attached
@@ -148,6 +265,18 @@ for why that trade was made deliberately.
   is what happens when Demucs isn't available and separation falls back to a
   single `mix` stem; both `pipeline._plan_jobs` and `preview.render_window`
   call this same function so they cannot disagree about stem selection.
+
+- **`arrangement.py`** — the pure planner described above: `SegmentInfo`,
+  `Placement`, `Arrangement`, `plan_arrangement`, and `xfade_frames`. It also
+  holds the three functions `preview.master_gain` needs to decide *which*
+  window to measure — `decay_amplitude_proxy` (how loud a placement's
+  amplitude fade leaves it), `concurrent_placements` (which placements are
+  genuinely sounding as their own voice at a frame, which is not the same as
+  geometric containment — an ordinary seam is one blended voice, not two), and
+  `densest_frame`. They live here rather than in `preview.py` because the
+  ranking and the scaling have to agree about what "concurrent" and "louder"
+  mean, and because none of them touches audio. `config.py` must never import
+  this module; the dependency runs one way only.
 
   **The two conditions are separate on purpose**, and the distinction is
   load-bearing rather than pedantic. "The config names none of these stems"
@@ -401,15 +530,15 @@ loop at 0.10–0.15, stems spanning 0.15–0.85 split evenly via `stage_range`,
 sound bed at 0.88, mastering at 0.92–1.0); a caller wanting a progress bar
 reads `ProgressEvent.fraction` and does not need to know the stage
 boundaries. Cancellation is checked at three points: immediately after
-`separate()` returns (`pipeline.py:50-51`), once after the stem and sound-bed
-sections finish and before mastering begins (`pipeline.py:78-79`), and inside
-`build_disintegrating_stream`'s per-iteration loop, reached via `cancel`
-threaded through `_process_stem` (`pipeline.py:70`, `pipeline.py:104`) into
-that function. The per-iteration check is the one that matters most in
-practice: because it sits inside the loop doing the actual expensive work, a
-long render can be interrupted promptly *within* a stem, not merely between
-stages, without leaving corrupted output — each iteration's contribution is a
-complete, independent unit of work.
+`separate()` returns (`pipeline.py:51-52`), once after the stem and sound-bed
+sections finish and before mastering begins (`pipeline.py:79-80`), and inside
+`render_arrangement`'s per-placement loop, reached via `cancel` threaded
+through `_process_stem` (`pipeline.py:71`, `pipeline.py:111`) into that
+function. The per-placement check is the one that matters most in practice:
+because it sits inside the loop doing the actual expensive work, a long render
+can be interrupted promptly *within* a stem, not merely between stages, without
+leaving corrupted output — each placement's contribution is a complete,
+independent unit of work.
 
 ## Reverb on a window that has to loop
 
@@ -459,28 +588,86 @@ divergence only appears at the whole-stream normalization step, which no
 per-window test exercises by construction.
 
 The fix, `preview.master_gain`, measures a single gain factor and applies it
-uniformly to every window rather than normalizing each one on its own. It can,
-because decay only removes energy — spectral holes, dropouts, amplitude fade,
-and a rising noise floor all pull a stem's level down or leave it unchanged,
-never up — so the peak across the whole arc falls monotonically, and the
-loudest window `render_window` can produce is always iteration 0
-(`progress=0.0`), where `apply_decay` is a pure passthrough that no decay
-setting can move. (Note the careful phrasing: iteration 0 is the loudest
-*window*, and it is **not** the render's loudest moment. `_apply_fades` runs
-before `normalize_peak` and `fade_in_s` defaults to 8 s, so the render's peak
-lands after the fade-in completes. See the four-part level-matching entry in
-`docs/project-state.md`; this is the largest of the remaining gaps, measured at
-−1.82 dB.) `master_gain` renders exactly that one window
-(`render_window(session, 0.0, reverb=<flag>, master=False)`), measures its
-peak, and computes the ratio to `db_to_amp(config.output.peak_db)` — the same
-target `normalize_peak` aims for on a real render. That single factor, memoized
-on the session (`RenderSession.master_gain`), is what
+uniformly to every window rather than normalizing each one on its own. That
+factor, memoized on the session (`RenderSession.master_gain`), is what
 `render_window(..., master=True)` (the default) applies to every subsequent
 preview regardless of where in the arc it sits. Applying one factor everywhere
 rather than normalizing per window is what preserves the arc: later windows
 end up quieter because they genuinely contain less energy, not because each
 one was independently pushed back up to full scale, which would flatten the
 whole point of the decay.
+
+**Which window gets measured used to be assumed rather than chosen, and
+overlapping repeats disproved the assumption.** The argument this document and
+`master_gain`'s own docstring both carried was that decay only removes energy —
+spectral holes, dropouts, amplitude fade and a rising noise floor all pull a
+stem's level down or leave it unchanged, never up — so the peak across the arc
+falls monotonically, and the loudest window `render_window` could produce was
+always iteration 0 (`progress=0.0`), where `apply_decay` is a pure passthrough
+that no decay setting can move. That reasoning was sound for a mix whose
+repeats were laid end to end, and Plan 4a's negative gaps end it: a gap large
+enough to overlap repeats by more than the crossfade width puts two near-fresh
+repeats genuinely sounding together — summed by `render_arrangement`'s additive
+branch — and they beat one fresh repeat alone. A gain calibrated at frame 0
+would then leave the render's true peak above target, which is the whole thing
+this function exists to prevent.
+
+So `master_gain` now *finds* the window instead of assuming it.
+`arrangement.densest_frame` walks the plan's placement start frames — the
+combined amplitude only changes where a placement's effective span begins or
+ends, so a few hundred candidates cover a twenty-minute timeline exactly — and
+ranks them by `concurrent_amplitude`, the root-sum-square of
+`decay_amplitude_proxy` across everything genuinely concurrent there. An
+ordinary seam is deliberately *not* counted as two voices: consecutive repeats
+overlap by exactly `xfade` at every config including the default, and the
+renderer blends that into one voice rather than summing it, so counting a
+handover as concurrency reported two voices everywhere and inflated the gain by
+roughly 5.5 dB at settings where nothing is stacked at all. That was caught
+during this plan's own review, before it shipped. `master_gain` then renders
+one real window at the decay progress of whichever placement dominates that
+frame — the freshest one, since `render_window` renders exactly one loop
+iteration and has no way to render two placements sounding at once — measures
+its peak, and multiplies it by the **density ratio**: the concurrent amplitude
+at that frame divided by the proxy of the single placement it actually
+rendered. The ratio of `db_to_amp(config.output.peak_db)` to that scaled peak —
+the same target `normalize_peak` aims for on a real render — is the factor.
+
+The proxy only has to *rank* candidates and weight one measurement; the level
+is still a real render of a real window, exactly as before. And with no overlap
+beyond an ordinary seam — which is every default config — exactly one placement
+is concurrent at the argmax, the ratio is 1.0, the argmax lands on frame 0, and
+the whole thing is bit-identical to measuring iteration 0 alone, as it always
+was. That equivalence is asserted numerically rather than argued.
+
+(One piece of the old paragraph's careful phrasing still holds and is worth
+keeping: the window this measures is the loudest *window*, and it is **not**
+necessarily the render's loudest moment. `_apply_fades` runs before
+`normalize_peak`, fades and inter-iteration crossfades move the render's peak,
+and on real material the loudest moment is wherever the music happens to be
+loudest. See the four-part level-matching entry in `docs/project-state.md`,
+which also records that the −1.82 dB once attributed to the fade-in describes a
+test fixture rather than the mixer's default.)
+
+**The density ratio is an estimate, and its error is measured rather than
+gestured at.** Combining per-placement proxies by root-sum-square is the
+standard estimate for how *independent* sources add, and stacked repeats are
+close to that — the same loop at different decay stages, offset by a full
+stride — but not exactly. Measured against 40 real rendered streams (8 content
+types × 5 stacking depths, ground truth being the actual rendered peak), the
+residual is two-sided: within about ±7.7 dB on broadband and percussive
+material with a signed mean of +2.2 dB (over-predicting the peak, so a slightly
+quiet preview), and up to about 10 dB the *other* way on strongly tonal
+material, where the estimate under-predicts, the ratio comes out too small, the
+gain comes out too large, and the preview plays **louder** than the render —
+the same direction as the ~4 dB-hot defect this whole section exists to
+correct, at more than twice the size. Plain summation was measured too and is
+worse: +17.7 dB worst case. The looseness is tolerated rather than eliminated
+because of what the factor is *for* — the real render is peak-normalized from
+its own genuine audio by `normalize_peak`, which cannot be fooled by this
+estimate; this only has to put a preview in the neighbourhood of the render's
+level for a tuning judgement to stay meaningful. `docs/project-state.md` has
+the full record, including the stride-locking finding that explains why "tonal"
+is the wrong way to describe the bad case.
 
 **The factor is calibrated per signal path, so `RenderSession.master_gain` is a
 dict keyed by the `reverb` flag rather than a single float.** Reverb changes
@@ -496,10 +683,29 @@ produce; a `reverb=False` one is a level-matched view of the dry path, not a
 simulation of any render, since every real render applies reverb.
 
 `RenderSession._master_key` decides when the memoized factor is stale.
-Deliberately excluded: every stem's `decay` settings, `seed`, and
-`output.sample_rate` — none of them can move a number measured at progress 0.
-Included: `reverb`, `output.peak_db`, `output.channels`, each stem's
-`enabled`/`gain_db`/`reverb_send`, and — since Plan 3g — `soundbed`.
+Deliberately excluded: every stem's `decay` settings, `seed`,
+`output.sample_rate`, the two fades, and — narrowly, on a measurement rather
+than an argument — `output.duration_min`, which does feed `target_frames` and
+so how many placements there are, but was measured moving the gain by 0.073 dB
+on a negative-gap config, noise next to what this key exists to catch.
+Included: `reverb` (as the dict's own key), `output.peak_db`,
+`output.channels`, each stem's `enabled`/`gain_db`/`reverb_send`, — since Plan
+3g — `soundbed`, and — since Plan 4a — `output.cycle_crossfade_ms` and the
+whole of `arrangement`.
+
+Those last two are the same lesson arriving twice more. `arrangement` belongs
+because the gap decides which window `densest_frame` picks, so a changed gap
+can move the measurement to a different point in the arc entirely.
+`cycle_crossfade_ms` used to be excluded on an argument that was airtight until
+the commit that broke it: the crossfade only changed the placement *count*, and
+progress at placement 0 is 0 whatever the count, so the window was the same one
+either way. `densest_frame` ended that — it takes `xfade` and uses it to decide
+which overlaps are a seam and which are stacking, which changes both *which*
+placement dominates and *how many* are concurrent there. Measured on a
+`gap_start_s = gap_end_s = -3.0` config, sweeping `cycle_crossfade_ms` from 0
+to 3000 ms moves the gain across a ~7.0 dB span. It was left out of the key by
+the very commit that made it matter, and the stale memo — change the crossfade
+on a live session, keep the old level forever — was caught in review.
 
 **The test for membership is whether the *calibration window* reads the field,
 not whether the render does.** Those two questions have different answers and
@@ -1005,9 +1211,9 @@ by a second run's file `Last-Modified` timestamp against its job's
 `created_at` (**11.0 s**). Both sit at roughly 13:1 against the
 180.55 s cold-preview figure two paragraphs up, and that gap is not a
 coincidence: a render pays for loop detection and per-stem time-stretching
-exactly once regardless of the output length, then iterates
-`build_disintegrating_stream` roughly seventy times (a ~17.6 s loop filling
-1200 s) at the tens-of-milliseconds-per-stem cost `preview.render_window`
+exactly once regardless of the output length, then renders roughly seventy
+placements (a ~17.6 s loop filling 1200 s at the default zero gap) at the
+tens-of-milliseconds-per-stem cost `preview.render_window`
 already established — there is no separation call in this path at all once
 the cache is warm, which every render started from an already-open mixer's
 Render button is. See `docs/project-state.md`'s note on `Warn.forSource` for
