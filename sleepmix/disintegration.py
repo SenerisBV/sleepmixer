@@ -117,8 +117,13 @@ def plan_iterations(
 ) -> tuple[int, int]:
     """Return ``(n_iterations, xfade_frames)`` for a stream of this shape.
 
-    Shared by the batch stream builder and the preview path so both agree on
-    which iteration a given point in the arc corresponds to.
+    Has no production caller left — ``run_pipeline`` goes through
+    ``plan_arrangement``/``render_arrangement``, and the preview reads that same
+    plan rather than calling this. Retained on purpose, as the regression oracle
+    ``tests/test_arrangement.py::test_defaults_reproduce_todays_positions`` checks
+    the planner against: at default gaps the planner must land on exactly the
+    frames and exactly the count this produces, and that equality is not
+    re-derivable from the new code once this is gone.
 
     The count is the number of iterations the renderer *executes*, not an upper
     bound on them. Iteration ``i`` leaves the write head at
