@@ -4,85 +4,116 @@ Substring checks on source text miss ordinary import spellings. These guards are
 the only enforcement two Global Constraints have, so they must not be bypassable
 by spelling variations like ``from numpy import array`` instead of
 ``import numpy``.
+
+This module resolves every import in a Python file to a fully-qualified dotted
+module name, using the importing file's own package location, then matches
+against forbidden names by dotted-prefix (so forbidding ``"numpy"`` catches
+``"numpy.fft"`` and forbidding ``"sleepmix.audio"`` catches everything under it).
 """
 import ast
-from typing import NamedTuple
+from pathlib import Path
 
 
-class ImportInfo(NamedTuple):
-    """One import found in a module."""
-    module: str | None
-    names: list[str]
-    is_relative: bool
+def resolved_imports(path: Path, repo_root: Path) -> set[str]:
+    """Resolve all imports in a file to fully-qualified dotted module names.
 
+    The returned set contains module names as they would appear in absolute
+    import statements, accounting for the file's own package location when
+    resolving relative imports.
 
-def imports_from_file(path: str) -> list[ImportInfo]:
-    """Parse a Python file and return all imports it contains.
+    Args:
+        path: Path to the Python file to analyze (must be absolute)
+        repo_root: Root of the repository containing the file
 
-    Walks the AST for ``ast.Import`` and ``ast.ImportFrom`` nodes. For each:
-    - ``ast.Import``: records the top-level module name (before the dot)
-    - ``ast.ImportFrom``: records the module name and any imported names
-
-    Handles relative imports correctly: when ``node.level > 0``, the import is
-    relative to the current package.
+    Returns:
+        Set of fully-qualified module names that the file imports
     """
     with open(path) as f:
-        tree = ast.parse(f.read(), filename=path)
+        tree = ast.parse(f.read(), filename=str(path))
 
-    imports = []
+    # Derive the file's own package from its path relative to repo_root
+    rel_path = path.relative_to(repo_root)
+    # Convert path to module name: sleepmix/night/plan.py -> sleepmix.night.plan
+    # Then take parent to get package: sleepmix.night
+    module_path = rel_path.with_suffix('').as_posix().replace('/', '.')
+    if module_path.endswith('.__init__'):
+        own_package = module_path[:-len('.__init__')]
+    else:
+        own_package = '.'.join(module_path.split('.')[:-1])
+
+    imports = set()
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            # ``import numpy`` or ``import scipy.signal``
+            # ``import numpy`` or ``import sleepmix.audio as a``
             for alias in node.names:
-                # Take the top-level module name (before first dot)
-                top_level = alias.name.split(".")[0]
-                imports.append(ImportInfo(
-                    module=top_level,
-                    names=[],
-                    is_relative=False
-                ))
-        elif isinstance(node, ast.ImportFrom):
-            # ``from numpy import array`` or ``from .night import Voice``
-            # node.module is None for bare ``from . import x``
-            # node.level > 0 means it's a relative import
-            names = [alias.name for alias in node.names]
+                # Take the full module name
+                imports.add(alias.name)
 
-            # For relative imports, node.module might be None
-            module = node.module
-            imports.append(ImportInfo(
-                module=module,
-                names=names,
-                is_relative=node.level > 0
-            ))
+        elif isinstance(node, ast.ImportFrom):
+            # ``from X import Y`` or relative ``from . import Z``
+            if node.level == 0:
+                # Absolute import: from sleepmix import audio
+                if node.module:
+                    imports.add(node.module)
+                    # Also add module.name for each imported name
+                    # (could be submodule: from sleepmix import audio)
+                    for alias in node.names:
+                        imports.add(f"{node.module}.{alias.name}")
+            else:
+                # Relative import: from ..audio import X or from . import Y
+                # Walk up level-1 components from own_package
+                parts = own_package.split('.')
+                # level=1 means from current package (parts[-1:])
+                # level=2 means from parent package (parts[:-1])
+                base_parts = parts[:-(node.level - 1)] if node.level > 1 else parts
+                base_package = '.'.join(base_parts) if base_parts else ''
+
+                if node.module:
+                    # from ..audio import X -> base_package.audio
+                    if base_package:
+                        full_module = f"{base_package}.{node.module}"
+                    else:
+                        full_module = node.module
+                    imports.add(full_module)
+                    # Also add the specific names being imported
+                    for alias in node.names:
+                        imports.add(f"{full_module}.{alias.name}")
+                else:
+                    # from . import Y -> base_package.Y
+                    if base_package:
+                        for alias in node.names:
+                            imports.add(f"{base_package}.{alias.name}")
 
     return imports
 
 
-def imports_any(path: str, forbidden_modules: set[str],
-                forbidden_from_modules: set[str] | None = None) -> bool:
-    """Check if a file imports any of the forbidden modules.
+def forbidden_imports(path: Path, repo_root: Path,
+                      forbidden: set[str]) -> set[str]:
+    """Find imports that match any forbidden module name.
+
+    An import is forbidden if it equals or is a dotted-prefix descendant of
+    any entry in the forbidden set. For example:
+    - Forbidding "numpy" catches "numpy", "numpy.fft", "numpy.random.Generator"
+    - Forbidding "sleepmix.audio" catches "sleepmix.audio", "sleepmix.audio.engine"
+    - Forbidding "sleepmix" would catch "sleepmix.audio" but not "sleepmixer"
 
     Args:
-        path: Path to the Python file to check
-        forbidden_modules: Set of module names that are forbidden (e.g., {"numpy", "scipy"})
-        forbidden_from_modules: Set of module paths forbidden in ``from X import ...`` (e.g., {"sleepmix.audio"})
+        path: Path to the Python file to analyze
+        repo_root: Root of the repository
+        forbidden: Set of module names that are not allowed
 
     Returns:
-        True if the file imports any forbidden module, False otherwise
+        Set of resolved imports that violate the forbidden list (empty if none)
     """
-    if forbidden_from_modules is None:
-        forbidden_from_modules = set()
+    resolved = resolved_imports(path, repo_root)
+    violations = set()
 
-    imports = imports_from_file(path)
+    for imp in resolved:
+        for f in forbidden:
+            # Match by equality or by dotted-prefix descendant
+            if imp == f or imp.startswith(f + "."):
+                violations.add(imp)
+                break
 
-    for imp in imports:
-        # Check top-level module names (``import numpy`` catches "numpy")
-        if imp.module and imp.module.split(".")[0] in forbidden_modules:
-            return True
-
-        # Check full module paths for ``from X import ...`` statements
-        if imp.module and imp.module in forbidden_from_modules:
-            return True
-
-    return False
+    return violations

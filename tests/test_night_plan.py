@@ -13,7 +13,7 @@ from sleepmix.night.plan import (
     MAX_VOICE_S, MIN_VOICE_S, TEXTURES, Voice, plan_voices,
 )
 
-from .import_guard import imports_any
+from .import_guard import forbidden_imports
 
 SR = 44100
 
@@ -34,25 +34,21 @@ def test_plan_module_imports_no_audio():
     """Verify plan.py has no audio or heavy deps — using AST to catch all spellings."""
     import sleepmix.night.plan as plan_module
     plan_path = Path(plan_module.__file__)
+    repo_root = Path(plan_module.__file__).parent.parent.parent  # sleepmix/night/plan.py -> root
 
-    # Top-level modules that must never be imported
-    forbidden_toplevel = {"numpy", "scipy", "soundfile", "pedalboard"}
-
-    # Module paths that must never be imported (catches both absolute and relative)
-    forbidden_from = {
+    forbidden = {
+        "numpy", "scipy", "soundfile", "pedalboard",
         "sleepmix.audio",
         "sleepmix.effects",
         "sleepmix.disintegration",
         "sleepmix.soundbed",
-        "sleepmix.palette",
+        "sleepmix.night.palette",
+        "sleepmix.night.stream",
     }
 
-    assert not imports_any(
-        str(plan_path),
-        forbidden_toplevel,
-        forbidden_from
-    ), (
-        f"Module {plan_path.name} imports a forbidden module. "
+    violations = forbidden_imports(plan_path, repo_root, forbidden)
+    assert not violations, (
+        f"Module plan.py imports forbidden modules: {violations}. "
         "The planner must have no audio or heavy dependencies to enable "
         "eight-hour nights to be tested in microseconds."
     )

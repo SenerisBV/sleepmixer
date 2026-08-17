@@ -12,7 +12,7 @@ import pytest
 
 from sleepmix.night.sky import day_length_h, moon_phase, solar_events
 
-from .import_guard import imports_any
+from .import_guard import forbidden_imports
 
 AMSTERDAM = (52.3676, 4.9041)
 
@@ -72,14 +72,13 @@ def test_no_shipped_module_imports_the_night_package():
     Uses AST parsing to catch all import spellings, not just substrings.
     """
     sleepmix_root = Path(__file__).parent.parent / "sleepmix"
+    repo_root = sleepmix_root.parent
+    forbidden = {"sleepmix.night"}
+
     for module in sorted(sleepmix_root.glob("*.py")):
-        # Check for absolute imports of sleepmix.night and relative imports of .night
-        assert not imports_any(
-            str(module),
-            {"night"},  # Top-level module name "night" from "import night" or "from night import ..."
-            {"sleepmix.night"},  # Absolute imports like "from sleepmix.night import ..."
-        ), (
-            f"Module {module.name} imports the night package, "
+        violations = forbidden_imports(module, repo_root, forbidden)
+        assert not violations, (
+            f"Module {module.name} imports the night package: {violations}, "
             "violating the package layering rule."
         )
 

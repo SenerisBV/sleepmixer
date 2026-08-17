@@ -81,8 +81,12 @@ class Voice:
         return f"night:voice:{self.index}"
 
 
-def _birth_gap_s(density: float, rng: "np.random.Generator") -> float:
-    """Seconds until the next birth, stretched as the night thins out."""
+def _birth_gap_s(density: float, rng) -> float:
+    """Seconds until the next birth, stretched as the night thins out.
+
+    The rng parameter is not annotated (it would require a numpy import this
+    module is forbidden to make).
+    """
     stretch = 1.0 + (1.0 - density) * (_SPARSEST_STRETCH - 1.0)
     return float(rng.uniform(_BIRTH_GAP_MIN_S, _BIRTH_GAP_MAX_S)) * stretch
 
