@@ -46,8 +46,9 @@ def solar_events(date: dt.date, lat_deg: float,
     Above the polar circles the sun may never cross the horizon, in which case
     ``acos`` has no solution. Rather than raise — a program that refuses to
     start a night because the operator is in Tromsø is worse than one that
-    guesses — the hour angle is clamped, which degrades to a nominal midnight
-    sunrise and midday sunset. The clamp is why this returns values everywhere.
+    guesses — the hour angle is clamped, which degrades to the solar transit
+    for polar night, and to the surrounding midnights for the midnight sun.
+    The clamp is why this returns values everywhere.
     """
     n = _julian_day(date) - 2451545.0 + 0.0008
     j_star = n - lon_deg / 360.0

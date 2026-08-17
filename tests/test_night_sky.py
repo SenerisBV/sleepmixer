@@ -6,6 +6,7 @@ correction, no topography), which is the right precision for deciding how
 long a night is and the wrong precision for navigation.
 """
 import datetime as dt
+from pathlib import Path
 
 import pytest
 
@@ -61,3 +62,48 @@ def test_moon_phase_always_in_range():
     for day in range(0, 400, 7):
         phase = moon_phase(start + dt.timedelta(days=day))
         assert 0.0 <= phase < 1.0
+
+
+def test_no_shipped_module_imports_the_night_package():
+    """The night subsystem must stay removable without touching the pipeline."""
+    sleepmix_root = Path(__file__).parent.parent / "sleepmix"
+    for module in sorted(sleepmix_root.glob("*.py")):
+        source = module.read_text()
+        assert "sleepmix.night" not in source, (
+            f"Module {module.name} imports sleepmix.night, "
+            "violating the package layering rule."
+        )
+        assert "from .night" not in source, (
+            f"Module {module.name} imports from .night, "
+            "violating the package layering rule."
+        )
+
+
+def test_southern_hemisphere_inverts_the_season():
+    """In the southern hemisphere, Dec is long and June is short (opposite of Amsterdam)."""
+    sydney = (-33.8688, 151.2093)
+    december = day_length_h(dt.date(2026, 12, 21), *sydney)
+    june = day_length_h(dt.date(2026, 6, 21), *sydney)
+    # In the southern hemisphere, December (summer) is longer than June (winter).
+    assert december > june
+    # Loose bounds: just verify the sign is opposite of Amsterdam.
+    assert december > 14.0
+    assert june < 10.0
+
+
+def test_polar_midnight_sun_and_polar_night():
+    """At 80N, the sun never sets in June and never rises in December."""
+    arctic = (80.0, 0.0)
+    # Polar night: day length near zero (within tolerance of atmosphere/refraction).
+    december_length = day_length_h(dt.date(2026, 12, 21), *arctic)
+    assert december_length < 1.0
+    # Midnight sun: day length near 24 hours.
+    june_length = day_length_h(dt.date(2026, 6, 21), *arctic)
+    assert june_length > 23.0
+    # solar_events must return without raising at both extremes.
+    rise, set_ = solar_events(dt.date(2026, 12, 21), *arctic)
+    assert isinstance(rise, dt.datetime)
+    assert isinstance(set_, dt.datetime)
+    rise, set_ = solar_events(dt.date(2026, 6, 21), *arctic)
+    assert isinstance(rise, dt.datetime)
+    assert isinstance(set_, dt.datetime)
