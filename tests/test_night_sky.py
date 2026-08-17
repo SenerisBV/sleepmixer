@@ -12,6 +12,8 @@ import pytest
 
 from sleepmix.night.sky import day_length_h, moon_phase, solar_events
 
+from .import_guard import imports_any
+
 AMSTERDAM = (52.3676, 4.9041)
 
 
@@ -65,16 +67,19 @@ def test_moon_phase_always_in_range():
 
 
 def test_no_shipped_module_imports_the_night_package():
-    """The night subsystem must stay removable without touching the pipeline."""
+    """The night subsystem must stay removable without touching the pipeline.
+
+    Uses AST parsing to catch all import spellings, not just substrings.
+    """
     sleepmix_root = Path(__file__).parent.parent / "sleepmix"
     for module in sorted(sleepmix_root.glob("*.py")):
-        source = module.read_text()
-        assert "sleepmix.night" not in source, (
-            f"Module {module.name} imports sleepmix.night, "
-            "violating the package layering rule."
-        )
-        assert "from .night" not in source, (
-            f"Module {module.name} imports from .night, "
+        # Check for absolute imports of sleepmix.night and relative imports of .night
+        assert not imports_any(
+            str(module),
+            {"night"},  # Top-level module name "night" from "import night" or "from night import ..."
+            {"sleepmix.night"},  # Absolute imports like "from sleepmix.night import ..."
+        ), (
+            f"Module {module.name} imports the night package, "
             "violating the package layering rule."
         )
 

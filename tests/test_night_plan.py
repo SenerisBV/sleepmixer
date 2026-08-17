@@ -5,13 +5,15 @@ be asserted here in microseconds rather than rendered. If an import of
 ``sleepmix.audio`` ever appears in ``night/plan.py``, this file stops being
 able to do its job.
 """
-import pytest
+from pathlib import Path
 
 from sleepmix.night.clock import arc_at
 from sleepmix.night.context import NightContext, Weather
 from sleepmix.night.plan import (
     MAX_VOICE_S, MIN_VOICE_S, TEXTURES, Voice, plan_voices,
 )
+
+from .import_guard import imports_any
 
 SR = 44100
 
@@ -29,10 +31,31 @@ def _whole_night(ctx: NightContext) -> list[Voice]:
 
 
 def test_plan_module_imports_no_audio():
+    """Verify plan.py has no audio or heavy deps — using AST to catch all spellings."""
     import sleepmix.night.plan as plan_module
-    source = open(plan_module.__file__).read()
-    assert "sleepmix.audio" not in source
-    assert "import numpy" not in source
+    plan_path = Path(plan_module.__file__)
+
+    # Top-level modules that must never be imported
+    forbidden_toplevel = {"numpy", "scipy", "soundfile", "pedalboard"}
+
+    # Module paths that must never be imported (catches both absolute and relative)
+    forbidden_from = {
+        "sleepmix.audio",
+        "sleepmix.effects",
+        "sleepmix.disintegration",
+        "sleepmix.soundbed",
+        "sleepmix.palette",
+    }
+
+    assert not imports_any(
+        str(plan_path),
+        forbidden_toplevel,
+        forbidden_from
+    ), (
+        f"Module {plan_path.name} imports a forbidden module. "
+        "The planner must have no audio or heavy dependencies to enable "
+        "eight-hour nights to be tested in microseconds."
+    )
 
 
 def test_a_night_produces_voices():

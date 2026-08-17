@@ -26,7 +26,7 @@ from dataclasses import dataclass, replace
 
 from ..config import StemDecayConfig
 from ..util import iteration_rng
-from .clock import arc_at
+from .clock import arc_at, NightArc
 from .context import NightContext
 
 TEXTURES = ("drone", "noiseband")
@@ -81,17 +81,17 @@ class Voice:
         return f"night:voice:{self.index}"
 
 
-def _birth_gap_s(density: float, rng) -> float:
+def _birth_gap_s(density: float, rng: "np.random.Generator") -> float:
     """Seconds until the next birth, stretched as the night thins out."""
     stretch = 1.0 + (1.0 - density) * (_SPARSEST_STRETCH - 1.0)
     return float(rng.uniform(_BIRTH_GAP_MIN_S, _BIRTH_GAP_MAX_S)) * stretch
 
 
-def _pitch_hz(root_hz: float, cents: int) -> float:
+def _pitch_hz(root_hz: float, cents: float) -> float:
     return root_hz * (2.0 ** (cents / 1200.0))
 
 
-def _decay_for(arc, base: StemDecayConfig) -> StemDecayConfig:
+def _decay_for(arc: NightArc, base: StemDecayConfig) -> StemDecayConfig:
     """A decay config whose endpoints *are* this moment's ceilings.
 
     Rendered at ``progress = 1.0``, so the start values never apply and are
