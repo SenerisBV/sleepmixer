@@ -66,11 +66,30 @@ def write_profile(profile: SourceProfile) -> str:
 
     Written to a temporary name and renamed, so a `prepare` interrupted here
     leaves either the previous profile or none — the same discipline
-    ``separation._write_cache`` uses for the same reason.
+    ``separation._write_cache`` uses for the same reason, including its
+    sweep: a killed writer can leave a stale ``.partial`` behind with no
+    process left to clean it up, so any such file for this ``source_id`` is
+    removed before the new one is staged. Scoped to this id alone, exactly as
+    ``_write_cache`` scopes to its own key, so it cannot race a concurrent
+    write of a different source.
+
+    Unlike the rest of this module, **this function raises rather than
+    skips**. Every other function here degrades because it is reading a file
+    that anyone could have written; this one is validating its own caller's
+    input, and a ``source_id`` that could escape ``profiles_directory()`` is a
+    programming error to be caught at the source, not a fact about the world
+    to route around.
     """
-    final = os.path.join(profiles_directory(),
-                         profile.source_id + PROFILE_SUFFIX)
+    source_id = profile.source_id
+    if (not source_id or source_id in (".", "..") or os.sep in source_id
+            or (os.altsep is not None and os.altsep in source_id)):
+        raise ValueError(f"unsafe source_id: {source_id!r}")
+
+    directory = profiles_directory()
+    final = os.path.join(directory, source_id + PROFILE_SUFFIX)
     staging = final + ".partial"
+    if os.path.exists(staging):
+        os.remove(staging)
     with open(staging, "w") as fh:
         json.dump(asdict(profile), fh, indent=2, sort_keys=True)
     os.replace(staging, final)
@@ -113,17 +132,29 @@ def load_profiles() -> tuple[SourceProfile, ...]:
     """Every usable profile, in a stable order. Never raises.
 
     Order is by ``source_id`` rather than by directory order, so the same set
-    of files produces the same night on two machines.
+    of files produces the same night on two machines — the one sort at the
+    end is enough for that; an earlier version of this function also sorted
+    the filenames before reading them, which guaranteed nothing the final
+    sort didn't already guarantee, so that pass was dropped.
+
+    ``profiles_directory()`` is resolved exactly once, inside the guard, and
+    reused for both the listing and every file path built from it. An
+    earlier version called it again for each file, unguarded, inside the
+    loop — and that function's ``os.makedirs`` can raise for reasons that
+    have nothing to do with any individual profile (the directory removed
+    and re-creation blocked, replaced by a non-directory, permissions
+    revoked between one file and the next), which would have propagated
+    straight out of a function documented as never raising.
     """
     try:
-        names = sorted(n for n in os.listdir(profiles_directory())
-                       if n.endswith(PROFILE_SUFFIX))
+        directory = profiles_directory()
+        names = [n for n in os.listdir(directory) if n.endswith(PROFILE_SUFFIX)]
     except OSError:
         return ()
 
     found = []
     for name in names:
-        profile = _read_profile(os.path.join(profiles_directory(), name))
+        profile = _read_profile(os.path.join(directory, name))
         if profile is not None:
             found.append(profile)
     return tuple(sorted(found, key=lambda p: p.source_id))

@@ -141,6 +141,74 @@ def test_a_profile_with_a_non_positive_sample_rate_is_skipped(tmp_path, monkeypa
     assert [p.source_id for p in load_profiles()] == ["good"]
 
 
+def test_load_profiles_does_not_call_profiles_directory_again_per_file(
+        tmp_path, monkeypatch):
+    """Regression: the brief's ``load_profiles`` called ``profiles_directory()``
+    a second time, unprotected, inside the per-file loop. That function also
+    calls ``os.makedirs``, which can raise for reasons unrelated to any one
+    profile (the directory removed and re-creation blocked, replaced by a
+    non-directory, permissions revoked between files) — and this function is
+    documented as never raising. Reproduced by letting exactly one call
+    through and failing every call after: against the buggy code this raises
+    while reading the very first file; against the fix, the directory is
+    resolved once and reused, so both profiles are still found.
+    """
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    write_profile(_profile(source_id="a"))
+    write_profile(_profile(source_id="b"))
+
+    real = sources_mod.profiles_directory
+    calls = {"n": 0}
+
+    def once_then_fail():
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise PermissionError("directory vanished")
+        return real()
+
+    monkeypatch.setattr(sources_mod, "profiles_directory", once_then_fail)
+    assert [p.source_id for p in load_profiles()] == ["a", "b"]
+    assert calls["n"] == 1
+
+
+def test_load_profiles_never_raises_even_if_the_directory_is_unusable(monkeypatch):
+    """``load_profiles`` is documented never to raise -- including when
+    resolving the profiles directory itself is what fails."""
+    def _raise():
+        raise PermissionError("nope")
+
+    monkeypatch.setattr(sources_mod, "profiles_directory", _raise)
+    assert load_profiles() == ()
+
+
+def test_write_profile_rejects_an_unsafe_source_id(tmp_path, monkeypatch):
+    """``write_profile`` validates its own caller's input and raises rather
+    than skips: an id that could escape ``profiles_directory()`` is a
+    programming error, not an ordinary fact about the world to route around.
+    """
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    for bad_id in ("", ".", "..", "a/b", "../escape", "/etc/passwd"):
+        with pytest.raises(ValueError):
+            write_profile(_profile(source_id=bad_id))
+
+
+def test_write_profile_sweeps_a_stale_partial_for_the_same_id(tmp_path, monkeypatch):
+    """A killed writer can leave a ``.partial`` behind. The next write for
+    that same ``source_id`` should not be confused by it, and none should
+    remain once the write completes -- mirroring ``separation._write_cache``,
+    which is what this module's docstring claims parity with.
+    """
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    stale = os.path.join(profiles_directory(), "a" + PROFILE_SUFFIX + ".partial")
+    with open(stale, "w") as fh:
+        fh.write("leftover from a killed prepare")
+
+    write_profile(_profile(source_id="a"))
+
+    assert not os.path.exists(stale)
+    assert [p.source_id for p in load_profiles()] == ["a"]
+
+
 def test_a_profile_is_frozen():
     with pytest.raises(Exception):
         _profile().source_id = "other"  # type: ignore[misc]
