@@ -98,6 +98,57 @@ def test_with_no_sources_the_walk_takes_one_index_per_voice():
     assert keys == [f"night:voice:{i}" for i in range(len(keys))]
 
 
+def test_with_no_sources_the_walk_is_byte_identical_to_phase_one():
+    """The two tests above cannot catch a change that shifts *timing*
+    rather than *keys*: both compare the new code against itself, so a
+    bug that moves both calls equally is invisible to them. This is a
+    golden-value test instead — a real reference, not the new code
+    checked against itself.
+
+    The reference values below are Phase 1's actual output, captured by
+    checking out ``sleepmix/night/plan.py`` at commit 75eb039 (the tip of
+    this branch immediately before pairing began) and running
+    ``plan_voices`` for seed 1, no sources, an eight-hour night, at
+    SR=22050 — exactly this file's own ``_context()``/``_night()``. That
+    run produced 81 voices; birth_frame and pitch_hz for the first eight
+    are pinned here.
+
+    This test is deliberately brittle: a pairing regression it would have
+    caught in review drew four pair-only values (loop pick, ghost-pitch
+    pick, outlive roll, outlive factor) unconditionally, even with no
+    sources to spend them on. That did not change any voice's *key* — the
+    stride fix already handled that — but it shifted where the birth-gap
+    draw lands in the per-step generator's own state, so ``gap_s``, the
+    cursor, and every voice after the first came out different: 82
+    voices instead of 81, and voice index 1 born at frame 1280197 instead
+    of the correct 1116270. If a future change moves Phase 1's audio
+    again, this test should fail and someone should look at it on
+    purpose, not have it pass by construction."""
+    ctx = _context()
+    voices = _night(ctx)
+    assert len(voices) == 81
+
+    # (index, birth_frame, n_frames, pitch_hz, texture) — Phase 1's own
+    # output at commit 75eb039, seed 1, no sources, SR=22050, 8h night.
+    golden = [
+        (0, 0, 4865954, 185.010958, "drone"),
+        (1, 1280197, 3122900, 69.292738, "drone"),
+        (2, 3281633, 3315522, 69.280124, "drone"),
+        (3, 5024001, 3355252, 82.375360, "drone"),
+        (4, 6854085, 4186454, 92.447826, "noiseband"),
+        (5, 8459417, 3392155, 184.868655, "noiseband"),
+        (6, 9972923, 4022475, 123.368039, "noiseband"),
+        (7, 12164073, 3127451, 69.224173, "drone"),
+    ]
+    for (index, birth_frame, n_frames, pitch_hz, texture), voice in zip(
+            golden, voices[:len(golden)]):
+        assert voice.index == index
+        assert voice.birth_frame == birth_frame
+        assert voice.n_frames == n_frames
+        assert voice.pitch_hz == pytest.approx(pitch_hz, abs=1e-4)
+        assert voice.texture == texture
+
+
 # -- with sources ------------------------------------------------------
 def test_early_voices_are_mostly_source_and_late_ones_are_ghosts():
     ctx = _context([_profile("a")])
@@ -197,18 +248,67 @@ def test_a_loopless_source_does_not_crash_and_produces_no_source_voices():
 
 
 # -- outliving ---------------------------------------------------------
-def test_every_handover_is_covered_by_a_ghost():
+def test_every_handover_is_covered():
     """The seam between two sources is hidden by the mechanism already
-    chosen, not by a crossfade added for the purpose."""
+    chosen, not by a crossfade added for the purpose.
+
+    Originally asserted a *ghost* specifically crosses every seam. That
+    assumed the cover must be a ghost, which is false whenever the
+    outgoing source is pitchless (ordinary, not exceptional — see
+    ``pitch.py``): no ghost is ever emitted for such a source, so a
+    ghost-only check would have missed 25 of 59 seeds producing at least
+    one bare handover out of a (pitchless, pitched, pitched) rotation.
+    The cover is generalised to whichever voice this step emitted —
+    ghost, in-progress source loop, or the synthesis fallback — is
+    already longest-lived; this test now checks that *something* crosses
+    every seam, not that a ghost specifically does. See
+    ``test_a_handover_out_of_a_pitchless_source_is_still_covered`` for the
+    case this generalisation exists for."""
     ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abc")])
     schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
     voices = _night(ctx)
     for stage in schedule[:-1]:
         crossing = [v for v in voices
-                    if is_ghost(v)
-                    and v.birth_frame < stage.end_frame
+                    if v.birth_frame < stage.end_frame
                     and v.birth_frame + v.n_frames > stage.end_frame]
         assert crossing, f"handover at {stage.end_frame} is bare"
+
+
+def test_a_handover_out_of_a_pitchless_source_is_still_covered():
+    """Critical, reviewer-found: a pitchless source is ordinary, not
+    exceptional — Task 1 tried twice to reject non-tonal material and both
+    attempts failed, so ``pitch.py`` documents that a real ambient or
+    percussion-led recording legitimately has no detectable pitches. No
+    ghost is ever emitted for such a source (the ghost branch is gated on
+    ``profile.pitch_set``), so with the cover living only on the ghost, a
+    pitchless source in any non-final rotation slot left every handover
+    out of its stage bare. A sweep of seeds 1-59 with (pitchless, pitched,
+    pitched) found 25 of 59 producing at least one bare seam.
+
+    Fixed by generalising the cover to whichever voice a step actually
+    emits — ghost, in-progress source loop, or the synthesis fallback —
+    stretching the longest-lived of them, not assuming a ghost exists. A
+    source loop occasionally sustaining past its stage is the same
+    gesture the design already sanctions for a ghost outliving its
+    source.
+
+    Swept across all 59 seeds rather than pinned to one: the 25-of-59
+    failure rate for the un-fixed code means a single lucky seed would be
+    an unreliable guard, passing by chance rather than by the fix."""
+    bare_by_seed = {}
+    for seed in range(1, 60):
+        sources = [_profile("pitchless", ()), _profile("b", (56.0,)),
+                  _profile("c", (80.0,))]
+        ctx = _context(sources, seed=seed)
+        schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+        voices = _night(ctx)
+        bare = [stage.end_frame for stage in schedule[:-1]
+               if not any(v.birth_frame < stage.end_frame
+                          and v.birth_frame + v.n_frames > stage.end_frame
+                          for v in voices)]
+        if bare:
+            bare_by_seed[seed] = bare
+    assert not bare_by_seed, f"bare handovers by seed: {bare_by_seed}"
 
 
 def test_some_ghosts_outlive_their_source_away_from_a_handover():
@@ -335,8 +435,7 @@ def test_a_solitary_pair_still_covers_a_stage_it_spans_alone():
     triggered = False
     for stage in schedule[:-1]:
         crossing = [v for v in voices
-                    if is_ghost(v)
-                    and v.birth_frame < stage.end_frame
+                    if v.birth_frame < stage.end_frame
                     and v.birth_frame + v.n_frames > stage.end_frame]
         assert crossing, f"handover at {stage.end_frame} is bare"
         for v in crossing:
@@ -364,8 +463,7 @@ def test_a_gap_that_skips_a_whole_stage_still_covers_every_seam_it_skipped():
     bare = []
     for stage in schedule[:-1]:
         crossing = [v for v in voices
-                    if is_ghost(v)
-                    and v.birth_frame < stage.end_frame
+                    if v.birth_frame < stage.end_frame
                     and v.birth_frame + v.n_frames > stage.end_frame]
         if not crossing:
             bare.append(stage.end_frame)

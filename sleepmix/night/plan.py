@@ -263,18 +263,27 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
     symptom is a night that is reproducible until the sources folder changes
     and then silently is not.
 
-    **With no sources at all, the stride is one, not two.** ``Voice.key`` —
-    and so every voice's own material and decay noise — is derived from
-    ``index`` alone, so an unconditional stride of two would still change
-    every voice's identity even on a night with nothing to pair, and this
-    phase is meant to be additive: an empty ``ctx.sources`` must plan
-    *exactly* what Phase 1 planned. The stride is decided once, from
-    ``ctx.sources``, not per step — ``ctx.sources`` is fixed for the whole
-    night, so this is a per-context constant, not a per-step branch, and it
-    does not weaken the "every draw happens on every step" rule above: that
-    rule exists so the stride cannot depend on something two different
-    windows might resolve differently, and a night either has sources or it
-    does not, identically in every window of it.
+    **With no sources at all, both the stride and the draw shape fall back
+    to exactly Phase 1's.** ``Voice.key`` — and so every voice's own
+    material and decay noise — is derived from ``index`` alone, so an
+    unconditional stride of two would still change every voice's identity
+    even on a night with nothing to pair. That is only half of it, though:
+    Phase 1 drew four things a step (lifetime, interval slot, texture, the
+    birth gap); a pairing step draws eight (those four, plus the loop pick,
+    the ghost-pitch pick, the outlive roll and the outlive factor). Drawing
+    the extra four unconditionally, even with no sources to spend them on,
+    still shifts *where in the generator's own state* the birth-gap draw
+    lands relative to Phase 1 — so the gap value differs, the cursor walks
+    to a different place, and every voice after the first diverges from
+    what an empty ``ctx.sources`` is supposed to reproduce *exactly*.
+
+    So both decisions — the stride, and whether to draw the pair-only four
+    — are made once, from ``has_sources``, before the walk starts. Neither
+    weakens the "every draw happens on every step" rule above: that rule
+    exists so a decision cannot depend on something two different windows
+    might resolve differently, and ``ctx.sources`` is fixed for the whole
+    night and identical in every window of it. A per-context constant is
+    not a per-step branch.
     """
     if to_frame <= from_frame:
         return []
@@ -284,7 +293,8 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
     night_frames = max(int(ctx.night_length_s * sr), 1)
     intervals = interval_set(ctx.moon_phase)
     schedule = schedule_sources(ctx, sr, night_frames)
-    stride = 2 if ctx.sources else 1
+    has_sources = bool(ctx.sources)
+    stride = 2 if has_sources else 1
 
     voices: list[Voice] = []
     base_decay = StemDecayConfig()
@@ -308,10 +318,19 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
         # would be steering the schedule as well as the pitch.
         slot = int(rng.choice(len(_INTERVALS_CENTS)))
         synth_texture = str(rng.choice(TEXTURES[:2]))
-        loop_pick = int(rng.integers(0, 1024))
-        pitch_pick = int(rng.integers(0, 1024))
-        outlive_roll = float(rng.random())
-        outlive_factor = float(rng.uniform(OUTLIVE_MIN, OUTLIVE_MAX))
+        # These four exist only to serve a pair, and are drawn only when
+        # ``has_sources`` — a per-context constant, not a per-step branch,
+        # for the same reason ``stride`` is one. Drawing them unconditionally
+        # would still be "every draw happens on every step" in letter, but it
+        # would shift where the birth-gap draw lands in the generator's own
+        # state on a night with nothing to pair them with, which is exactly
+        # the class of drift rule 2 exists to prevent — it would silently
+        # move Phase 1's own schedule, not just its voices' keys.
+        if has_sources:
+            loop_pick = int(rng.integers(0, 1024))
+            pitch_pick = int(rng.integers(0, 1024))
+            outlive_roll = float(rng.random())
+            outlive_factor = float(rng.uniform(OUTLIVE_MIN, OUTLIVE_MAX))
         gap_s = _birth_gap_s(arc.density, rng)
 
         # The root falls as the night goes; the interval sits on top of it.
@@ -322,6 +341,19 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
         next_cursor = cursor + max(int(gap_s * sr), 1)
         stage = stage_at(schedule, cursor)
         emitted: list[Voice] = []
+
+        # Every stage boundary this step's gap would cross without a later
+        # voice being born before it: whatever this step emits is the last
+        # chance to cover it, so it must reach past the *furthest* one, not
+        # just its own stage's end. A gap sparse enough to skip a whole
+        # stage still leaves every seam it skipped covered, because the
+        # covering voice's interval is contiguous from ``cursor`` onward
+        # and so passes through all of them on the way to the furthest.
+        # Computed unconditionally — it is pure arithmetic on ``schedule``,
+        # not a draw, so computing it here costs nothing on a night with no
+        # sources, where it is always empty (``schedule`` is empty too).
+        seams = [s.end_frame for s in schedule[:-1]
+                if cursor < s.end_frame <= next_cursor]
 
         if stage is None:
             emitted.append(Voice(
@@ -343,37 +375,16 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
                     gain=source_gain))
 
             if profile.pitch_set and (1.0 - ratio) > MIN_AUDIBLE_RATIO:
-                # Every stage boundary this step's gap would cross without
-                # a later voice being born before it: this ghost is the
-                # last chance to cover it, so it must reach past the
-                # *furthest* one, not just its own stage's end. A gap
-                # sparse enough to skip a whole stage still leaves every
-                # seam it skipped covered, because the ghost's interval is
-                # contiguous from ``cursor`` onward and so passes through
-                # all of them on the way to the furthest.
-                seams = [s.end_frame for s in schedule[:-1]
-                        if cursor < s.end_frame <= next_cursor]
-
                 ghost_frames = n_frames
                 if not seams and outlive_roll < OUTLIVE_CHANCE:
                     # Occasionally, away from a handover: a flourish, not
                     # the rule.
                     ghost_frames = int(ghost_frames * outlive_factor)
-                # The artistic cap on a ghost's own length applies only to
-                # its natural or occasionally-outliving lifetime. Applying
-                # it *before* the handover extension below (rather than
-                # after) is what keeps it from being able to undo that
-                # extension — the systematic cover at a handover is not
-                # tunable to nothing by a cap that was never meant to
-                # govern it.
+                # The artistic cap applies only to the ghost's natural or
+                # occasionally-outliving lifetime, never to the handover
+                # cover below — see the cover step after this branch for
+                # why the cap cannot be allowed to reach that far.
                 ghost_frames = min(ghost_frames, int(MAX_VOICE_S * sr * 3))
-                if seams:
-                    # Systematically at a handover: reach past the seam so
-                    # it is never bare. This is the structural device that
-                    # hides the seam, and it overrides the cap above.
-                    ghost_frames = max(
-                        ghost_frames,
-                        max(seams) - cursor + int(HANDOVER_COVER_S * sr))
 
                 base_hz = profile.pitch_set[pitch_pick % len(profile.pitch_set)]
                 emitted.append(Voice(
@@ -391,6 +402,23 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
                     index=index, birth_frame=cursor, n_frames=n_frames,
                     pitch_hz=_pitch_hz(root_hz, cents + descent),
                     texture=synth_texture, decay=decay))
+
+        if seams and emitted:
+            # Systematically at a handover: whatever is still sounding
+            # across the seam is what hides it — a ghost, an in-progress
+            # source loop, or (a pitchless source is ordinary, not
+            # exceptional — see ``pitch.py``) the synthesis fallback. The
+            # cover is not a property of any one texture, so it does not
+            # assume a ghost exists: it stretches whichever *emitted* voice
+            # is already longest-lived, the same gesture the design already
+            # sanctions for a ghost outliving its source. Done last, after
+            # every cap above, so nothing tunable can shrink it back down —
+            # the systematic cover at a handover is not tunable to nothing
+            # without reintroducing the event it exists to hide.
+            reach = max(seams) - cursor + int(HANDOVER_COVER_S * sr)
+            longest = max(range(len(emitted)), key=lambda i: emitted[i].n_frames)
+            if emitted[longest].n_frames < reach:
+                emitted[longest] = replace(emitted[longest], n_frames=reach)
 
         for voice in emitted:
             if voice.birth_frame < to_frame and (
