@@ -35,6 +35,12 @@ _FALLBACK_BED_DB = -38.0
 # How much of a radio feed's between-transmission static survives the gate.
 _STATIC_GAIN = 0.22
 
+# A transient sink failure (one dropped audio-device write) is absorbed and
+# the night carries on. This many *consecutive* failures means the device is
+# gone, not hiccuping, and there is nothing left to degrade to — so ``run``
+# ends the night rather than spinning on a dead output forever.
+_MAX_CONSECUTIVE_SINK_FAILURES = 3
+
 
 def room_directory() -> str:
     """Where a comfort show goes. Created on demand.
@@ -118,18 +124,34 @@ class NightPlayer:
         ``sink`` receives each block. The CLI passes one that writes to the
         sound device; the tests pass one that appends to a list, which is what
         makes every degradation path above assertable without hardware.
+
+        A ``sink`` failure is treated the same as a renderer failure: a
+        single one is absorbed and the loop moves on to the next block. Only
+        ``_MAX_CONSECUTIVE_SINK_FAILURES`` in a row ends the night, and even
+        then this returns quietly rather than raising — a dead device is not
+        a reason for a traceback at 3 AM.
         """
         if sink is None:
             raise ValueError("run needs a sink to hand blocks to")
 
         index = 0
+        consecutive_sink_failures = 0
         try:
             while max_blocks is None or index < max_blocks:
                 try:
                     block = self.mixed_block(index)
                 except Exception:
                     block = self.fallback_block(index)
-                sink(block)
+
+                try:
+                    sink(block)
+                except Exception:
+                    consecutive_sink_failures += 1
+                    if consecutive_sink_failures >= _MAX_CONSECUTIVE_SINK_FAILURES:
+                        return
+                else:
+                    consecutive_sink_failures = 0
+
                 index += 1
         finally:
             for source in (self.room, self.radio):

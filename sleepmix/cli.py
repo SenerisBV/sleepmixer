@@ -192,7 +192,11 @@ def night(seconds: int | None) -> None:
     with sd.OutputStream(samplerate=sr, channels=2, dtype="float32") as out:
         try:
             player.run(max_blocks=max_blocks, sink=lambda b: out.write(b.data))
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, Exception):
+            # A night that ends should end silently, not with a stack trace.
+            # ``run`` itself already degrades everything degradable; this is
+            # the last-resort catch for whatever it could not — Ctrl-C, or a
+            # sink failure that outlasted the retry budget inside ``run``.
             pass
 
 

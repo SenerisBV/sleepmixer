@@ -14,7 +14,8 @@ import ast
 from pathlib import Path
 
 
-def resolved_imports(path: Path, repo_root: Path) -> set[str]:
+def resolved_imports(path: Path, repo_root: Path,
+                     module_scope_only: bool = False) -> set[str]:
     """Resolve all imports in a file to fully-qualified dotted module names.
 
     The returned set contains module names as they would appear in absolute
@@ -24,6 +25,14 @@ def resolved_imports(path: Path, repo_root: Path) -> set[str]:
     Args:
         path: Path to the Python file to analyze (must be absolute)
         repo_root: Root of the repository containing the file
+        module_scope_only: If True, only consider ``Import``/``ImportFrom``
+            nodes that appear directly in the module body — not ones nested
+            inside a function, class, or other block. This is for callers
+            enforcing a "may import lazily, may not import at module scope"
+            rule: an import inside a function only runs when that function is
+            called, so it can be a deliberate, contained integration seam in
+            a way a top-level import — which runs unconditionally on
+            ``import`` — cannot be.
 
     Returns:
         Set of fully-qualified module names that the file imports
@@ -43,7 +52,9 @@ def resolved_imports(path: Path, repo_root: Path) -> set[str]:
 
     imports = set()
 
-    for node in ast.walk(tree):
+    nodes = tree.body if module_scope_only else ast.walk(tree)
+
+    for node in nodes:
         if isinstance(node, ast.Import):
             # ``import numpy`` or ``import sleepmix.audio as a``
             for alias in node.names:
@@ -88,8 +99,8 @@ def resolved_imports(path: Path, repo_root: Path) -> set[str]:
     return imports
 
 
-def forbidden_imports(path: Path, repo_root: Path,
-                      forbidden: set[str]) -> set[str]:
+def forbidden_imports(path: Path, repo_root: Path, forbidden: set[str],
+                      module_scope_only: bool = False) -> set[str]:
     """Find imports that match any forbidden module name.
 
     An import is forbidden if it equals or is a dotted-prefix descendant of
@@ -102,11 +113,15 @@ def forbidden_imports(path: Path, repo_root: Path,
         path: Path to the Python file to analyze
         repo_root: Root of the repository
         forbidden: Set of module names that are not allowed
+        module_scope_only: See ``resolved_imports`` — passed straight
+            through, for callers that only want to forbid the module-scope
+            spelling and deliberately allow a function-local one.
 
     Returns:
         Set of resolved imports that violate the forbidden list (empty if none)
     """
-    resolved = resolved_imports(path, repo_root)
+    resolved = resolved_imports(path, repo_root,
+                                module_scope_only=module_scope_only)
     violations = set()
 
     for imp in resolved:

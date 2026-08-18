@@ -71,22 +71,33 @@ def test_no_shipped_module_imports_the_night_package():
 
     Uses AST parsing to catch all import spellings, not just substrings.
 
-    ``cli.py`` is the one deliberate exception: it hosts the ``sleepmix
-    night`` subcommand (task 9), whose whole purpose is to wire the night
-    package into the CLI. A subcommand is a legitimate integration seam, not
-    a layering leak — the pipeline modules (render, config, effects, ...)
-    stay entirely ignorant of ``sleepmix.night``, so the subsystem is still
-    removable by deleting ``sleepmix/night/`` and this one subcommand.
+    ``cli.py`` is the one deliberate exception, and only in one specific
+    shape: it hosts the ``sleepmix night`` subcommand (task 9), whose whole
+    purpose is to wire the night package into the CLI. But every one of its
+    ``sleepmix.night`` imports lives inside the ``night()`` function body,
+    never at module scope — that is this codebase's standing
+    graceful-degradation pattern (the same one ``ui`` uses for ``uvicorn``),
+    and it is what makes the exception safe: a function-local import only
+    runs when the subcommand is invoked, so ``import sleepmix`` and
+    ``sleepmix render`` keep working even with ``sleepmix/night/`` deleted,
+    and only ``sleepmix night`` itself would break. A *module-scope* import
+    of ``sleepmix.night`` in ``cli.py`` would not have that property — it
+    would run on every ``import sleepmix.cli`` — so that spelling stays
+    forbidden even for this file. The pipeline modules (render, config,
+    effects, ...) get the stricter, unconditional check: no
+    ``sleepmix.night`` import of any kind, anywhere in the file.
     """
     sleepmix_root = Path(__file__).parent.parent / "sleepmix"
     repo_root = sleepmix_root.parent
     forbidden = {"sleepmix.night"}
-    exempt = {"cli.py"}
+    # Only cli.py gets the relaxed, module-scope-only check; everything else
+    # is swept at every scope.
+    module_scope_only_for = {"cli.py"}
 
     for module in sorted(sleepmix_root.glob("*.py")):
-        if module.name in exempt:
-            continue
-        violations = forbidden_imports(module, repo_root, forbidden)
+        violations = forbidden_imports(
+            module, repo_root, forbidden,
+            module_scope_only=module.name in module_scope_only_for)
         assert not violations, (
             f"Module {module.name} imports the night package: {violations}, "
             "violating the package layering rule."

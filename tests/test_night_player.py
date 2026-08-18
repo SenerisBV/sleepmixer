@@ -81,6 +81,30 @@ def test_a_speech_source_that_raises_costs_only_its_own_voice():
     assert np.array_equal(music_only.data, with_broken_radio.data)
 
 
+def test_a_first_source_failing_does_not_block_the_second():
+    """The mirror of the case above. There the failing source (radio) was
+    read *second*, so a surviving-but-silent room proved nothing about
+    whether the loop kept going after a failure. Here the failing source
+    (room) is read *first* — proving the try/except is per-source rather
+    than wrapped around the whole pass, since only that lets the radio's
+    loud content still reach the output.
+
+    Compared by RMS energy rather than peak: adding the radio layer to one
+    specific sample can happen to partially cancel the music there even
+    while raising the level everywhere else, so the block-wide peak is not a
+    reliable witness that the layer arrived — the energy is.
+    """
+    silent = _player(room=ExplodingSource(SR)).mixed_block(4)
+    loud_radio = _player(room=ExplodingSource(SR),
+                         radio=LoudSource(SR)).mixed_block(4)
+    assert not np.array_equal(silent.data, loud_radio.data)
+
+    def rms(buf):
+        return float(np.sqrt(np.mean(buf.data.astype(np.float64) ** 2)))
+
+    assert rms(loud_radio) > rms(silent)
+
+
 def test_both_speech_sources_failing_still_produces_music():
     block = _player(room=ExplodingSource(SR),
                     radio=ExplodingSource(SR)).mixed_block(4)
@@ -138,10 +162,44 @@ def test_run_falls_back_rather_than_stopping_when_rendering_fails():
     assert all(np.abs(b.data).max() < 0.2 for b in delivered)
 
 
+def test_run_gives_up_after_consecutive_sink_failures_rather_than_looping_forever():
+    """Degrade silently, all the way down: a sink that never recovers must
+    not spin the loop forever. ``max_blocks=None`` makes that provable —
+    nothing but the consecutive-failure threshold can end this run."""
+    calls = {"n": 0}
+
+    def always_fails(_block):
+        calls["n"] += 1
+        raise RuntimeError("device disconnected")
+
+    _player().run(max_blocks=None, sink=always_fails)
+    assert calls["n"] == 3
+
+
+def test_run_absorbs_a_single_transient_sink_failure_and_continues():
+    """A buffer underrun is not a dead device. One failure is absorbed —
+    the loop moves on to the next block rather than stopping — so the night
+    still runs for its full requested length despite the hiccup."""
+    attempts = {"n": 0}
+    delivered = []
+
+    def flaky(block):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise RuntimeError("buffer underrun")
+        delivered.append(block)
+
+    _player().run(max_blocks=4, sink=flaky)
+    assert attempts["n"] == 4
+    assert len(delivered) == 3
+
+
 def test_run_closes_its_speech_sources():
     room = LoudSource(SR)
-    _player(room=room).run(max_blocks=1, sink=lambda _b: None)
+    radio = LoudSource(SR)
+    _player(room=room, radio=radio).run(max_blocks=1, sink=lambda _b: None)
     assert room.closed
+    assert radio.closed
 
 
 def test_the_room_directory_lives_under_the_data_dir(tmp_path, monkeypatch):
