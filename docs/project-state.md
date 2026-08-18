@@ -165,6 +165,40 @@ example must be correct. That is the same lesson this document already
 records once, at length, under Plan 4a's false safety proof: a plan document
 is prose with the authority of code and none of the checking.
 
+### The reverb pre-delay is trimmed in one caller and not the other, on purpose
+
+`effects.apply_reverb`'s pedalboard backend shifts the *whole* buffer it is
+given — dry signal included — forward by its pre-delay, and
+`effects.reverb_dry_offset` exists to report exactly how far. Two places in
+`night/` call `apply_reverb` on a buffer they then need to reason about
+sample-accurately, and they land on opposite answers about whether to correct
+for that shift, and both are right.
+
+`night/stream.py`'s `_rendered` trims it. A voice is cached once and then
+sliced by `NightStream.block` using `voice.birth_frame` as the frame that
+buffer's index 0 corresponds to — `offset = max(voice.birth_frame - start,
+0)` and `take_from = max(start - voice.birth_frame, 0)` both assume that
+identity directly. Left uncorrected, every voice's cached buffer would open
+with roughly 40 ms of pre-delay silence the slicing arithmetic knows nothing
+about, so frame 0 would quietly stop being the voice's actual birth and every
+block that sliced into it would be off by that amount. The fix is one call to
+`reverb_dry_offset` before the wet buffer is cached (Ruling 17 above).
+
+`night/speech.py`'s `through_a_wall` does not trim it, and that is not the
+same bug left unfixed — it is a different situation reaching a different
+correct answer. A room source has no `birth_frame` and nothing downstream
+indexes into its output expecting a particular sample to be a particular
+moment: `player.py`'s `_speech` calls `through_a_wall` on whatever
+`RoomSource.read(n_frames)` returns for *this* block and sums it straight
+into the mix, block after block, with no frame-accurate identity to preserve
+between calls. It is continuous background — the TV in the next room — not an
+onset-critical signal the way a voice's birth is. A 40 ms shift in a
+wall-muffled murmur has nothing on the other side of the wall to be
+misaligned against. Both call sites are reading the same true fact about
+`apply_reverb`; only one of them is compensating for something that would
+otherwise be a bug, because only one of them has a contract that a shifted
+frame 0 would violate.
+
 ### Three guards on this branch looked like protection and were not
 
 - **The rule that no shipped pipeline module may import `sleepmix.night` was
@@ -329,16 +363,28 @@ other three.
   the tone generator so a block's tone picks up where the previous block's
   left off, which nothing in the current per-block generation model supplies.
   Deferred rather than shipped broken.
-- **Wind is mapped to nothing.** The spec's steering table names one row per
-  input, and wind's is "depth of the drones' slow amplitude drift" — but
-  drift lives entirely inside `night/palette.py`'s `_slow_drift`, which
-  receives only `(n, sr, rng)` and no `NightContext` at all. Threading a
-  context into the palette to reach it would put steering logic in a second
-  place, against the rule stated at the top of `night/clock.py` — "steering
-  enters here and only here" — and enforced nowhere but by that rule being
-  followed. Wind is therefore the one row in the steering table that does
-  nothing in Phase 1; it is named here so it is not mistaken for a working
-  mapping.
+- **Two of the six steering rows do nothing, as of this commit — not one.**
+  Wind is mapped to nothing: the spec's steering table gives it "depth of the
+  drones' slow amplitude drift," but drift lives entirely inside
+  `night/palette.py`'s `_slow_drift`, which receives only `(n, sr, rng)` and
+  no `NightContext` at all. Threading a context into the palette to reach it
+  would put steering logic in a second place, against the rule stated at the
+  top of `night/clock.py` — "steering enters here and only here" — and
+  enforced nowhere but by that rule being followed. **Moon phase is mapped to
+  nothing either, and this was missed in an earlier pass of this document.**
+  `NightContext.moon_phase` is computed in `sky.py` and carried into the
+  context, and then read by nobody: `clock.py`'s `_brightness_multiplier`
+  reads cloud, rain, pressure trend and season and never touches it, and
+  `plan.py` draws a voice's interval from the fixed `_INTERVALS_CENTS` tuple
+  with a uniform `rng.choice` — nothing narrows or widens that set by phase.
+  The spec's own row for it is "width of the interval set." **This is worth
+  correcting loudly rather than quietly, because this document exists
+  specifically to prevent false confidence about what is implemented, and an
+  earlier version of this section stated the opposite of the truth about a
+  feature the operator asked for by name.** Moon phase is scheduled for the
+  branch's final fix wave; if that lands, this paragraph is describing a gap
+  that has since closed, and should be read as the state as of this commit
+  rather than a permanent one.
 - **The stream does not stop; it holds.** The design spec's "Control
   surface" section states the intended behaviour plainly: "Phase 1 descends
   toward near-silence over an assumed night and stops." The shipped

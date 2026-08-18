@@ -173,10 +173,11 @@ document already spent its first section on: **decay is a pure function of
 progress.** That fact was engineered in for a completely different reason —
 so a preview could cost one iteration instead of twenty minutes — and it turns
 out to be exactly the guarantee an unbounded stream needs, with one word
-changed. Where the top of this document reads "iteration *i* does not depend
-on iterations 1..*i*-1," the night's own invariant reads: **any block of the
-night's music must be renderable without rendering what precedes it, and must
-be bit-identical to the corresponding slice of a continuous render.** An
+changed. Where the top of this document says of the purity property that
+"repetition 400 of 1200 does not need repetitions 1 through 399 to have been
+computed first," the night's own invariant reads: **any block of the night's
+music must be renderable without rendering what precedes it, and must be
+bit-identical to the corresponding slice of a continuous render.** An
 eight-hour stream cannot be a buffer — it has to be produced in pieces ahead of
 playback — and a piece is only usable if it is correct in isolation.
 `sleepmix/night/stream.py`'s `NightStream.block(index)` is that piece, and
