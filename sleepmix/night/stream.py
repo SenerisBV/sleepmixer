@@ -3,8 +3,8 @@
 Nothing live reaches this module and nothing live may be added to it. That is
 the boundary the design's central invariant is drawn at — a block of *music*
 rendered in isolation is bit-identical to the same block rendered in sequence —
-and it is only checkable because the narrated layer is mixed at playback
-instead of here.
+and it is only checkable because the speech layer is mixed at playback instead
+of here.
 
 **A voice is rendered once, whole, and then sliced.** Blocks are seconds and
 voices are minutes, so every voice spans several blocks. Teaching the decay
@@ -31,7 +31,7 @@ import numpy as np
 from ..audio import AudioBuffer
 from ..config import ReverbConfig, SoundbedConfig
 from ..disintegration import apply_decay
-from ..effects import apply_reverb
+from ..effects import apply_reverb, reverb_dry_offset
 from ..soundbed import colored_noise
 from ..util import db_to_amp, iteration_rng
 from .clock import arc_at
@@ -43,7 +43,8 @@ BLOCK_S = 10.0
 
 # How many rendered voices to keep. A voice is at most four minutes, blocks are
 # ten seconds, and a handful sound at once — so this holds every voice that can
-# still be needed several times over, and evicts in birth order.
+# still be needed several times over. Eviction is least-recently-used, via
+# ``move_to_end`` on every access.
 _CACHE_SIZE = 24
 
 # Reverb tail kept past a voice's death, so the room does not stop with it.
@@ -55,13 +56,30 @@ _BED_BASE_DB = -34.0
 _BED_RAIN_BOOST_DB = 6.0
 
 
+def _soft_lowpass(x: np.ndarray, sr: int, cutoff_hz: float) -> np.ndarray:
+    """Roll ``x`` off above ``cutoff_hz``, gently and without ringing.
+
+    Shapes the spectrum directly rather than running an IIR filter, the same
+    approach ``palette._noise_band`` uses — a resonant filter rung by noise is
+    an easy way to produce a whistle, and a whistle at 3 AM is the opposite of
+    the point.
+    """
+    n = len(x)
+    spectrum = np.fft.rfft(x)
+    freqs = np.fft.rfftfreq(n, 1.0 / sr)
+    shape = 1.0 / (1.0 + (freqs / max(cutoff_hz, 1.0)) ** 2)
+    return np.fft.irfft(spectrum * shape, n=n).astype(np.float32)
+
+
 class NightStream:
     """The music layer, addressable one block at a time.
 
     ``block(i)`` is a pure function of ``(ctx, sr, block_s, i)``. The cache is
     an optimisation and is never allowed to be an input: evicting it changes
-    nothing about what comes out, which the tests check by rendering the same
-    block from two different instances.
+    nothing about what comes out. The tests check that two ways — rendering
+    the same block from two different instances, and rendering an early block
+    again from one instance after its voices have certainly been evicted from
+    that instance's own cache.
     """
 
     def __init__(self, ctx: NightContext, sr: int = 44100,
@@ -91,7 +109,18 @@ class NightStream:
 
         rng = iteration_rng(self.ctx.seed, voice.key, 1)
         decayed = apply_decay(padded, 1.0, voice.decay, rng)
-        wet = apply_reverb(decayed, self.reverb)
+        reverbed = apply_reverb(decayed, self.reverb)
+
+        # apply_reverb's pedalboard backend prepends predelay_ms of silence to
+        # the whole buffer, dry included, so frame 0 is no longer this voice's
+        # birth. reverb_dry_offset measures exactly how much and we trim it
+        # back off — keeping the tail, losing only the leading shift.
+        offset = reverb_dry_offset(self.reverb, self.sr)
+        trimmed = reverbed.data[offset:] if offset > 0 else reverbed.data
+        if trimmed.shape[0] < voice.n_frames:
+            trimmed = np.pad(
+                trimmed, ((0, voice.n_frames - trimmed.shape[0]), (0, 0)))
+        wet = AudioBuffer(trimmed.astype(np.float32), self.sr)
 
         self._cache[voice.index] = wet
         self._cache.move_to_end(voice.index)
@@ -107,7 +136,7 @@ class NightStream:
         restart its phase at every seam and click. Binaural belongs to a later
         plan that can carry absolute time into the generator.
         """
-        if self.bed.noise_type in (None, "", "none"):
+        if not self.bed.enabled or self.bed.noise_type in (None, "", "none"):
             return np.zeros((self.block_frames, 2), dtype=np.float32)
 
         arc = arc_at(index * self.block_frames / self.sr, self.ctx)
@@ -120,6 +149,11 @@ class NightStream:
         rng = iteration_rng(self.ctx.seed, "night:bed", index)
         mono = colored_noise(self.block_frames, self.sr,
                              self.bed.noise_type, rng)
+        # The bed must darken with the arc too, or late in the night — once
+        # the voices are dim and sparse — the bed's untouched spectrum is most
+        # of what is left, and the mix gets brighter in character exactly when
+        # the arc wants it darkest.
+        mono = _soft_lowpass(mono, self.sr, arc.brightness_hz)
         return (mono * db_to_amp(level_db)).astype(np.float32)[:, None] \
             * np.ones((1, 2), dtype=np.float32)
 

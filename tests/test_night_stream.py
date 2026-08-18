@@ -5,11 +5,16 @@ its predecessors. If that ever stops holding, block independence was a hope
 rather than a property — and the most likely cause is something live having
 been routed into this module, which is exactly what the last test here forbids.
 """
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from sleepmix.night.context import NightContext, Weather
+from sleepmix.night.plan import plan_voices
 from sleepmix.night.stream import BLOCK_S, NightStream
+
+from .import_guard import forbidden_imports
 
 SR = 22050
 
@@ -101,8 +106,36 @@ def test_the_voice_cache_does_not_grow_without_bound():
     assert len(stream._cache) <= 24
 
 
+def test_a_voice_evicted_from_the_cache_still_renders_the_same():
+    """Eviction is invisible to correctness: cache size is not part of the contract."""
+    stream = _stream()
+    first = stream.block(0)
+
+    born_at_zero = {v.index for v in
+                    plan_voices(stream.ctx, stream.sr, 0, stream.block_frames)}
+    assert born_at_zero  # sanity: block 0 always has at least one voice
+
+    for index in range(1, 400):
+        stream.block(index)
+    assert len(stream._cache) <= 24
+    # Confirm eviction actually happened for block 0's voices, rather than
+    # merely hoping it did.
+    assert not (born_at_zero & set(stream._cache))
+
+    again = stream.block(0)
+    assert np.array_equal(first.data, again.data)
+
+
 def test_the_stream_never_touches_a_speech_source():
     """Nothing live may enter the deterministic layer."""
     import sleepmix.night.stream as stream_module
-    source = open(stream_module.__file__).read()
-    assert "speech" not in source.lower()
+    stream_path = Path(stream_module.__file__)
+    repo_root = stream_path.parent.parent.parent  # sleepmix/night/stream.py -> root
+
+    violations = forbidden_imports(
+        stream_path, repo_root, {"sleepmix.night.speech"})
+    assert not violations, (
+        f"stream.py imports the speech layer: {violations}. The speech layer "
+        "is mixed at playback, not here — that is what makes block "
+        "independence testable at all."
+    )
