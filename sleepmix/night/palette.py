@@ -1,10 +1,14 @@
-"""Two generators, and the fade that keeps either from being an event.
+"""Two generators, a prepared loop, and the fade that keeps any of them from
+being an event.
 
-Neither of these is trying to sound like a synthesiser. They are trying to
-sound like something that was recorded and has since eroded, because that is
-the family this program belongs to — and because everything they produce is
-about to be handed to ``apply_decay``, which was written for tape and behaves
-best on material with some noise and some drift already in it.
+The synthesised textures are not trying to sound like a synthesiser. They are
+trying to sound like something that was recorded and has since eroded,
+because that is the family this program belongs to — and because everything
+they produce is about to be handed to ``apply_decay``, which was written for
+tape and behaves best on material with some noise and some drift already in
+it. A ``"source"`` voice is the other half of that story: not synthesised at
+all, but a prepared loop played back and tiled to fill the voice's life, so
+that the ghost the planner paired it with has something real to fade from.
 
 The hard rule is **no transients**. Every voice fades in and out over
 ``FADE_S`` seconds, and the fade is applied here rather than by the caller so
@@ -12,11 +16,14 @@ that no future caller can forget it.
 """
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import numpy as np
 
-from ..audio import AudioBuffer
+from ..audio import AudioBuffer, load_audio
 from ..util import iteration_rng
 from .plan import Voice
+from .sources import SourceProfile
 
 # Long enough that arrival and departure are never noticed as moments. This is
 # a taste value and a first draft.
@@ -53,6 +60,75 @@ _DRIFT_MIN_HZ, _DRIFT_MAX_HZ = 0.013, 0.11
 # blocks — the densest, loudest stretch of a night — puts the worst pre-clip
 # peak at 0.76.
 _PEAK = 0.20
+
+# Prepared loops are small — seconds each — but a night asks for one several
+# times a minute for eight hours. Bounded by bytes for the same reason
+# `stream.py`'s voice cache is: a count is not a memory budget. Phase 1's
+# voice cache was specified as 24 entries and turned out to hold 1.3 GB.
+_LOOP_CACHE_BYTES = 128 * 1024 * 1024
+_loop_cache: "OrderedDict[tuple[str, int], AudioBuffer]" = OrderedDict()
+_loop_cache_bytes = 0
+
+
+def _loop_for(path: str, sr: int) -> AudioBuffer | None:
+    """A prepared loop at ``sr``, or ``None`` if it cannot be read.
+
+    Module-level and shared across every ``NightStream`` in the process. That
+    is safe for the same reason it is safe in ``stream.py``: the key is
+    ``(path, sr)``, so two nights at different sample rates never collide on
+    an entry, and two nights at the same sample rate reading the same path
+    are reading the same bytes on disk and should see the same buffer. The
+    cache is an optimisation and never an input: evicting it changes nothing
+    about what comes out, which is what keeps block independence true — a
+    render is a pure function of ``(path, sr)`` via the file on disk, not of
+    whatever else happens to be resident in the cache at the time.
+    """
+    global _loop_cache_bytes
+    key = (path, sr)
+    hit = _loop_cache.get(key)
+    if hit is not None:
+        _loop_cache.move_to_end(key)
+        return hit
+    try:
+        buf = load_audio(path, sr=sr).to_stereo()
+    except Exception:
+        return None
+    if buf.n_frames <= 0:
+        return None
+
+    _loop_cache[key] = buf
+    _loop_cache_bytes += buf.data.nbytes
+    while len(_loop_cache) > 1 and _loop_cache_bytes > _LOOP_CACHE_BYTES:
+        _, evicted = _loop_cache.popitem(last=False)
+        _loop_cache_bytes -= evicted.data.nbytes
+    return buf
+
+
+def _source(voice: Voice, n: int, sr: int,
+           profiles: tuple[SourceProfile, ...]) -> np.ndarray | None:
+    """A prepared loop, tiled to ``n`` frames. ``None`` if unavailable.
+
+    Every way this can fail — no matching profile, an index past the end, a
+    file that has moved since `prepare` ran, a profile naming a zero-frame
+    loop — costs this voice and nothing else. A person moves folders, and a
+    night should survive it.
+    """
+    if n <= 0 or not profiles:
+        return None
+    profile = next((p for p in profiles if p.source_id == voice.source_id),
+                   None)
+    if profile is None:
+        return None
+    if not (0 <= voice.loop_index < len(profile.loop_paths)):
+        return None
+    loop = _loop_for(profile.loop_paths[voice.loop_index], sr)
+    if loop is None or loop.n_frames <= 0:
+        return None
+
+    reps = int(np.ceil(n / loop.n_frames))
+    tiled = np.tile(loop.data, (reps, 1))[:n]
+    assert len(tiled) == n
+    return tiled.astype(np.float32)
 
 
 def fade_envelope(n: int, sr: int) -> np.ndarray:
@@ -137,29 +213,40 @@ def _noise_band(n: int, sr: int, pitch_hz: float,
     return band * _slow_drift(n, sr, rng)
 
 
-def render_voice(voice: Voice, sr: int, seed: int) -> AudioBuffer:
+def render_voice(voice: Voice, sr: int, seed: int,
+                 profiles: tuple[SourceProfile, ...] = ()) -> AudioBuffer:
     """Generate one voice's raw material: stereo, faded, not yet decayed.
 
-    The two channels are generated from the same draw with independent drift so
-    the voice has some width without being two unrelated sounds.
+    The two synthesised textures generate their channels from the same draw
+    with independent drift, so the voice has some width without being two
+    unrelated sounds. A ``"source"`` voice instead plays back a prepared loop
+    named by ``voice.source_id``/``voice.loop_index`` out of ``profiles``,
+    tiled to fill its life; any way that can fail — no matching profile, a
+    moved file, an out-of-range index — is silence, not a raised exception,
+    same as every other read from disk on this path.
+
+    ``voice.gain`` scales *every* texture, not only source voices: the
+    source/ghost pair's balance is meaningless if only one side of it
+    responds to the balance.
     """
     n = max(voice.n_frames, 1)
     rng = iteration_rng(seed, voice.key, 0)
 
-    if voice.texture == "drone":
-        generate = _drone
-    elif voice.texture == "noiseband":
-        generate = _noise_band
+    if voice.texture == "source":
+        stereo = _source(voice, n, sr, profiles)
+        if stereo is None:
+            return AudioBuffer(np.zeros((n, 2), dtype=np.float32), sr)
+    elif voice.texture in ("drone", "noiseband"):
+        generate = _drone if voice.texture == "drone" else _noise_band
+        left = generate(n, sr, voice.pitch_hz, rng)
+        right = generate(n, sr, voice.pitch_hz, rng)
+        stereo = np.stack([left, right], axis=1)
     else:
         raise ValueError(f"unknown texture: {voice.texture!r}")
 
-    left = generate(n, sr, voice.pitch_hz, rng)
-    right = generate(n, sr, voice.pitch_hz, rng)
-    stereo = np.stack([left, right], axis=1)
-
     peak = float(np.abs(stereo).max())
     if peak > 0:
-        stereo = stereo * (_PEAK / peak)
+        stereo = stereo * (_PEAK * voice.gain / peak)
     stereo *= fade_envelope(n, sr)[:, None]
 
     return AudioBuffer(stereo.astype(np.float32), sr)
