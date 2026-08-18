@@ -510,6 +510,13 @@ def test_blocks_with_sources_render_in_any_order(tmp_path):
 
 
 def test_a_profile_whose_loop_has_gone_costs_its_voice_not_the_block(tmp_path):
+    """A moved/missing loop file never actually reaches an exception here:
+    `_loop_for`'s own `try/except` absorbs the read failure and returns
+    `None`, so `_source` returns `None` too and the voice renders as
+    silence by construction — this never exercises `stream.summed`'s own
+    per-voice `try/except`, only `_loop_for`'s. See
+    `test_one_bad_source_voice_costs_only_itself` below for a case that
+    forces an exception past that point, which this test cannot."""
     from sleepmix.night.sources import SourceProfile
     ctx = _source_context(tmp_path)
     broken = replace(ctx, sources=(SourceProfile(
@@ -520,6 +527,50 @@ def test_a_profile_whose_loop_has_gone_costs_its_voice_not_the_block(tmp_path):
     block = NightStream(broken, sr=SR).block(6)
     assert block.n_frames == int(BLOCK_S * SR)
     assert np.all(np.isfinite(block.data))
+
+
+def test_one_bad_source_voice_costs_only_itself(tmp_path, monkeypatch):
+    """The gap the test above names: exercises `stream.summed`'s own
+    per-voice `try`/`except` specifically, with sources in play, by
+    forcing a raise inside `_rendered`'s call to `render_voice` for one
+    voice rather than letting `_loop_for` swallow a failure upstream of
+    it. Mirrors `test_one_bad_voice_costs_only_itself`'s shape (the
+    sourceless version of this same guarantee) rather than inventing a
+    new one.
+    """
+    import sleepmix.night.stream as stream_mod
+    ctx = _source_context(tmp_path)
+    stream = NightStream(ctx, sr=SR)
+
+    def voices_in(i):
+        return plan_voices(stream.ctx, stream.sr,
+                           max(i * stream.block_frames - int(6.0 * SR), 0),
+                           (i + 1) * stream.block_frames)
+
+    index = next(i for i in range(200) if len(voices_in(i)) >= 2)
+    voices = voices_in(index)
+    healthy = stream.block(index)
+    assert np.abs(healthy.data).max() > 0.0
+
+    broken_stream = NightStream(ctx, sr=SR)
+    doomed = voices[0].index
+    real = stream_mod.render_voice
+
+    def explode(voice, sr, seed, profiles=()):
+        if voice.index == doomed:
+            raise RuntimeError("this voice fell over, sources in play")
+        return real(voice, sr, seed, profiles)
+
+    monkeypatch.setattr(stream_mod, "render_voice", explode)
+    thinner = broken_stream.block(index)
+
+    # The block still exists, still has music in it, and is not silence —
+    # it is the same block minus one voice, the same conclusion
+    # `test_one_bad_voice_costs_only_itself` draws without sources.
+    assert thinner.n_frames == int(BLOCK_S * SR)
+    assert np.all(np.isfinite(thinner.data))
+    assert np.abs(thinner.data).max() > 0.0
+    assert not np.array_equal(thinner.data, healthy.data)
 
 
 def test_nothing_clips_with_sources(tmp_path):

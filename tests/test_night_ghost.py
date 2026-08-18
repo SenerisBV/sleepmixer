@@ -470,6 +470,95 @@ def test_a_gap_that_skips_a_whole_stage_still_covers_every_seam_it_skipped():
     assert not bare, f"bare handovers at {bare}"
 
 
+# -- the seam gate: a same-source boundary is not a handover -----------
+#
+# ``schedule_sources`` still emits a stage boundary every time a stage
+# ends, even with one source (the walk keeps advancing off the
+# stage-length draw alone, since the nearest-pitch selection rule never
+# runs with nothing to choose between). Before this fix, ``plan_voices``
+# treated every one of those boundaries as a seam, which fired the
+# handover cover on stretches of a solo night with nothing to cover:
+# measured at 17.9% of walk steps, one source voice stretched past 800s
+# purely by it, and the ghost's own ``OUTLIVE_CHANCE`` flourish
+# suppressed (gated on ``not seams``) for most of the night even though
+# nothing needed covering.
+
+def test_a_single_source_produces_no_spurious_seams():
+    """A boundary from a source back to itself is not a handover: with
+    one source every stage still names the same ``source_index``, so no
+    walk step should ever treat itself as crossing a seam.
+
+    Two behavioural proxies, since ``seams`` is a local variable inside
+    ``plan_voices`` and not itself observable from outside:
+
+    1. No ``"source"``-texture voice should ever be stretched past its
+       natural ``MAX_VOICE_S`` cap — the handover-cover step is the only
+       thing in this module that can push a source voice past that cap,
+       and with no genuine seam it should never fire. The reported
+       regression measured a source stretched to 839.3s this way, nearly
+       3.5x the 240s cap.
+    2. Late in the night the birth ratio favors the ghost heavily
+       (elapsed near 1.0 => ``source_ratio`` near 0.0), so ghosts should
+       actually show up there. Before the fix, ``not seams`` was false at
+       most steps even with one source, which suppressed
+       ``OUTLIVE_CHANCE`` and, combined with the cover itself nearly
+       always picking the source side of a tied pair, left long stretches
+       source-only.
+    """
+    from sleepmix.night.plan import MAX_VOICE_S
+
+    ctx = _context([_profile("solo")])
+    schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+    assert len(schedule) > 1, (
+        "sanity: a solo night should still cross several stages")
+    assert len({s.source_index for s in schedule}) == 1, (
+        "sanity: every stage should name the same, only source")
+
+    voices = _night(ctx)
+    for v in voices:
+        if v.texture == "source":
+            assert v.n_frames <= int(MAX_VOICE_S * SR), (
+                f"voice {v.index} is {v.n_frames / SR:.1f}s, past "
+                f"MAX_VOICE_S={MAX_VOICE_S}s — stretched by a spurious "
+                "self-handover cover")
+
+    late_start = int(0.9 * NIGHT_S * SR)
+    late = [v for v in voices if v.birth_frame >= late_start]
+    assert late, "sanity: the night should still have voices this late"
+    ghosts_late = [v for v in late if is_ghost(v)]
+    assert ghosts_late, (
+        "no ghosts appear in the last tenth of a solo night, where the "
+        "birth ratio says they should dominate")
+
+
+def test_every_genuine_handover_is_still_covered_after_the_seam_gate():
+    """Regression guard for the fix itself, not the bug: gating ``seams``
+    on ``source_index`` actually changing must not stop excluding the
+    spurious boundaries while also excluding real ones. Reuses
+    ``test_every_handover_is_covered``'s own shape — three distinct
+    sources, so ``schedule_sources``'s nearest-pitch rule changes
+    ``source_index`` at every boundary by construction — but derives
+    "genuine" the same way the fix does, by comparing ``source_index``
+    across the boundary, rather than assuming every boundary in a
+    multi-source context is automatically genuine."""
+    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abc")])
+    schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+    voices = _night(ctx)
+    genuine = [schedule[i] for i in range(len(schedule) - 1)
+              if schedule[i].source_index != schedule[i + 1].source_index]
+    assert genuine, (
+        "sanity: three distinct sources should produce genuine handovers")
+    assert len(genuine) == len(schedule) - 1, (
+        "sanity: with three distinct sources every boundary should "
+        "already be genuine, so this test exercises the same boundaries "
+        "test_every_handover_is_covered does")
+    for stage in genuine:
+        crossing = [v for v in voices
+                    if v.birth_frame < stage.end_frame
+                    and v.birth_frame + v.n_frames > stage.end_frame]
+        assert crossing, f"genuine handover at {stage.end_frame} is bare"
+
+
 def test_the_moon_still_does_not_move_a_single_birth_with_sources_in_play():
     """The brief's draft drew the interval directly from `intervals`
     (`rng.choice(intervals)`), whose width varies with the moon, rather

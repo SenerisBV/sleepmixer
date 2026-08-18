@@ -342,18 +342,33 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
         stage = stage_at(schedule, cursor)
         emitted: list[Voice] = []
 
-        # Every stage boundary this step's gap would cross without a later
+        # Every genuine handover this step's gap would cross without a later
         # voice being born before it: whatever this step emits is the last
         # chance to cover it, so it must reach past the *furthest* one, not
-        # just its own stage's end. A gap sparse enough to skip a whole
-        # stage still leaves every seam it skipped covered, because the
+        # just its own stage's end. A gap sparse enough to skip several
+        # handovers still leaves every one of them covered, because the
         # covering voice's interval is contiguous from ``cursor`` onward
         # and so passes through all of them on the way to the furthest.
         # Computed unconditionally — it is pure arithmetic on ``schedule``,
         # not a draw, so computing it here costs nothing on a night with no
         # sources, where it is always empty (``schedule`` is empty too).
-        seams = [s.end_frame for s in schedule[:-1]
-                if cursor < s.end_frame <= next_cursor]
+        #
+        # **A stage boundary is a seam only when the source actually
+        # changes across it.** ``schedule_sources`` emits a boundary every
+        # time a stage ends, including when the source on both sides is the
+        # same one — a single-source night still walks through several
+        # stages, all pointing at index 0. A boundary from a source back to
+        # itself is not a handover: the material does not change across it,
+        # so the ordinary birth gap already carries it, the same as any
+        # other stretch of one source's own night. Counting every boundary
+        # as a seam regardless fired the cover on stretches with nothing to
+        # cover — measured at 17.9% of walk steps on a one-source night,
+        # source voices stretched past 800 s by it, and the ghost's own
+        # ``OUTLIVE_CHANCE`` flourish suppressed (via ``not seams`` below)
+        # for most of the night even though nothing needed covering.
+        seams = [schedule[i].end_frame for i in range(len(schedule) - 1)
+                if cursor < schedule[i].end_frame <= next_cursor
+                and schedule[i].source_index != schedule[i + 1].source_index]
 
         if stage is None:
             emitted.append(Voice(
@@ -464,6 +479,15 @@ def schedule_sources(ctx: NightContext, sr: int,
     The next source is chosen as the nearest in pitch among those not just
     used, so the overlap during a handover is consonant. With one source the
     rule is inert; with none there is no schedule at all.
+
+    **A ``Stage`` boundary is not itself a handover.** With one source every
+    stage still names the same ``source_index``, because the selection rule
+    above never runs — so a one-source night still produces several stages,
+    all pointing at index 0, purely from the stage-length draw. Whether a
+    boundary is a genuine handover — the thing worth covering — is decided
+    by whoever reads the schedule, by comparing ``source_index`` on either
+    side of it; see ``plan_voices``' own ``seams`` for where that comparison
+    is made and why it has to be.
     """
     if not ctx.sources:
         return ()
