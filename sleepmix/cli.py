@@ -232,5 +232,25 @@ def night(seconds: int | None) -> None:
             pass
 
 
+@main.command()
+def prepare() -> None:
+    """Prepare source material for `sleepmix night`.
+
+    Separates, finds loops and analyses everything in the sources folder. This
+    is the slow part — minutes per song, with the fans on — and it lives in its
+    own command precisely so that it never happens at bedtime.
+    """
+    from .night.prepare import prepare_all
+    from .night.sources import sources_directory
+
+    click.echo(f"Sources: {sources_directory()}")
+    profiles = prepare_all(progress=click.echo)
+    if not profiles:
+        click.echo("Nothing prepared. Drop audio files in the folder above.")
+        return
+    total = sum(len(p.loop_paths) for p in profiles)
+    click.echo(f"Ready: {len(profiles)} source(s), {total} loop(s).")
+
+
 if __name__ == "__main__":
     main()
