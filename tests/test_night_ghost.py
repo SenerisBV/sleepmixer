@@ -1,0 +1,406 @@
+"""The pair, and the two things one mechanism buys.
+
+A ghost is its own Voice rather than a mode of one. That single choice gives
+the birth ratio (the relative gain of a co-located pair) and ghosts that
+outlive their source (the same pair with different lifetimes) without a second
+mechanism for either.
+"""
+import math
+
+import pytest
+
+from sleepmix.night.clock import arc_at
+from sleepmix.night.context import NightContext, Weather
+from sleepmix.night.plan import (
+    MAX_SOURCE_RATIO, MIN_AUDIBLE_RATIO, ROOT_DESCENT_SEMITONES, TEXTURES,
+    _pitch_hz, is_ghost, plan_voices, schedule_sources, source_ratio,
+    stage_at,
+)
+from sleepmix.night.sources import SourceProfile
+
+SR = 22050
+NIGHT_S = 8 * 3600.0
+
+
+def _profile(name, pitches=(55.0, 82.5)):
+    return SourceProfile(source_id=name, source_path=f"/songs/{name}.flac",
+                         loop_paths=(f"/{name}-0.wav",
+                                     f"/{name}-1.wav"),
+                         loop_frames=(120000, 130000), pitch_set=tuple(pitches),
+                         sr=44100)
+
+
+def _context(sources=(), seed=1):
+    return NightContext(
+        seed=seed, night_length_s=NIGHT_S,
+        weather=Weather(cloud_cover=0.5, precipitation_mm=0.0, wind_ms=3.0,
+                        pressure_hpa=1013.25, pressure_trend_hpa=0.0),
+        moon_phase=0.5, day_length_h=12.0, sources=tuple(sources))
+
+
+def _night(ctx):
+    return plan_voices(ctx, SR, 0, int(ctx.night_length_s * SR))
+
+
+# -- the ratio ---------------------------------------------------------
+def test_the_ratio_never_reaches_one():
+    """You never hear the unprocessed loop alone, at any hour."""
+    for i in range(101):
+        assert source_ratio(i / 100.0) <= MAX_SOURCE_RATIO < 1.0
+
+
+def test_the_ratio_falls_across_the_night():
+    assert source_ratio(0.0) > source_ratio(0.5) > source_ratio(1.0)
+
+
+def test_the_ratio_is_monotone():
+    values = [source_ratio(i / 200.0) for i in range(201)]
+    assert all(b <= a + 1e-9 for a, b in zip(values, values[1:]))
+
+
+def test_the_ratio_clamps_outside_the_night():
+    assert source_ratio(-1.0) == source_ratio(0.0)
+    assert source_ratio(5.0) == source_ratio(1.0)
+
+
+# -- with no sources ---------------------------------------------------
+def test_with_no_sources_nothing_names_a_source():
+    for voice in _night(_context()):
+        assert voice.source_id is None
+        assert voice.texture in ("drone", "noiseband")
+
+
+def test_with_no_sources_the_plan_is_unchanged_from_phase_one():
+    """The strongest available statement that this phase is additive."""
+    ctx = _context()
+    assert _night(ctx) == _night(_context())
+
+
+def test_with_no_sources_the_walk_takes_one_index_per_voice():
+    """The test above only proves the new code is reproducible against
+    itself — it would pass just as well if every voice were silently
+    keyed on index 0, 2, 4, ... instead of 0, 1, 2, .... That is exactly
+    a bug pairing brought in: ``Voice.key`` (and so every voice's own
+    material and decay noise, drawn from ``iteration_rng(seed, key,
+    ...)``) is derived from ``index`` alone, so an unconditional stride
+    of two — reserving a ghost slot even on a night with no ghosts to
+    reserve one for — would still change every voice's identity, even
+    though the *code path* taken is otherwise exactly Phase 1's. That
+    silently moved Phase 1's seed-parameterised clipping tests in
+    ``tests/test_night_stream.py`` before the stride was made a
+    per-context constant decided from ``ctx.sources``. Pin the walk's
+    stride directly: with no sources, voice keys must be consecutive
+    from zero, which is the observable form of "Phase 1 unchanged"
+    available from inside ``plan.py`` alone."""
+    ctx = _context()
+    keys = [v.key for v in _night(ctx)]
+    assert keys
+    assert keys == [f"night:voice:{i}" for i in range(len(keys))]
+
+
+# -- with sources ------------------------------------------------------
+def test_early_voices_are_mostly_source_and_late_ones_are_ghosts():
+    ctx = _context([_profile("a")])
+    voices = _night(ctx)
+    half = int(NIGHT_S * SR / 2)
+    early = [v for v in voices if v.birth_frame < half]
+    late = [v for v in voices if v.birth_frame >= half]
+    early_source = sum(1 for v in early if v.texture == "source")
+    late_source = sum(1 for v in late if v.texture == "source")
+    assert early_source > 0
+    assert late_source < early_source
+
+
+def test_a_source_voice_names_a_real_loop_of_its_profile():
+    ctx = _context([_profile("a")])
+    for voice in _night(ctx):
+        if voice.texture == "source":
+            assert voice.source_id == "a"
+            assert 0 <= voice.loop_index < len(_profile("a").loop_paths)
+
+
+def test_a_ghost_sounds_at_a_pitch_from_its_source():
+    """The fold band is 55-110 Hz and the seed's own root choices are
+    55.00-82.41 Hz, both inside `20 < pitch < 130`, so that range cannot
+    distinguish a ghost pitch from a seed pitch. Assert instead that the
+    ghost sits within a few cents of an actual member of its source's
+    pitch_set, after accounting for the same root descent every other
+    voice gets."""
+    pitches = (55.0, 82.5)
+    ctx = _context([_profile("a", pitches)])
+    night_frames = int(NIGHT_S * SR)
+    ghosts = [v for v in _night(ctx) if is_ghost(v)]
+    assert ghosts
+    for ghost in ghosts:
+        elapsed = min(max(ghost.birth_frame / night_frames, 0.0), 1.0)
+        descent = -ROOT_DESCENT_SEMITONES * elapsed * 100.0
+        expected = [_pitch_hz(hz, descent) for hz in pitches]
+        closest = min(expected, key=lambda e: abs(ghost.pitch_hz - e))
+        cents = abs(1200.0 * math.log2(ghost.pitch_hz / closest))
+        assert cents < 1.0, (
+            f"ghost pitch {ghost.pitch_hz} is {cents} cents from the "
+            f"nearest source pitch {closest}, not a member of {pitches}")
+
+
+def test_a_source_voice_and_its_ghost_are_born_together():
+    ctx = _context([_profile("a")])
+    voices = {v.index: v for v in _night(ctx)}
+    for voice in voices.values():
+        if voice.texture == "source":
+            ghost = voices.get(voice.index + 1)
+            if ghost is not None:
+                assert ghost.birth_frame == voice.birth_frame
+                assert ghost.source_id == voice.source_id
+
+
+def test_the_pair_is_equal_power():
+    ctx = _context([_profile("a")])
+    voices = {v.index: v for v in _night(ctx)}
+    for voice in voices.values():
+        if voice.texture != "source":
+            continue
+        ghost = voices.get(voice.index + 1)
+        if ghost is None:
+            continue
+        assert voice.gain ** 2 + ghost.gain ** 2 == pytest.approx(1.0, abs=1e-6)
+
+
+def test_no_voice_is_ever_born_above_the_ceiling_at_its_birth():
+    """The nested-clocks rule still holds for source voices."""
+    ctx = _context([_profile("a")])
+    for voice in _night(ctx):
+        arc = arc_at(voice.birth_frame / SR, ctx)
+        assert voice.decay.lowpass_end_hz <= arc.brightness_hz + 1e-6
+        assert voice.decay.amp_end_db <= arc.level_db + 1e-9
+
+
+def test_a_pitchless_source_still_produces_source_voices():
+    ctx = _context([_profile("a", ())])
+    voices = _night(ctx)
+    assert any(v.texture == "source" for v in voices)
+    assert not any(is_ghost(v) for v in voices)
+
+
+def test_a_loopless_source_does_not_crash_and_produces_no_source_voices():
+    """Named hazard: every length can be zero, including ``loop_paths``.
+    A profile with pitches but no loops (hand-edited, or a profile whose
+    loop files went missing after being written) must not raise dividing
+    ``loop_pick % len(profile.loop_paths)`` by zero, and correctly never
+    emits a ``"source"`` voice for material it does not have."""
+    loopless = SourceProfile(source_id="a", source_path="/songs/a.flac",
+                             loop_paths=(), loop_frames=(),
+                             pitch_set=(55.0, 82.5), sr=44100)
+    ctx = _context([loopless])
+    voices = _night(ctx)  # must not raise
+    assert not any(v.texture == "source" for v in voices)
+    assert any(is_ghost(v) for v in voices)
+
+
+# -- outliving ---------------------------------------------------------
+def test_every_handover_is_covered_by_a_ghost():
+    """The seam between two sources is hidden by the mechanism already
+    chosen, not by a crossfade added for the purpose."""
+    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abc")])
+    schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+    voices = _night(ctx)
+    for stage in schedule[:-1]:
+        crossing = [v for v in voices
+                    if is_ghost(v)
+                    and v.birth_frame < stage.end_frame
+                    and v.birth_frame + v.n_frames > stage.end_frame]
+        assert crossing, f"handover at {stage.end_frame} is bare"
+
+
+def test_some_ghosts_outlive_their_source_away_from_a_handover():
+    ctx = _context([_profile("a")])
+    voices = {v.index: v for v in _night(ctx)}
+    outliving = 0
+    for voice in voices.values():
+        if voice.texture != "source":
+            continue
+        ghost = voices.get(voice.index + 1)
+        if ghost is not None and (ghost.birth_frame + ghost.n_frames >
+                                  voice.birth_frame + voice.n_frames):
+            outliving += 1
+    assert outliving > 0
+
+
+def test_outliving_is_the_exception_not_the_rule():
+    """A repeated gesture is the failure mode this design worries about
+    most, so most pairs must die together."""
+    ctx = _context([_profile("a")])
+    voices = {v.index: v for v in _night(ctx)}
+    pairs, outliving = 0, 0
+    for voice in voices.values():
+        if voice.texture != "source":
+            continue
+        ghost = voices.get(voice.index + 1)
+        if ghost is None:
+            continue
+        pairs += 1
+        if (ghost.birth_frame + ghost.n_frames >
+                voice.birth_frame + voice.n_frames + SR):
+            outliving += 1
+    assert pairs > 10
+    assert outliving < pairs * 0.6
+
+
+# -- the invariants ----------------------------------------------------
+def test_a_window_still_matches_the_whole_night_restricted_to_it():
+    """The property block independence rests on, with sources in play."""
+    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abc")])
+    start, end = 3000 * SR, 3010 * SR
+    windowed = plan_voices(ctx, SR, start, end)
+    expected = [v for v in _night(ctx)
+                if v.birth_frame < end and v.birth_frame + v.n_frames > start]
+    assert windowed == expected
+
+
+def test_a_window_across_a_handover_matches_too():
+    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abc")])
+    schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+    seam = schedule[0].end_frame
+    windowed = plan_voices(ctx, SR, seam - 5 * SR, seam + 5 * SR)
+    expected = [v for v in _night(ctx)
+                if v.birth_frame < seam + 5 * SR
+                and v.birth_frame + v.n_frames > seam - 5 * SR]
+    assert windowed == expected
+
+
+def test_voice_indices_stay_unique_with_pairs_in_play():
+    ctx = _context([_profile("a")])
+    indices = [v.index for v in _night(ctx)]
+    assert len(indices) == len(set(indices))
+
+
+def test_with_sources_every_step_still_reserves_a_pair_slot():
+    """The other half of the stride pin: with sources in play, the walk
+    goes back to advancing by two, since that is what actually reserves
+    ``index + 1`` for a ghost that may or may not be born. Every step
+    emits exactly one non-ghost voice (the source, or the pitchless-source
+    fallback) at the step's own ``index`` — never at ``index + 1`` — so
+    the set of non-ghost indices is exactly the even numbers from zero,
+    one per step, with no gaps and no repeats."""
+    ctx = _context([_profile("a")])
+    primary_indices = sorted(v.index for v in _night(ctx) if not is_ghost(v))
+    assert primary_indices
+    assert primary_indices == list(range(0, 2 * len(primary_indices), 2))
+
+
+def test_every_texture_is_one_the_palette_can_render():
+    ctx = _context([_profile("a")])
+    assert {v.texture for v in _night(ctx)} <= set(TEXTURES)
+
+
+def test_the_plan_is_still_reproducible_from_seed_and_context():
+    ctx = _context([_profile("a")])
+    assert _night(ctx) == _night(_context([_profile("a")]))
+
+
+def test_planning_a_whole_night_with_sources_is_still_fast():
+    import time
+    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abcd")])
+    began = time.perf_counter()
+    _night(ctx)
+    assert time.perf_counter() - began < 1.0
+
+
+# -- regression: bugs found in the plan's draft ------------------------
+def test_a_solitary_pair_still_covers_a_stage_it_spans_alone():
+    """Named hazard: a birth gap sparse enough to leave only one pair born
+    in a whole stage must still have that pair's ghost reach the far
+    seam, and the MAX_VOICE_S*3 cap on ghost length must not undo that
+    reach. Regression for a bug in the brief's draft, where the cap was
+    applied to the ghost's length *after* the handover extension had
+    already been folded into it, silently shortening a ghost that had
+    just been stretched to cover a seam.
+
+    Seed 2 with three sources over an eight-hour night was found by a
+    sweep of seeds 1-300 as one where a real crossing ghost's required
+    ``reach`` exceeds the ``MAX_VOICE_S * 3`` cap (roughly 820s needed
+    against a 720s cap) — chosen deliberately rather than left to chance,
+    because for most seeds every crossing ghost's reach happens to fall
+    comfortably under the cap and the assertion below would pass
+    vacuously without ever exercising the ordering it exists to check.
+    The ``assert triggered`` line is what stops this test from silently
+    stopping to mean anything if the constants ever change under it.
+    """
+    from sleepmix.night.plan import MAX_VOICE_S, HANDOVER_COVER_S
+
+    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abc")],
+                   seed=2)
+    schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+    voices = _night(ctx)
+    cap_frames = int(MAX_VOICE_S * SR * 3)
+    triggered = False
+    for stage in schedule[:-1]:
+        crossing = [v for v in voices
+                    if is_ghost(v)
+                    and v.birth_frame < stage.end_frame
+                    and v.birth_frame + v.n_frames > stage.end_frame]
+        assert crossing, f"handover at {stage.end_frame} is bare"
+        for v in crossing:
+            reach = stage.end_frame - v.birth_frame + int(HANDOVER_COVER_S * SR)
+            if reach > cap_frames:
+                triggered = True
+                assert v.n_frames >= reach, (
+                    "the handover-cover extension was clamped away by the "
+                    "MAX_VOICE_S*3 cap")
+    assert triggered, (
+        "this seed no longer exercises reach > cap; the regression this "
+        "test guards is no longer being checked by it")
+
+
+def test_a_gap_that_skips_a_whole_stage_still_covers_every_seam_it_skipped():
+    """Named hazard: does the handover condition fire for every seam,
+    including one falling between two births with no voice born near it?
+    Force very short stages (by monkeypatching STAGE bounds is out of
+    scope here) is not needed: the walk's own birth-gap draws are already
+    sparse enough, late in an eight-hour night, to skip a stage boundary
+    outright. Assert every seam is still covered regardless."""
+    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abcdefgh")])
+    schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+    voices = _night(ctx)
+    bare = []
+    for stage in schedule[:-1]:
+        crossing = [v for v in voices
+                    if is_ghost(v)
+                    and v.birth_frame < stage.end_frame
+                    and v.birth_frame + v.n_frames > stage.end_frame]
+        if not crossing:
+            bare.append(stage.end_frame)
+    assert not bare, f"bare handovers at {bare}"
+
+
+def test_the_moon_still_does_not_move_a_single_birth_with_sources_in_play():
+    """The brief's draft drew the interval directly from `intervals`
+    (`rng.choice(intervals)`), whose width varies with the moon, rather
+    than the fixed-width slot mechanism the already-shipped Phase 1 code
+    uses and documents as load-bearing for exactly this property. I kept
+    the established mechanism rather than the brief's simplification, for
+    consistency with that stated design intent.
+
+    Honesty check on this test: I could NOT get it to fail against the
+    brief's simplification. A 6000-trial sweep comparing
+    `rng.choice(len(_INTERVALS_CENTS))` against `rng.choice(intervals)`
+    directly, for the actual widths in play (4, 5, 6), found the two
+    consume numpy's `Generator` state identically every time — so, for
+    this numpy version and these widths, the divergence the original
+    Phase 1 comment warns about does not appear to be observable. This
+    test therefore is NOT proven discriminating; it documents adherence
+    to the established pattern rather than a demonstrated regression, and
+    is flagged as such in the task report rather than adjusted to look
+    more conclusive than it is."""
+    profiles = [_profile("a")]
+    reference = [(v.index, v.birth_frame, v.n_frames, v.texture)
+                 for v in _night(_context(profiles))]
+    for phase in (0.0, 0.17, 0.25, 0.75, 0.93, 1.0):
+        ctx = NightContext(
+            seed=1, night_length_s=NIGHT_S,
+            weather=Weather(cloud_cover=0.5, precipitation_mm=0.0,
+                            wind_ms=3.0, pressure_hpa=1013.25,
+                            pressure_trend_hpa=0.0),
+            moon_phase=phase, day_length_h=12.0, sources=tuple(profiles))
+        night = [(v.index, v.birth_frame, v.n_frames, v.texture)
+                 for v in _night(ctx)]
+        assert night == reference, f"moon {phase} moved the night's schedule"

@@ -28,15 +28,16 @@ prove that equality; this one cannot fail it.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 from ..config import StemDecayConfig
-from ..util import iteration_rng
+from ..util import iteration_rng, lerp
 from .clock import arc_at, NightArc
 from .context import NightContext
 from .sources import pitch_distance
 
-TEXTURES = ("drone", "noiseband")
+TEXTURES = ("drone", "noiseband", "source")
 
 # A voice lives minutes, not hours. The floor keeps anything from reading as an
 # event; the ceiling keeps a single voice from becoming the whole night.
@@ -97,10 +98,38 @@ ROOT_DESCENT_SEMITONES = 1.0
 # tone; whether that reads as tape or as nothing at all is a question for ears.
 NOISE_BELOW_LEVEL_DB = -40.0
 
+# The most source-derived voice of the night still carries some of its own
+# ghost, so the unprocessed loop is never heard alone, at any hour. This is
+# the most direct implementation of "clearly music, not identifiable", and it
+# is a placeholder nobody has listened to.
+MAX_SOURCE_RATIO = 0.85
+
+# Below this a voice in the pair is not worth rendering.
+MIN_AUDIBLE_RATIO = 0.05
+
+# A ghost crossing a handover must reach at least this far past it, so the
+# seam between two sources is never bare.
+HANDOVER_COVER_S = 90.0
+
+# Away from a handover, a ghost outliving its source is a flourish rather than
+# the rule — a repeated gesture is the failure mode this design worries about
+# most. All three are placeholders.
+OUTLIVE_CHANCE = 0.15
+OUTLIVE_MIN, OUTLIVE_MAX = 1.5, 2.5
+
 
 @dataclass(frozen=True)
 class Voice:
-    """One thing that is born, sounds for a few minutes, and dies."""
+    """One thing that is born, sounds for a few minutes, and dies.
+
+    A voice now names *what it is made of*: a synthesized texture drawn from
+    the seed, or a loop belonging to a prepared source (``texture ==
+    "source"``). ``gain`` is the pair balance and applies to every voice,
+    not only halves of a pair — a solitary synth voice simply carries
+    ``1.0``. ``source_id`` set on a non-``"source"`` texture means *this is
+    the ghost of that source*, which is exactly what ``is_ghost`` reads;
+    ``loop_index`` only means anything when ``texture == "source"``.
+    """
 
     index: int
     birth_frame: int
@@ -108,6 +137,9 @@ class Voice:
     pitch_hz: float
     texture: str
     decay: StemDecayConfig
+    source_id: str | None = None
+    loop_index: int = 0
+    gain: float = 1.0
 
     @property
     def key(self) -> str:
@@ -118,6 +150,28 @@ class Voice:
         the same voice.
         """
         return f"night:voice:{self.index}"
+
+
+def is_ghost(voice: Voice) -> bool:
+    """True for a voice synthesized from a source's own spectrum.
+
+    A ghost is not a separate generator — it is a drone or a noise band whose
+    pitch came from a ``SourceProfile`` rather than from the seed. What makes
+    it a ghost is the provenance, which is why this is a function rather than
+    a texture.
+    """
+    return voice.source_id is not None and voice.texture != "source"
+
+
+def source_ratio(elapsed: float) -> float:
+    """How much of a pair born at ``elapsed`` is the loop rather than its ghost.
+
+    Linear rather than the arc's own eased curve: the arc descends fast and
+    lingers, which is right for level and wrong here — a source that vanished
+    in the first hour would make "source-derived early" a technicality. A
+    placeholder either way.
+    """
+    return lerp(MAX_SOURCE_RATIO, 0.0, min(max(elapsed, 0.0), 1.0))
 
 
 def _birth_gap_s(density: float, rng) -> float:
@@ -195,6 +249,32 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
     after the window begins. Its reverb tail may extend past its death; that is
     the renderer's business, not the plan's, and padding the plan for it would
     make ``Voice.n_frames`` mean two things.
+
+    **With sources in play, every step consumes exactly two voice indices**,
+    ``index`` for the primary voice and ``index + 1`` for its ghost, whether
+    or not either is actually emitted — and both share the one RNG keyed on
+    ``index``. That is what keeps a window's answer identical to the whole
+    night's answer restricted to it: nothing about how many voices a step
+    *emits* is allowed to change how far the walk has *advanced*. Every draw
+    a step might need — lifetime, interval slot, texture, loop pick,
+    ghost-pitch pick, the outlive roll, the gap — happens unconditionally,
+    before any branch on ``stage``, for the same reason: a draw made inside
+    an ``if`` would make the RNG stream depend on which branch fired, and the
+    symptom is a night that is reproducible until the sources folder changes
+    and then silently is not.
+
+    **With no sources at all, the stride is one, not two.** ``Voice.key`` —
+    and so every voice's own material and decay noise — is derived from
+    ``index`` alone, so an unconditional stride of two would still change
+    every voice's identity even on a night with nothing to pair, and this
+    phase is meant to be additive: an empty ``ctx.sources`` must plan
+    *exactly* what Phase 1 planned. The stride is decided once, from
+    ``ctx.sources``, not per step — ``ctx.sources`` is fixed for the whole
+    night, so this is a per-context constant, not a per-step branch, and it
+    does not weaken the "every draw happens on every step" rule above: that
+    rule exists so the stride cannot depend on something two different
+    windows might resolve differently, and a night either has sources or it
+    does not, identically in every window of it.
     """
     if to_frame <= from_frame:
         return []
@@ -203,6 +283,8 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
     root_hz = float(root_rng.choice(_ROOT_CHOICES_HZ))
     night_frames = max(int(ctx.night_length_s * sr), 1)
     intervals = interval_set(ctx.moon_phase)
+    schedule = schedule_sources(ctx, sr, night_frames)
+    stride = 2 if ctx.sources else 1
 
     voices: list[Voice] = []
     base_decay = StemDecayConfig()
@@ -213,41 +295,115 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
         rng = iteration_rng(ctx.seed, "night:voice", index)
         t_s = cursor / sr
         arc = arc_at(t_s, ctx)
+        elapsed = min(max(cursor / night_frames, 0.0), 1.0)
 
+        # -- every draw, unconditionally, before any branch --------------
         lifetime_s = float(rng.uniform(MIN_VOICE_S, MAX_VOICE_S))
-        n_frames = int(lifetime_s * sr)
+        # Drawn over the *fixed* width of ``_INTERVALS_CENTS``, never over
+        # ``intervals`` itself — see the comment this one echoes below,
+        # where the reasoning was first written down. A draw whose width
+        # tracked the moon's narrowing would consume a different amount of
+        # this step's generator state depending on the phase, which would
+        # shift every draw after it, including the birth gap, and the moon
+        # would be steering the schedule as well as the pitch.
+        slot = int(rng.choice(len(_INTERVALS_CENTS)))
+        synth_texture = str(rng.choice(TEXTURES[:2]))
+        loop_pick = int(rng.integers(0, 1024))
+        pitch_pick = int(rng.integers(0, 1024))
+        outlive_roll = float(rng.random())
+        outlive_factor = float(rng.uniform(OUTLIVE_MIN, OUTLIVE_MAX))
+        gap_s = _birth_gap_s(arc.density, rng)
 
         # The root falls as the night goes; the interval sits on top of it.
-        elapsed = min(max(cursor / night_frames, 0.0), 1.0)
-        descent = -ROOT_DESCENT_SEMITONES * elapsed * 100.0
-        # The draw is over the *whole* tuple's length whatever the moon is
-        # doing, and the moon only decides what that draw lands on. That is
-        # not a stylistic preference: this generator is shared with
-        # ``_birth_gap_s`` below, so a draw whose width varied with the phase
-        # would move every birth time in the night and the moon would be
-        # steering the schedule as well as the pitch. Drawing a fixed-width
-        # slot and folding it into the reachable set leaves the RNG stream
-        # identical for every phase — and, at full moon, leaves the whole
-        # expression identical to what it was before the moon reached it.
-        slot = int(rng.choice(len(_INTERVALS_CENTS)))
         cents = intervals[slot % len(intervals)]
-        pitch = _pitch_hz(root_hz, cents + descent)
+        descent = -ROOT_DESCENT_SEMITONES * elapsed * 100.0
+        n_frames = int(lifetime_s * sr)
+        decay = _decay_for(arc, base_decay)
+        next_cursor = cursor + max(int(gap_s * sr), 1)
+        stage = stage_at(schedule, cursor)
+        emitted: list[Voice] = []
 
-        voice = Voice(
-            index=index,
-            birth_frame=cursor,
-            n_frames=n_frames,
-            pitch_hz=pitch,
-            texture=str(rng.choice(TEXTURES)),
-            decay=_decay_for(arc, base_decay),
-        )
-        if voice.birth_frame < to_frame and (
-                voice.birth_frame + voice.n_frames > from_frame):
-            voices.append(voice)
+        if stage is None:
+            emitted.append(Voice(
+                index=index, birth_frame=cursor, n_frames=n_frames,
+                pitch_hz=_pitch_hz(root_hz, cents + descent),
+                texture=synth_texture, decay=decay))
+        else:
+            profile = ctx.sources[stage.source_index]
+            ratio = source_ratio(elapsed)
+            source_gain = math.sqrt(ratio)
+            ghost_gain = math.sqrt(1.0 - ratio)
 
-        cursor += max(int(_birth_gap_s(arc.density, rng) * sr), 1)
-        index += 1
+            if ratio > MIN_AUDIBLE_RATIO and profile.loop_paths:
+                emitted.append(Voice(
+                    index=index, birth_frame=cursor, n_frames=n_frames,
+                    pitch_hz=0.0, texture="source", decay=decay,
+                    source_id=profile.source_id,
+                    loop_index=loop_pick % len(profile.loop_paths),
+                    gain=source_gain))
 
+            if profile.pitch_set and (1.0 - ratio) > MIN_AUDIBLE_RATIO:
+                # Every stage boundary this step's gap would cross without
+                # a later voice being born before it: this ghost is the
+                # last chance to cover it, so it must reach past the
+                # *furthest* one, not just its own stage's end. A gap
+                # sparse enough to skip a whole stage still leaves every
+                # seam it skipped covered, because the ghost's interval is
+                # contiguous from ``cursor`` onward and so passes through
+                # all of them on the way to the furthest.
+                seams = [s.end_frame for s in schedule[:-1]
+                        if cursor < s.end_frame <= next_cursor]
+
+                ghost_frames = n_frames
+                if not seams and outlive_roll < OUTLIVE_CHANCE:
+                    # Occasionally, away from a handover: a flourish, not
+                    # the rule.
+                    ghost_frames = int(ghost_frames * outlive_factor)
+                # The artistic cap on a ghost's own length applies only to
+                # its natural or occasionally-outliving lifetime. Applying
+                # it *before* the handover extension below (rather than
+                # after) is what keeps it from being able to undo that
+                # extension — the systematic cover at a handover is not
+                # tunable to nothing by a cap that was never meant to
+                # govern it.
+                ghost_frames = min(ghost_frames, int(MAX_VOICE_S * sr * 3))
+                if seams:
+                    # Systematically at a handover: reach past the seam so
+                    # it is never bare. This is the structural device that
+                    # hides the seam, and it overrides the cap above.
+                    ghost_frames = max(
+                        ghost_frames,
+                        max(seams) - cursor + int(HANDOVER_COVER_S * sr))
+
+                base_hz = profile.pitch_set[pitch_pick % len(profile.pitch_set)]
+                emitted.append(Voice(
+                    index=index + 1, birth_frame=cursor,
+                    n_frames=ghost_frames,
+                    pitch_hz=_pitch_hz(base_hz, descent),
+                    texture=synth_texture, decay=decay,
+                    source_id=profile.source_id, gain=ghost_gain))
+
+            if not emitted:
+                # A pitchless source at the far end of the night, or one
+                # too quiet to be worth either half, has neither half
+                # left. Fall back rather than emitting silence.
+                emitted.append(Voice(
+                    index=index, birth_frame=cursor, n_frames=n_frames,
+                    pitch_hz=_pitch_hz(root_hz, cents + descent),
+                    texture=synth_texture, decay=decay))
+
+        for voice in emitted:
+            if voice.birth_frame < to_frame and (
+                    voice.birth_frame + voice.n_frames > from_frame):
+                voices.append(voice)
+
+        cursor = next_cursor
+        index += stride  # a pair's worth with sources; one voice without
+
+    # A pair shares a birth frame; ``index`` breaks the tie so a source
+    # voice always precedes its own ghost, which is also the order the walk
+    # already appends them in — this sort is a safety net, not a fix.
+    voices.sort(key=lambda v: (v.birth_frame, v.index))
     return voices
 
 
@@ -312,6 +468,13 @@ def schedule_sources(ctx: NightContext, sr: int,
             # index, so that order is already deterministic here — but
             # relying on that incidentally would make this line correct only
             # by accident of how ``candidates`` happens to be built today.
+            #
+            # Convention: nearest *from* the outgoing source's own voice —
+            # ``pitch_distance(current, candidate)``, not the reverse.
+            # ``pitch_distance`` is not symmetric, and a reviewer built a
+            # concrete counterexample where the two orders pick different
+            # winners, so this is a stated default pending an ear test, not
+            # a formality.
             current = min(candidates, key=lambda i: (
                 pitch_distance(ctx.sources[current], ctx.sources[i]), i))
 
