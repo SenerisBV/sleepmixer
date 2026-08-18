@@ -391,6 +391,166 @@ different axis.**
   the cheaper answer to the same robustness concern: the speech layer is
   allowed to disappear silently, and the music continues.
 
+## The ghost: a prepared loop becomes its own double
+
+Plan 5, Phase 3 (`sleepmix/night/sources.py`, `prepare.py`, `pitch.py`, and new
+branches in `plan.py` and `stream.py`) gives the night a second kind of
+material: real recordings, prepared ahead of time, that give way to drones
+built from their own spectrum. Nothing about the invariants above changes —
+block independence, the two nested clocks, the no-audio-in-the-plan rule all
+hold exactly as Phase 1 left them. What's new is documented here rather than
+folded silently into the sections above, because it is one more instance of a
+pattern this document already keeps: a single well-chosen representation
+buying two behaviours for the price of one.
+
+**A ghost is its own `Voice`, and that one choice is what makes the rest of
+this small.** `night/plan.py`'s planner does not teach `Voice` to *become* a
+ghost partway through its life; it emits a source voice and, alongside it, a
+second, independent `Voice` record — same birth frame, `pitch_hz` drawn from
+the source's own `SourceProfile.pitch_set`, `source_id` set to the same
+source's id, `texture` left as a synthesized drone or noise band. `is_ghost`
+reads that provenance (`voice.source_id is not None and voice.texture !=
+"source"`); nothing about `Voice` itself is ghost-shaped. That single
+representation gives two behaviours with no second mechanism:
+
+- **The birth ratio** — how much of a co-located pair is the loop versus its
+  double — is nothing but the two voices' own `gain` fields.
+  `source_ratio(elapsed)` returns a fraction that falls linearly across the
+  night; the source voice's gain is its square root, the ghost's is the
+  square root of its complement (`math.sqrt(ratio)` /
+  `math.sqrt(1.0 - ratio)`, `plan.py:381-382`), so the pair's power sums to a
+  constant even as the balance shifts from mostly-loop to mostly-ghost.
+- **A ghost that outlives its source** is the identical pair with a longer
+  lifetime on one half. `plan_voices` builds both voices' `n_frames`
+  independently — the ghost's is stretched past the source's own when
+  `OUTLIVE_CHANCE` fires, or when a handover needs covering (below) — and
+  that is the whole of the mechanism. Nothing distinguishes "a ghost that
+  outlives" from "a ghost" at the type level; it is a `Voice` whose death
+  simply falls later than its sibling's.
+
+The alternative considered and rejected, named directly in the design spec, is
+a `Voice` that carries a blend parameter changing over its own life — one
+record, sliding from loop to drone as it ages. That needs a *second*
+mechanism to produce an outliving ghost at all (the blend would have to reach
+1.0 before the voice's own death, which is a different kind of ending than the
+one every other voice has), and it puts a time-varying quantity inside a
+record whose entire value, everywhere else in this codebase, is being a
+static description of one thing born at one moment. Phase 1's own spec
+anticipated needing to reject exactly this: *"If a `Voice` ever grows a field
+that only makes sense for synthesis, that is the moment Phase 3 got harder,
+and it should be treated as a design error rather than a convenience."* No
+such field was added. `Voice` still has none, and the ghost mechanism is two
+independent instances of the one record type Phase 1 already had.
+
+**`sources.py` imports no audio, for the same reason `arrangement.py` and
+`plan.py` do not.** A `SourceProfile` is a path, a handful of frame counts and
+a tuple of floats — `tests/test_night_sources.py::test_sources_module_imports_no_audio`
+AST-walks the module and forbids `numpy`, `scipy`, `soundfile`, `pedalboard`,
+`sleepmix.audio`, `sleepmix.effects`, and every sibling that does decode audio
+(`night.pitch`, `night.prepare`, `night.palette`, `night.stream`). That is
+what lets `plan.py` import it at all: `plan.py`'s own AST guard
+(`test_plan_module_imports_no_audio`) forbids the same list, and a
+`SourceProfile`-shaped dependency that pulled in even one of those would have
+made the planner un-importable without violating the rule that keeps an
+eight-hour night plannable in microseconds. `pitch_distance` — the function
+`schedule_sources` uses to pick which source takes the stage next — is
+arithmetic over `pitch_set` tuples for exactly this reason: comparing two
+songs' tonality at plan time costs nothing because nothing about either song's
+audio is ever opened to answer it.
+
+**Sources take turns rather than sounding together, and the handover is
+covered by the same mechanism that produces an ordinary outliving ghost —
+not by a crossfade built for the purpose.** `schedule_sources` decides who
+holds the stage and when (`Stage.source_index`, `start_frame`, `end_frame`);
+concurrent voices within a stretch always come from the one source in play,
+because voices drawn from two different songs would share neither key nor
+room nor tape. Handing from one source to the next would ordinarily be an
+audible event, except that the operator had already chosen, for an unrelated
+reason, to let a ghost occasionally survive past its source's own death — and
+a handover is exactly the moment that gesture is needed, so `plan_voices`
+reuses it rather than inventing a second cover mechanism: whichever voice a
+step emits (ghost, in-progress source loop, or the synthesis fallback for a
+pitchless source) gets stretched to reach past the furthest handover its own
+birth-gap step would otherwise cross uncovered. This is the part a reader
+would not re-derive from the code alone, so it is worth saying plainly here:
+there is no dedicated crossfade or fade-out at a source handover anywhere in
+this package. The seam is hidden because something that was already sounding
+keeps sounding across it, the same way it sometimes keeps sounding away from
+any handover at all, as a flourish.
+
+**A stage boundary is only a seam when the source on either side of it
+actually differs.** `schedule_sources` emits a new `Stage` every time the
+stage-length draw expires, including on a night with exactly one source,
+where every boundary still names `source_index=0` on both sides. Treating
+every such boundary as a handover — the mechanism's first shipped form —
+covered nothing, because a source handing the stage to itself needs no
+cover: the material does not change across it, so the ordinary birth gap
+already carries it undisturbed. Measured against the pre-fix code on a
+one-source night: 17 of 17 boundaries were treated as handovers, the cover
+fired on 17.9% of walk steps, one source voice was stretched to 839.3 s by a
+cover it did not need, and the `OUTLIVE_CHANCE` flourish was suppressed for
+most of the night because a spurious "seam in range" kept `not seams` false.
+`plan_voices`' `seams` list is now filtered to
+`schedule[i].source_index != schedule[i + 1].source_index`, and the same
+one-source night measures zero spurious covers and a legitimate
+`OUTLIVE_CHANCE`-bounded ghost as its single longest voice instead.
+
+**The determinism rule in the walk has two parts, and both are decided once
+per context rather than once per step.** `plan_voices` walks forward, and at
+every step it draws a lifetime, an interval slot, a texture and a birth gap —
+Phase 1's own four draws — plus, only when the night has sources at all, four
+more: which loop, which of the source's pitches, whether a ghost outlives,
+and by how much. Two things about that walk are fixed for the whole night
+rather than re-decided at each step, and both have to be, for the same
+reason:
+
+- **The stride.** Every voice's `key` (`f"night:voice:{index}"`) — and so
+  every voice's own RNG-drawn material and decay noise — comes from `index`
+  alone. If `index` advanced by two only on steps that actually paired a
+  source with a ghost, a night with no sources would still see its own voice
+  indices skip unpredictably depending on how the sources folder happened to
+  look, rekeying every voice after the first one that differed. The stride is
+  decided once, from `bool(ctx.sources)`, before the walk starts: one with no
+  sources, two with any.
+- **Whether the four pair-only draws happen at all.** Even gating them
+  correctly on `ctx.sources` being non-empty is not enough if the gate is
+  re-evaluated per step rather than fixed for the walk, because the four
+  draws consume RNG state that the birth-gap draw comes after. Drawing them
+  unconditionally, "to be safe," is the wrong fix in the other direction: on
+  an empty-sources night that still shifts where the birth-gap draw lands in
+  the generator's own state relative to Phase 1, changing every gap, every
+  cursor position, and every voice after the first.
+
+Both are legitimate to fix once per context rather than once per step
+precisely because `ctx.sources` cannot change mid-night — it is fixed for the
+whole plan, identical in every window of it, so deciding from it once is a
+per-context constant, not a per-step branch that two overlapping windows could
+resolve differently. Get either wrong and the failure is the same shape: a
+night that reproduces Phase 1 exactly, byte for byte, right up until the
+sources folder gains its first file — and then silently stops, with nothing
+in a diff to explain why, because the divergence lives in *where a draw sits
+in the RNG stream*, not in what any one draw returns.
+
+**`make_seamless` runs after time-stretching, never before, and the reason is
+that a phase vocoder does not know what a seam is.** `prepare_source` slices a
+loop, stretches it, and only then crossfades its tail against its head — slice
+→ stretch → seam, not slice → seam → stretch. Seaming first and stretching
+second destroys the seam on the very next line: `slow_and_pitch`'s phase
+vocoder (or its resample fallback) treats its input as an ordinary buffer with
+no privileged relationship between the first and last sample, so nothing
+stops it moving either end independently of the other. Seaming after
+stretching crossfades the material that is actually tiled by
+`night/palette.py`'s loop player, which is the property the whole pipeline
+depends on. This was found, not assumed: a reviewer measured a ~0.4-amplitude
+discontinuity every `loop.n_frames` in a tiled voice under the original
+ordering — a click every few seconds, all night — before the ordering was
+corrected.
+
+**Why preparation is a separate command.** Demucs on a laptop spins the fans
+up for minutes; that cost has to be paid somewhere other than next to the
+bed, so `sleepmix prepare` exists to pay it whenever the operator is already
+awake, and `sleepmix night` never imports anything that could reach it.
+
 ## What each module owns
 
 - **`paths.py`** — where sleepmix keeps data on disk. `data_dir()` resolves to

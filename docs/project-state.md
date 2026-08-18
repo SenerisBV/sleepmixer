@@ -69,13 +69,322 @@ all of that and is a different kind of change from every plan before it: it
 does not touch the finite-mix pipeline at all. `sleepmix/night/` is a new
 package, reachable only from a new `sleepmix night` subcommand, producing a
 night-long ambient stream instead of a rendered file. 482 tests pass against
-the 356-test baseline at the start of that branch. Its own section, first
-below, is the record — and it opens with what the plan's own reference code
-got wrong, because that is the part most worth not losing.
+the 356-test baseline at the start of that branch. Its own section, below, is
+the record — and it opens with what the plan's own reference code got wrong,
+because that is the part most worth not losing.
+
+Plan 5, Phase 3 (`feat/night-ghost`, 8 tasks, complete) sits on top of Phase 1
+and gives the night a second kind of material: real recordings, prepared
+ahead of time, dissolving into drones built from their own spectrum. Phase 2 —
+the microphone — was skipped rather than built. 663 tests pass against the
+534-test baseline at the start of this branch. Its own section, first below,
+is the record.
 
 Read `docs/architecture.md` first for how the pieces fit together; this document
 is about what's true right now, what was traded off to get here, and what's
 explicitly not done yet.
+
+## Plan 5, Phase 3: the ghost
+
+`feat/night-ghost`, 8 tasks, complete. The design is
+`docs/superpowers/specs/2026-08-18-night-ghost-design.md`, and it is the phase
+Phase 1's own spec named as the eventual goal and deferred: *source-derived
+early, synthesis late*. `docs/architecture.md`'s new section, "The ghost: a
+prepared loop becomes its own double," has the mechanics; this section is
+what a reader needs that is not mechanics.
+
+### Phase 2 was skipped, not reordered
+
+Phase 1's spec scheduled adaptive masking — the stream reading the room's own
+noise floor through a microphone and quieting itself to match — as Phase 2,
+and called it the most valuable steering input in the whole design, because it
+was the only closed loop. It never got a task list.
+
+The reasoning is worth keeping in full, because it was a design conclusion
+about what the feature had become, not a scoping retreat under time pressure.
+The operator's own choice — the room may make the stream quieter but never
+louder — removes the danger a microphone is usually interesting for: a stream
+that a microphone mistakes for room noise now produces *less* reduction, which
+tops out at the arc's own ceiling, so being masked by your own masking is
+impossible by construction. But the loop does not vanish; it inverts. A quiet
+room lets the stream sink, a sunken stream reads quieter still, which lets it
+sink further — the same feedback, aimed at silence instead of at noise,
+arriving at 11 PM in a quiet house rather than at 4 AM in a noisy one. So the
+risk shrank by more than the value did: a microphone varies what already
+exists, and Phase 3's source material changes what the night is made of. The
+operator chose the second.
+
+**The empty-band finding is preserved here for whoever revisits this.** The
+favoured escape from the feedback loop was spectral subtraction of the known
+output, which needs a model of the acoustic path from speaker to microphone —
+the only option in the discussion with any setup-specific work in it. There is
+a cheaper one sitting unused: the arc lowpasses everything to
+`brightness_hz`, sweeping 6000 Hz down to 500 Hz across the night, and after
+Phase 1's noise-floor fix only **0.85% of block energy** sits above that
+ceiling. That is a wide, known, guaranteed-quiet band the stream itself has
+vacated, in which a microphone hears almost nothing but the room — and it gets
+quieter, and so more room-only, as the night goes on. Measuring the room in
+the band the stream is not using is setup-independent and cheaper than
+subtraction, and it costs nothing extra to notice because the design already
+guarantees the band's emptiness for an unrelated reason. Two things could
+spoil it, and both are a short spike rather than a design question: laptop
+microphones are often bandlimited and noisy above 8 kHz, and a low rumble has
+little high-frequency energy up there to be detected by.
+
+### The placeholders, named, none of them listened to
+
+Every value below is a real number in a named constant, invented rather than
+measured, in the same spirit as Phase 1's own list above. The person who can
+fix any of them is the one who has slept through a night carrying them, which
+as of this section is nobody.
+
+- **`LOOPS_PER_SOURCE = 3`** (`night/prepare.py`) — how many loops one song
+  contributes. Enough for internal variety without one loop recurring often;
+  a guess.
+- **`LOOP_BARS`** (`night/prepare.py`) — **shipped this branch at 4, and
+  corrected to 2 before the excerpts were re-rendered; see "`LOOP_BARS` was 4
+  and defeated its own rationale" below.**
+- **`STRETCH_SPEED = 0.6`** (`night/prepare.py`) — how much the loop is slowed
+  before it enters the night. Chosen to pull gesture below the rate the ear
+  tracks phrasing at; not measured against an ear.
+- **`MAX_SOURCE_RATIO = 0.85`** (`night/plan.py`) — the birth ratio's ceiling,
+  so the unprocessed loop is never heard entirely alone. The single most
+  direct implementation of "clearly music, not identifiable," and a first
+  draft.
+- **`MIN_AUDIBLE_RATIO = 0.05`** (`night/plan.py`) — below this, a voice in
+  the pair is not worth rendering at all. Where "not worth it" starts is a
+  guess.
+- **`STAGE_MIN_S` / `STAGE_MAX_S`** (`night/plan.py`) — 20 and 45 minutes,
+  how long one source holds the stage before handing over. Long enough that
+  its own several loops establish a place, short enough that a night visits
+  more than one or two sources; neither bound has been checked against a
+  real night.
+- **`HANDOVER_COVER_S = 90.0`** (`night/plan.py`) — how far past a handover
+  the covering voice must reach. Long enough that the incoming source has
+  clearly arrived; a guess at what "clearly" needs.
+- **`OUTLIVE_CHANCE = 0.15`**, **`OUTLIVE_MIN`, `OUTLIVE_MAX = 1.5, 2.5`**
+  (`night/plan.py`) — how often, away from a handover, a ghost survives past
+  its source as a flourish rather than the rule, and by what multiple of its
+  own would-be lifetime. All three are placeholders for what "occasional"
+  means in numbers.
+- **`MIN_PEAK_FRACTION = 0.02`** (`night/pitch.py`) — how loud a spectral peak
+  must be, relative to the strongest one, to count as a pitch. See "`pitch_set`
+  does not reject non-tonal material" below for why this is the *only*
+  tonality gate left, and what it does not do.
+- **The fold band, `FOLD_LOW_HZ = 55.0` / `FOLD_HIGH_HZ = 110.0`**
+  (`night/pitch.py`) — the one octave every extracted pitch is folded into
+  before it reaches a ghost. Low enough to sit under whatever else is
+  sounding; not tuned against anything else that might be sounding.
+
+**One placeholder from Phase 1 is not a new one, and is named here only to
+correct a possible misreading.** `NOISE_BELOW_LEVEL_DB = -40.0`
+(`night/plan.py`) governs the hiss floor of every voice `_decay_for` builds —
+source voices and ghosts included, since Phase 3 adds no branch to that
+function at all. It is Phase 1's placeholder, already recorded and reasoned
+about above; Phase 3 simply inherits it unchanged for the two new kinds of
+voice, rather than inventing a second one for the ghost's own floor.
+
+### `pitch_set` does not reject non-tonal material, and two attempts failed
+
+The spec asks for pitches "actually present" in a loop, and the first draft
+of the extractor also tried, unasked, to refuse a pitch set for material with
+no real tonality — a field recording, say, that happens to have a few strong
+bins by chance. Neither of two attempts at that could tell noise from music.
+
+**A peak-to-median-floor ratio, tuned against white noise, failed against
+everything else tried.** Gated at 8.0, it rejected white Gaussian noise with a
+claimed margin of "noise ≤ 4.6, real tones ≥ 10⁶" — and then read pink noise,
+band-limited noise, and this repository's own cached separated stems,
+including a `drums.wav` and a near-silent vocal-leakage stem at peak 0.0004,
+as *all* confidently pitched: full six-pitch sets, 200 times out of 200 for
+pink noise. The claimed margin collapsed to 389 on real material. That
+constant had been fitted to the one test that motivated it, and nothing else.
+
+**Spectral flatness — the standard, principled measure of tonality — failed
+in the opposite direction.** It is the geometric mean of the in-band spectrum
+over its arithmetic mean, bounded in `(0, 1]`, near 0 for a tone and near 1 for
+noise, and it is not a fitted constant the way a peak ratio is. Measured
+independently by two people using two different synthesis methods, it agreed
+to the digit: narrowband noise reads as **more tonal than the least-tonal real
+instrument tested, by five-plus orders of magnitude** (flatness near zero
+against a real recording's 0.00965), because the geometric mean collapses
+whenever a signal's energy sits in a narrow sub-range of the wide scan band
+the formula is computed over — exactly the shape of the noise being tested
+for.
+
+**The requirement was deleted rather than fitted to a third constant.** The
+spec never asked for noise rejection; a test written without checking it was
+achievable did, and once two independently-verified approaches had failed for
+two different, well-understood reasons, fitting a third number to pass that
+one test would have repeated the exact mistake the first attempt made.
+`MIN_PEAK_FRACTION` is left as the only gate, and it does only what its name
+says: it compares peaks to each other, never to a floor, so it cannot and does
+not claim to separate tone from noise.
+
+**The forward pointer, recorded rather than acted on.** A **local** flatness —
+computed in a narrow window around each candidate peak rather than across the
+whole 40–4000 Hz scan band — would plausibly separate the two classes, because
+within a narrow window a true sinusoid still concentrates into one bin while
+narrowband noise stays flat there too. Neither attempt tried this; it is a
+third approach, not a retry of either failed one.
+
+**The consequence, stated plainly rather than left implicit:** a rain
+recording, or any other genuinely non-tonal file, dropped into the sources
+folder gets a ghost at arbitrary-but-harmless frequencies — deterministic,
+always in-band, never degenerate — rather than the "no ghost" a listener might
+reasonably expect from material with no real pitch in it. This is a known and
+named limitation, not a bug nobody noticed.
+
+### The deliberate difference from the spec: one pitch set per source
+
+The spec's own wording is "the frequencies actually present in **each loop**"
+— one pitch set per loop. What ships is one pooled pitch set per
+`SourceProfile`, covering every loop `prepare_source` extracted from that
+song, computed once from `sum_buffers` of all of them together. The reasoning
+recorded at the point of the change: a `SourceProfile` already carries one
+set as its whole interface to the planner, a ghost of *this song* is a more
+useful object than a ghost of *this loop* — three loops from the same
+recording sharing one instrument and one room have no reason to sound like
+three different chords — and the handover preference (`pitch_distance`, which
+picks the next source to hold the stage) already reasons at song level, not
+loop level. Named here as a deliberate divergence rather than left to be
+noticed by someone diffing the spec against the code.
+
+### `LOOP_BARS` was 4 and defeated its own rationale
+
+The stated purpose of the 4–12 second loop-length band is "short enough to
+carry no phrase." `LOOP_BARS` shipped this branch's early tasks at 4, and four
+bars of source material *is* a phrase — the two constants that set the
+effective loop length interact directly:
+
+```
+bars × beats_per_bar × 60 / tempo ÷ STRETCH_SPEED
+```
+
+At four bars, a 120 BPM tempo and `STRETCH_SPEED = 0.6`, that comes to roughly
+**13.2 seconds** — outside the stated 4–12 s band, and long enough to carry
+exactly the kind of phrase the band exists to forbid. The only check actually
+enforced at the time was a 1–40 second sanity bound loose enough to notice
+nothing at all. `LOOP_BARS` is now **2**, landing at roughly 6.7 seconds:
+inside the band, and genuinely too short to carry a phrase. Neither constant
+can be changed alone without re-deriving where the pair lands — the formula
+above is the whole of the relationship, and it is worth keeping visible
+because nothing enforces it except a comment next to `LOOP_BARS` in
+`night/prepare.py`.
+
+### Wind is still a dead steering row, and it stayed dead deliberately
+
+`night/palette.py`'s `_slow_drift` — the depth of the drones' amplitude
+drift, the row the steering table gives to wind — still receives only
+`(n, sr, rng)`, no `NightContext`, exactly as Phase 1 left it. It was offered
+as the smaller of two pieces of work put up for this branch and passed over
+in favour of the ghost, which is the larger and more interesting change. One
+of the spec's six steering rows still does nothing, and this document said so
+under Phase 1 and says so again here rather than letting the claim go stale
+by omission.
+
+### Ambient light was considered, and it needs a spike rather than a design
+
+The same discussion that decided the microphone considered ambient light as a
+steering input and set it aside for a different reason than wind's: it is not
+smaller work, it is *unknown* work. A room going dark is the best available
+proxy this system has for *you have actually gone to bed* — a fact nothing
+else in the design can currently infer — which makes it more interesting than
+any input on the existing steering table. It may also be unreadable at all on
+Apple Silicon, which is not something a design document can resolve; only a
+short technical spike can. Recorded here so the next person who reaches for
+it starts with the spike rather than a spec.
+
+### Defects in the plan's own reference code, twenty-two of them across seven tasks
+
+The task briefs for this branch, like Phase 1's, shipped working verbatim code
+for most tasks. Twenty-two real defects were found in that code across the
+seven implementation tasks, by implementers and confirmed independently by
+reviewers — mutation-tested against reverted copies wherever the finding
+allowed it, not merely argued. The count is not the useful part; the pattern
+is, and it repeats the lesson Phase 1 already recorded once under its own
+false-safety-proof incident: a plan document is prose with the authority of
+code and none of the checking.
+
+**Some were tests asserting values that were impossible under constants
+defined in the very same file.** Task 1's fold test expected a folded value of
+exactly `110.0` from a band `pitch.py` itself defines as upper-*exclusive*,
+`[FOLD_LOW_HZ, FOLD_HIGH_HZ)` — the expected value could never occur. Task 6's
+resample test built a voice's `n_frames` from the module's `SR` constant
+regardless of the sample rate it was actually rendering at, so its own
+assertion (thirty seconds of audio at 44100 Hz) was arithmetic nonsense for a
+voice built for the same duration at 22050 Hz. Both were caught the same
+way: run the test, watch it fail against code that had not changed.
+
+**Several more were tests that could not fail against the defect they existed
+to catch.** Task 1's "three distinct tones" test used an exact octave pair as
+its fixture, in a test whose entire subject was that octave-folding collapses
+octaves into one pitch — a fixture chosen from precisely the family the test
+was checking for. Task 5's ghost-pitch test asserted only `20.0 < pitch_hz <
+130.0`, a window wide enough to contain both the fold band and the
+seed-drawn root pitches, so it could not distinguish a ghost pitch from an
+ordinary seeded one — the only thing it existed to check. Task 6's cache
+test asserted a purity property that held whether or not any caching
+mechanism existed at all; deleting the eviction logic outright left it
+green.
+
+**Two guards were flagged as decorative by the implementers who wrote them,
+self-reported rather than found by a later reviewer.** Task 5's implementer
+could not, after a 6000-trial sweep, construct a case where a stated
+simplification actually mattered to the test guarding it. Task 6's
+implementer tried dropping the cache key's sample-rate field and mutating a
+cached buffer in place, could defeat neither attempt, and flagged the guard
+as unverified rather than claiming it discriminating. Both were kept rather
+than deleted or rewritten under time pressure, and both are recorded here by
+name rather than folded quietly into a passing count.
+
+### Three listening artefacts on this project have been unrepresentative
+
+Every excerpt rendered from this branch's own reference material, until the
+very last task, was of a `NightStream` nobody can actually run.
+`NightStream(ctx, sr=44100)` — the excerpt script's own construction, taking
+`SoundbedConfig`'s dataclass default — builds the bed **off**.
+`cli.py:199`'s real `sleepmix night` builds `SoundbedConfig(enabled=True)`,
+because Phase 1's own review found a night without the bed silent for much of
+the small hours. The rule this leaves behind: **an excerpt script must
+construct `NightStream` exactly as `cli.py` does**, or every measurement taken
+from it describes a night nobody can hear.
+
+**The excerpt measurements, taken from the corrected script, with a sampling
+caveat that belongs beside them rather than after them.** Three three-minute
+windows, one source (`nackmandela.mp3`), the same seed:
+
+| Excerpt | RMS | Peak | Centroid | Voices |
+|---|---|---|---|---|
+| 22:30 | 0.1126 | 0.721 | 877 Hz | 8 — 4 source, 4 ghost, 69/31 energy split |
+| 01:00 | 0.00131 | 0.0061 | 178 Hz | 0 — bed only |
+| 04:00 | 0.00077 | 0.0035 | 100 Hz | 0 — bed only |
+
+**Two of the three contain no voices at all**, and that is not a defect in
+the excerpt or the design: each is a three-minute window landing entirely
+inside one of the night's own birth gaps — roughly 450 s long at that hour,
+where the arc's own density has already stretched the gap range to something
+like 150–520 s — so a three-minute window falls between voices more often
+than not. The files are accurate, and they demonstrate the *sparseness* the arc is
+built to produce rather than the ghost mechanism this phase exists for. Only
+22:30, with four source voices sounding against four ghosts at a 69/31 energy
+split, shows the actual mechanism. The centroid falling **877 → 178 → 100 Hz**
+across the three excerpts is the arc's brightness ceiling doing its stated
+job, measured rather than merely claimed.
+
+Whether seven-minute stretches of bed-only listening are the right shape for
+a sleep tool is exactly the kind of question this document does not get to
+answer. It is the operator's, and it now has numbers attached to it rather
+than only an impression.
+
+### The listening judgement is still outstanding
+
+No agent has ears. Every measurement in this section — RMS, peak, spectral
+centroid, voice count, energy split — is objective and none of it is a
+verdict on how any of it sounds. Nobody has slept through a night this branch
+produced. Every taste value named in "The placeholders" above, and the
+question of whether the ghost mechanism itself reads as company or as
+something stranger, is unvalidated until someone does.
 
 ## Plan 5, Phase 1: the night
 
