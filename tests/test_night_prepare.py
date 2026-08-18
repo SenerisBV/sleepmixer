@@ -4,6 +4,7 @@ Demucs on a laptop spins the fans for minutes, next to the bed. Everything
 here exists so that `sleepmix night` can be instant and silent about it, and
 the last test in this file is the one that keeps that true.
 """
+import json
 import os
 import time
 
@@ -293,6 +294,94 @@ def test_supersession_matches_the_full_source_path_not_a_prefix(
 
     assert os.path.exists(old_loop)
     assert os.path.exists(old_json)
+
+
+def test_supersession_refuses_to_escape_the_profiles_directory_via_source_id(
+        tmp_path, monkeypatch):
+    """A profile's ``source_id`` is never validated on the way in when it is
+    *read* from disk: unlike ``write_profile``, which refuses ``"../victim"``
+    outright, ``_read_profile`` deliberately tolerates a hand-edited or
+    foreign-written ``.night.json``. Built here by writing the malicious JSON
+    directly -- not through ``write_profile``, which correctly rejects this
+    id -- and reached through the ordinary ``prepare_all()`` flow, so this is
+    the exploit actually being reachable, not a hypothetical."""
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    path = os.path.join(sources_directory(), "one.wav")
+    _write_song(path, freqs=(110.0,))
+    prepare_all()
+    original = load_profiles()[0]
+
+    # Hand-edit the on-disk profile to carry an unsafe source_id.
+    profile_json = os.path.join(
+        profiles_directory(), original.source_id + PROFILE_SUFFIX)
+    with open(profile_json) as fh:
+        raw = json.load(fh)
+    raw["source_id"] = "../victim"
+    with open(profile_json, "w") as fh:
+        json.dump(raw, fh)
+
+    # Where source_id="../victim" would resolve the deletion target to: one
+    # directory above profiles_directory().
+    victim = os.path.join(profiles_directory(), "..", "victim" + PROFILE_SUFFIX)
+    with open(victim, "w") as fh:
+        fh.write("do not delete me")
+
+    # Edit the source so it is reprocessed: prepare_all tries to supersede
+    # the now-malicious old profile.
+    _write_song(path, freqs=(146.83, 220.0))
+    future = time.time() + 5
+    os.utime(path, (future, future))
+    prepare_all()
+
+    assert os.path.exists(victim)
+    with open(victim) as fh:
+        assert fh.read() == "do not delete me"
+
+    # The refusal to clean up the old profile must not cost the new one.
+    new_profiles = [p for p in load_profiles()
+                    if p.source_path == os.path.abspath(path)
+                    and p.source_id not in (original.source_id, "../victim")]
+    assert len(new_profiles) == 1
+
+
+def test_supersession_refuses_to_delete_a_loop_path_outside_profiles_directory(
+        tmp_path, monkeypatch):
+    """Same shape as the ``source_id`` exploit, for the other field
+    ``_delete_superseded`` reads off disk: ``loop_paths``. Built by writing
+    the malicious JSON directly, since ``write_profile`` only validates
+    ``source_id`` and never inspects where ``loop_paths`` point."""
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    path = os.path.join(sources_directory(), "one.wav")
+    _write_song(path, freqs=(110.0,))
+    prepare_all()
+    original = load_profiles()[0]
+
+    victim = os.path.join(str(tmp_path), "elsewhere.wav")
+    with open(victim, "w") as fh:
+        fh.write("do not delete me")
+
+    profile_json = os.path.join(
+        profiles_directory(), original.source_id + PROFILE_SUFFIX)
+    with open(profile_json) as fh:
+        raw = json.load(fh)
+    raw["loop_paths"] = [victim]
+    raw["loop_frames"] = [1]
+    with open(profile_json, "w") as fh:
+        json.dump(raw, fh)
+
+    _write_song(path, freqs=(146.83, 220.0))
+    future = time.time() + 5
+    os.utime(path, (future, future))
+    prepare_all()
+
+    assert os.path.exists(victim)
+    with open(victim) as fh:
+        assert fh.read() == "do not delete me"
+
+    new_profiles = [p for p in load_profiles()
+                    if p.source_path == os.path.abspath(path)
+                    and p.source_id != original.source_id]
+    assert len(new_profiles) == 1
 
 
 def test_prepare_all_computes_source_id_once_per_file(tmp_path, monkeypatch):

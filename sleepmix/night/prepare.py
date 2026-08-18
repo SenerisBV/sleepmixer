@@ -13,6 +13,7 @@ What goes in is whatever is in the sources folder.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 from typing import Callable
@@ -28,6 +29,8 @@ from .sources import (
     PROFILE_SUFFIX, SourceProfile, load_profiles, profiles_directory,
     sources_directory, write_profile,
 )
+
+_log = logging.getLogger(__name__)
 
 # How many loops one song contributes. Enough that a stretch of the night has
 # internal variety without any one recurring often. A placeholder.
@@ -201,6 +204,35 @@ def prepare_source(path: str, sr: int = 44100,
     return profile
 
 
+def _is_inside_profiles_directory(path: str) -> bool:
+    """True if ``path`` resolves to a file directly inside
+    ``profiles_directory()`` — the one check standing between a stale
+    profile's fields and ``os.remove``.
+
+    ``_delete_superseded`` deletes paths it read out of a profile on disk,
+    and ``_read_profile`` — deliberately — tolerates a profile "written by an
+    older version, half written, or naming a file that has since moved."
+    Nothing upstream of this function guarantees ``old.source_id`` is free of
+    ``..`` or that ``old.loop_paths`` names anything under
+    ``profiles_directory()`` at all; `write_profile` enforces that on the way
+    *in*, but a hand-edited or foreign-written ``.night.json`` skips that
+    gate entirely and reaches this function anyway. So the check happens
+    here, at the one step that is irreversible, rather than trusting the read
+    path to have already ruled it out.
+
+    ``realpath``, not ``abspath``: ``abspath`` collapses a lexical ``..`` but
+    does not follow symlinks, so a symlinked profiles directory or a
+    symlinked loop file would still resolve outside it undetected.  The
+    resolved *parent directory* is compared for equality, not with
+    ``startswith`` — a prefix match would also accept a sibling directory
+    that merely shares a name prefix (``profiles-old`` starting with
+    ``profiles``).
+    """
+    resolved_dir = os.path.realpath(profiles_directory())
+    resolved_path = os.path.realpath(path)
+    return os.path.dirname(resolved_path) == resolved_dir
+
+
 def _delete_superseded(new_profile: SourceProfile,
                        prior: tuple[SourceProfile, ...]) -> None:
     """Remove any profile in ``prior`` that names the same source file as
@@ -217,6 +249,13 @@ def _delete_superseded(new_profile: SourceProfile,
     files, and a prefix match would treat an unrelated song whose path merely
     starts the same way as the same source.
 
+    Every path this removes is checked with `_is_inside_profiles_directory`
+    first, independently for the constructed ``.night.json`` path and for
+    each entry in ``old.loop_paths`` — a profile can be malformed in either
+    field alone, and one bad entry must not block cleanup of the others. A
+    path that fails the check is skipped and logged, not raised on: this runs
+    inside `prepare_all`, and one unremovable orphan must not cost the batch.
+
     Wrapped in its own ``try``/``except OSError``: failing to clean up an old
     profile must not cost the new one that is already written and valid on
     disk. Best-effort, not load-bearing.
@@ -229,9 +268,19 @@ def _delete_superseded(new_profile: SourceProfile,
         try:
             old_json = os.path.join(
                 profiles_directory(), old.source_id + PROFILE_SUFFIX)
-            if os.path.exists(old_json):
+            if not _is_inside_profiles_directory(old_json):
+                _log.warning(
+                    "refusing to delete profile json outside "
+                    "profiles_directory(): %r", old_json)
+            elif os.path.exists(old_json):
                 os.remove(old_json)
+
             for loop_path in old.loop_paths:
+                if not _is_inside_profiles_directory(loop_path):
+                    _log.warning(
+                        "refusing to delete loop file outside "
+                        "profiles_directory(): %r", loop_path)
+                    continue
                 if os.path.exists(loop_path):
                     os.remove(loop_path)
         except OSError:
