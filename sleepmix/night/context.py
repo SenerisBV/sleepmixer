@@ -17,6 +17,7 @@ import datetime as dt
 from dataclasses import dataclass
 
 from .sky import day_length_h, moon_phase, solar_events
+from .sources import SourceProfile
 
 # The clamp on how long a night may be. Both bounds are placeholders in the
 # sense docs/project-state.md means it: invented, not measured, and due for
@@ -54,13 +55,20 @@ NEUTRAL_WEATHER = Weather(
 
 @dataclass(frozen=True)
 class NightContext:
-    """Everything the planner and the arc are allowed to read."""
+    """Everything the planner and the arc are allowed to read.
+
+    ``sources`` is part of the dusk snapshot for the same reason
+    ``weather`` is: what the night is made of should not change while
+    someone is asleep in it. Defaulted and placed last so every existing
+    construction of this dataclass keeps working unchanged.
+    """
 
     seed: int
     night_length_s: float
     weather: Weather
     moon_phase: float
     day_length_h: float
+    sources: tuple[SourceProfile, ...] = ()
 
 
 def night_length_s(seconds_until_sunrise: float) -> float:
@@ -121,12 +129,17 @@ def fetch_weather(lat_deg: float, lon_deg: float,
 
 
 def build_context(now: dt.datetime, lat_deg: float, lon_deg: float,
-                  seed: int) -> NightContext:
+                  seed: int, sources: tuple[SourceProfile, ...] = ()
+                  ) -> NightContext:
     """Take the snapshot. Never raises.
 
     ``now`` is expected to be timezone-aware UTC. The sunrise looked for is
     tomorrow's if today's has already happened, which is the ordinary case at
     the hour anybody presses this button.
+
+    ``sources`` is passed straight through onto the snapshot: profiles are
+    part of the dusk snapshot for the same reason the weather is — what the
+    night is made of should not change while someone is asleep in it.
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=dt.timezone.utc)
@@ -149,4 +162,5 @@ def build_context(now: dt.datetime, lat_deg: float, lon_deg: float,
         weather=fetch_weather(lat_deg, lon_deg),
         moon_phase=phase,
         day_length_h=daylight,
+        sources=sources,
     )

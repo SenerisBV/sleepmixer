@@ -34,6 +34,7 @@ from ..config import StemDecayConfig
 from ..util import iteration_rng
 from .clock import arc_at, NightArc
 from .context import NightContext
+from .sources import pitch_distance
 
 TEXTURES = ("drone", "noiseband")
 
@@ -248,3 +249,85 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
         index += 1
 
     return voices
+
+
+# How long one source holds the stage. Long enough that its several loops get
+# to establish a place, short enough that a night visits more than one or two
+# of them. Both are placeholders.
+STAGE_MIN_S = 20 * 60.0
+STAGE_MAX_S = 45 * 60.0
+
+
+@dataclass(frozen=True)
+class Stage:
+    """One source holding the stage, over a span of the night."""
+
+    source_index: int
+    start_frame: int
+    end_frame: int
+
+
+def schedule_sources(ctx: NightContext, sr: int,
+                     night_frames: int) -> tuple[Stage, ...]:
+    """Who holds the stage, when, for the whole night.
+
+    Sources take turns rather than sounding together: concurrent voices drawn
+    from different songs would be mud, since they share neither key nor room
+    nor tape. Handing over would be an event, except that the outgoing
+    source's ghosts outlive it and cover the seam — which is why this function
+    only has to decide *who and when*, and never has to soften anything.
+
+    The next source is chosen as the nearest in pitch among those not just
+    used, so the overlap during a handover is consonant. With one source the
+    rule is inert; with none there is no schedule at all.
+    """
+    if not ctx.sources:
+        return ()
+
+    stages: list[Stage] = []
+    cursor = 0
+    step = 0
+    current = int(iteration_rng(ctx.seed, "night:stage", 0)
+                  .integers(0, len(ctx.sources)))
+
+    while cursor < night_frames:
+        rng = iteration_rng(ctx.seed, "night:stage", step + 1)
+        # A stage must advance the cursor by at least one frame. Without the
+        # floor, a degenerate sample rate (0, or small enough that the
+        # product truncates to 0) would draw a zero-length stage forever and
+        # this loop would never reach ``night_frames`` — the same failure
+        # mode ``plan_voices``' birth-gap draw already guards against with
+        # the same ``max(..., 1)``.
+        length = max(int(float(rng.uniform(STAGE_MIN_S, STAGE_MAX_S)) * sr), 1)
+        stages.append(Stage(source_index=current, start_frame=cursor,
+                            end_frame=cursor + length))
+        cursor += length
+        step += 1
+
+        if len(ctx.sources) > 1:
+            candidates = [i for i in range(len(ctx.sources)) if i != current]
+            # ``, i`` breaks a pitch-distance tie by lowest index, so the
+            # pick never depends on the traversal order ``min`` happens to
+            # see ties in. ``candidates`` is a plain list built by ascending
+            # index, so that order is already deterministic here — but
+            # relying on that incidentally would make this line correct only
+            # by accident of how ``candidates`` happens to be built today.
+            current = min(candidates, key=lambda i: (
+                pitch_distance(ctx.sources[current], ctx.sources[i]), i))
+
+    return tuple(stages)
+
+
+def stage_at(schedule: tuple[Stage, ...], frame: int) -> Stage | None:
+    """The stage covering ``frame``, or ``None``.
+
+    Past the end clamps to the last stage rather than falling off, so a stream
+    that outlives its own arc keeps its material instead of going synthetic.
+    A frame before the night, or an empty schedule, has no stage at all.
+    """
+    if not schedule or frame < 0:
+        return None
+    for stage in schedule:
+        if stage.start_frame <= frame < stage.end_frame:
+            return stage
+    return schedule[-1] if frame >= schedule[-1].end_frame else None
