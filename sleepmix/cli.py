@@ -145,10 +145,12 @@ def ui(host, port, open_browser, allow_remote):
 
 @main.command()
 @click.option("--seconds", type=int, default=None,
-              help="Stop after this many seconds. For trying it out; a real "
-                   "night takes no arguments at all.")
+              help="Stop after this many seconds instead of at the end of the "
+                   "night. For trying it out; a real night takes no arguments "
+                   "at all.")
 def night(seconds: int | None) -> None:
-    """Play an indefinite, self-quieting ambient stream until morning.
+    """Play a self-quieting ambient stream until the night it was built for
+    runs out.
 
     Deliberately takes no configuration. Location comes from SLEEPMIX_LAT and
     SLEEPMIX_LON (defaulting to Amsterdam), a comfort show comes from whatever
@@ -157,13 +159,15 @@ def night(seconds: int | None) -> None:
     sky, the weather, and a seed.
     """
     import datetime as dt
+    import math
     import os
     import random
 
     # The device check goes first, before anything is printed. Printing "Night
-    # 12345: 9.2 h until light." and "Ctrl-C to stop." and *then* refusing to
-    # start reads as encouragement followed by a slap; a user without the
-    # extra should see only the one line that tells them what to install.
+    # 12345: 9.2 h until light." and where the room folder is and *then*
+    # refusing to start reads as encouragement followed by a slap; a user
+    # without the extra should see only the one line that tells them what to
+    # install.
     try:
         import sounddevice as sd
     except Exception:
@@ -198,9 +202,25 @@ def night(seconds: int | None) -> None:
 
     click.echo(f"Night {seed}: {ctx.night_length_s / 3600:.1f} h until light.")
     click.echo(f"Room audio: {room_directory()}")
-    click.echo("Ctrl-C to stop.")
+    click.echo("Ends on its own at first light. Ctrl-C to stop it sooner.")
 
-    max_blocks = int(seconds / BLOCK_S) if seconds is not None else None
+    # **The night ends by ending.** The design spec is plain about it — "Phase
+    # 1 descends toward near-silence over an assumed night and stops" — and it
+    # argues the case: with no configuration there is no alarm time, so "a
+    # system that guesses when you are getting up and is wrong is worse than
+    # one that does not try". What shipped did neither: with no ``--seconds``
+    # the loop ran forever and the only way out was Ctrl-C, which is a third
+    # behaviour nobody chose. The night's own length is the one number that
+    # says when it is over, so that is what bounds it.
+    #
+    # This is about the stream terminating, not about the sound. ``arc_at``
+    # clamps time past the end of the night to the arc's quietest values, so a
+    # block or two of overrun degrades nothing — which is why rounding up is
+    # safe and rounding down would clip the last of the descent.
+    if seconds is not None:
+        max_blocks = int(seconds / BLOCK_S)
+    else:
+        max_blocks = int(math.ceil(ctx.night_length_s / BLOCK_S))
     with sd.OutputStream(samplerate=sr, channels=2, dtype="float32") as out:
         try:
             player.run(max_blocks=max_blocks, sink=lambda b: out.write(b.data))

@@ -322,9 +322,9 @@ See `sleepmix/config.example.yaml` for every field with comments.
 
 ## The night stream
 
-`sleepmix render` makes a file. `sleepmix night` doesn't — it plays an
-indefinite ambient stream, live, that gets quieter and sparser as the night
-goes on and settles near silence toward sunrise.
+`sleepmix render` makes a file. `sleepmix night` doesn't — it plays a live
+ambient stream that gets quieter and sparser as the night goes on, settles
+near silence toward sunrise, and then stops.
 
 ```bash
 pip install "sleepmix[night]"
@@ -345,11 +345,14 @@ path is printed when you start a night) and it plays continuously and
 quietly, as if it were on through a wall. Neither source is required; without
 them you get music alone.
 
-`sleepmix night` takes no other arguments. It descends toward near-silence
-over the night and then holds there — it does not exit on its own, so Ctrl-C
-is how you actually stop it, same as leaving a radio on. `--seconds N` exists
-only so you can hear what it sounds like without staying up for it; a real
-night ignores it.
+`sleepmix night` takes no other arguments. It ends by ending: the length of
+the night is worked out from your coordinates when you press start, the stream
+descends across exactly that long, and then playback stops. There's no alarm
+and no wake-up ramp, because there's no config to tell it when you're getting
+up — and a system that guesses when you're getting up and is wrong is worse
+than one that doesn't try. Ctrl-C still stops it sooner. `--seconds N` exists
+so you can hear what it sounds like without staying up for it, and overrides
+the night's own length.
 
 ## Notes & caveats
 

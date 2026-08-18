@@ -71,6 +71,77 @@ def test_night_checks_for_a_device_before_it_says_anything_encouraging(
     monkeypatch.setitem(sys.modules, "sounddevice", None)
 
     output = CliRunner().invoke(main, ["night"]).output
-    assert "Ctrl-C to stop." not in output
+    assert "Ctrl-C" not in output
     assert "until light" not in output
     assert "Room audio" not in output
+
+
+def _fake_device(monkeypatch):
+    """A ``sounddevice`` that opens without hardware and swallows writes."""
+    import types
+
+    class _Out:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def write(self, _data):
+            return None
+
+    module = types.SimpleNamespace(OutputStream=lambda **kwargs: _Out())
+    monkeypatch.setitem(sys.modules, "sounddevice", module)
+
+
+def _captured_run(monkeypatch) -> dict:
+    """Replace the playback loop, keeping the arguments it was handed."""
+    import sleepmix.night.player as player_mod
+
+    seen: dict = {}
+
+    def fake_run(self, max_blocks=None, sink=None):
+        seen["max_blocks"] = max_blocks
+        seen["night_length_s"] = self.stream.ctx.night_length_s
+
+    monkeypatch.setattr(player_mod.NightPlayer, "run", fake_run)
+    return seen
+
+
+def test_a_night_with_no_seconds_is_bounded_by_the_nights_own_length(
+        tmp_path, monkeypatch):
+    """The spec: "Phase 1 descends toward near-silence over an assumed night
+    and stops."
+
+    What shipped stopped only for Ctrl-C — ``--seconds`` was the sole source
+    of a ``max_blocks``, so ``sleepmix night`` played at noon if nobody was
+    there to stop it. The night's own length is the number that says when it
+    is over.
+    """
+    from sleepmix.night.stream import BLOCK_S
+
+    _no_network(monkeypatch)
+    _fake_device(monkeypatch)
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    seen = _captured_run(monkeypatch)
+
+    result = CliRunner().invoke(main, ["night"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["max_blocks"] is not None
+    expected = int(-(-seen["night_length_s"] // BLOCK_S))  # ceil
+    assert seen["max_blocks"] == expected
+    # Rounded up rather than down, so the last of the descent is not clipped.
+    assert seen["max_blocks"] * BLOCK_S >= seen["night_length_s"]
+
+
+def test_seconds_still_overrides_the_nights_own_length(tmp_path, monkeypatch):
+    _no_network(monkeypatch)
+    _fake_device(monkeypatch)
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    seen = _captured_run(monkeypatch)
+
+    result = CliRunner().invoke(main, ["night", "--seconds", "120"])
+
+    assert result.exit_code == 0, result.output
+    assert seen["max_blocks"] == 12
