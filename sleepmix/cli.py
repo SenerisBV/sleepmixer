@@ -143,5 +143,58 @@ def ui(host, port, open_browser, allow_remote):
                 log_level="info")
 
 
+@main.command()
+@click.option("--seconds", type=int, default=None,
+              help="Stop after this many seconds. For trying it out; a real "
+                   "night takes no arguments at all.")
+def night(seconds: int | None) -> None:
+    """Play an indefinite, self-quieting ambient stream until morning.
+
+    Deliberately takes no configuration. Location comes from SLEEPMIX_LAT and
+    SLEEPMIX_LON (defaulting to Amsterdam), a comfort show comes from whatever
+    is in the `room` folder under the data directory, and a radio feed comes
+    from SLEEPMIX_RADIO_URL if one is set. Everything else is derived from the
+    sky, the weather, and a seed.
+    """
+    import datetime as dt
+    import os
+    import random
+
+    from .night.context import build_context
+    from .night.player import NightPlayer, room_directory
+    from .night.speech import radio_source_from, room_sources_from
+    from .night.stream import BLOCK_S, NightStream
+
+    lat = float(os.environ.get("SLEEPMIX_LAT", "52.3676"))
+    lon = float(os.environ.get("SLEEPMIX_LON", "4.9041"))
+    seed = int(os.environ.get("SLEEPMIX_SEED", random.randrange(2 ** 31)))
+    sr = 44100
+
+    ctx = build_context(dt.datetime.now(dt.timezone.utc), lat, lon, seed)
+    stream = NightStream(ctx, sr=sr)
+    player = NightPlayer(
+        stream,
+        room_sources_from(room_directory(), sr),
+        radio_source_from(os.environ.get("SLEEPMIX_RADIO_URL"), sr),
+    )
+
+    click.echo(f"Night {seed}: {ctx.night_length_s / 3600:.1f} h until light.")
+    click.echo(f"Room audio: {room_directory()}")
+    click.echo("Ctrl-C to stop.")
+
+    try:
+        import sounddevice as sd
+    except Exception:
+        raise click.ClickException(
+            'sounddevice is not installed — run: pip install "sleepmix[night]"')
+
+    max_blocks = int(seconds / BLOCK_S) if seconds is not None else None
+    with sd.OutputStream(samplerate=sr, channels=2, dtype="float32") as out:
+        try:
+            player.run(max_blocks=max_blocks, sink=lambda b: out.write(b.data))
+        except KeyboardInterrupt:
+            pass
+
+
 if __name__ == "__main__":
     main()
