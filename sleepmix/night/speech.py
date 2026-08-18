@@ -201,3 +201,201 @@ def through_a_wall(buf: AudioBuffer, intelligibility: float) -> AudioBuffer:
     if peak > 0:
         data = data * (db_to_amp(level_db) / peak)
     return AudioBuffer(data.astype(np.float32), buf.sr)
+
+
+# -- radio ----------------------------------------------------------------
+#
+# The other door: unfollowable through obscurity rather than familiarity. HF
+# and scanner audio is already intermittent, so the sparseness this design
+# wants does not have to be invented — it is a property of the signal, and the
+# gate below simply lets it through.
+
+# Roughly telephone bandwidth: what a distant transmission survives as.
+_AIR_LOW_HZ = 300.0
+_AIR_HIGH_HZ = 3000.0
+
+_AIR_CLEAR_DB = -24.0
+_AIR_MURKY_DB = -40.0
+
+_SQUELCH_SMOOTH_S = 0.05
+_STREAM_CHUNK_S = 1.0
+
+
+def squelch(x: np.ndarray, sr: int, floor_rms: float,
+            open_ratio: float = 3.0) -> np.ndarray:
+    """A 0..1 envelope that opens where the signal rises above the noise.
+
+    Not a noise gate: the output is an envelope the caller *blends* with, so
+    the static underneath can be kept at a lower level rather than removed.
+    Removing it would throw away the part of a scanner feed that is doing the
+    most work.
+
+    Smoothed with a one-pole filter run forwards and then backwards, so the
+    gate has no attack and no phase shift. A gate that snaps is a click, and a
+    click at 3 AM is the thing this whole program is arranged around avoiding.
+    """
+    from scipy.signal import lfilter
+
+    mono = x.mean(axis=1) if x.ndim == 2 else x
+    threshold = max(floor_rms, 1e-9) * open_ratio
+    raw = (np.abs(mono) > threshold).astype(np.float32)
+
+    alpha = float(np.exp(-1.0 / max(_SQUELCH_SMOOTH_S * sr, 1.0)))
+    forward = lfilter([1.0 - alpha], [1.0, -alpha], raw)
+    backward = lfilter([1.0 - alpha], [1.0, -alpha], forward[::-1])[::-1]
+    return np.clip(backward, 0.0, 1.0).astype(np.float32)
+
+
+_AIR_SHOULDER_OCTAVE = 5.0  # amplitude falloff exponent outside the band
+
+
+def _bandpass_fft(x: np.ndarray, low_hz: float, high_hz: float,
+                  sr: int) -> np.ndarray:
+    """Soft-shouldered band limiting, in the frequency domain.
+
+    The corner (``_AIR_HIGH_HZ`` = 3000) sits under an octave from where the
+    band-limit test samples (4000 Hz), so a gentle shoulder is not steep
+    enough to clear the band there: a -12 dB/octave amplitude slope (the
+    original exponent of 2) still leaves double-digit percentages of energy
+    above the corner once you sum across the wide tail up to Nyquist. 5.0
+    (-30 dB/octave amplitude) clears it with comfortable margin while still
+    being a shoulder, not a wall.
+    """
+    n = len(x)
+    spectrum = np.fft.rfft(x, axis=0)
+    freqs = np.fft.rfftfreq(n, 1.0 / sr)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        below = np.log2(np.maximum(freqs, 1e-6) / max(low_hz, 1e-6))
+        above = np.log2(np.maximum(freqs, 1e-6) / max(high_hz, 1e-6))
+    shape = (np.where(below >= 0, 1.0, 2.0 ** (_AIR_SHOULDER_OCTAVE * below))
+             * np.where(above <= 0, 1.0,
+                        2.0 ** (-_AIR_SHOULDER_OCTAVE * above)))
+    return np.fft.irfft(spectrum * shape[:, None], n=n, axis=0).astype(np.float32)
+
+
+def over_the_air(buf: AudioBuffer, intelligibility: float,
+                 static_gain: float) -> AudioBuffer:
+    """Put a transmission at the far end of an ionospheric path.
+
+    The gate is applied as a *blend* rather than a mute: where it is open the
+    transmission is at full weight, and where it is closed the same audio
+    survives at ``static_gain``. Since what is there when the gate is closed is
+    static, that is exactly the sparse-voices-over-hiss texture this is for.
+    """
+    amount = float(min(max(intelligibility, 0.0), 1.0))
+    level_db = _AIR_MURKY_DB + (_AIR_CLEAR_DB - _AIR_MURKY_DB) * amount
+
+    stereo = buf.to_stereo().data
+    limited = _bandpass_fft(stereo, _AIR_LOW_HZ, _AIR_HIGH_HZ, buf.sr)
+
+    floor = float(np.sqrt(np.mean(limited ** 2))) if limited.size else 0.0
+    gate = squelch(limited, buf.sr, floor_rms=max(floor, 1e-6))
+    blended = limited * (static_gain + (1.0 - static_gain) * gate[:, None])
+
+    peak = float(np.abs(blended).max())
+    if peak > 0:
+        blended = blended * (db_to_amp(level_db) / peak)
+    return AudioBuffer(blended.astype(np.float32), buf.sr)
+
+
+def _open_stream(url: str, sr: int):
+    """Open an HTTP audio stream and return something with ``read``/``close``.
+
+    Imported inside the function per the graceful-degradation policy, and
+    factored out so tests can replace the network without patching a library
+    they do not otherwise care about.
+    """
+    import soundfile as sf
+    import requests
+
+    response = requests.get(url, stream=True, timeout=10)
+    response.raise_for_status()
+
+    handle = sf.SoundFile(response.raw, mode="r")
+
+    class _Stream:
+        def read(self, n_frames: int) -> np.ndarray:
+            data = handle.read(n_frames, dtype="float32", always_2d=True)
+            if data.shape[1] == 1:
+                data = np.repeat(data, 2, axis=1)
+            return data[:, :2]
+
+        def close(self) -> None:
+            handle.close()
+            response.close()
+
+    return _Stream()
+
+
+class RadioSource:
+    """A live HTTP audio stream, or silence.
+
+    Every failure mode — refused connection, DNS, a stream that stops
+    mid-night, a decoder that gives up — lands in the same place: this source
+    goes permanently quiet and the player carries on with music. Reconnection
+    is deliberately not attempted here. A retry loop inside the playback path
+    is a stall inside the playback path, and there is no version of "the
+    network came back" that is worth a gap in the audio at 3 AM.
+    """
+
+    def __init__(self, url: str, sr: int, chunk_s: float = _STREAM_CHUNK_S) -> None:
+        self.url = url
+        self.sr = sr
+        self.chunk_frames = int(chunk_s * sr)
+        self._stream = None
+        self._opened = False
+        self._dead = False
+
+    def _ensure_open(self) -> bool:
+        if self._dead:
+            return False
+        if self._opened:
+            return self._stream is not None
+        self._opened = True
+        try:
+            self._stream = _open_stream(self.url, self.sr)
+            return True
+        except Exception:
+            self._dead = True
+            return False
+
+    def read(self, n_frames: int) -> AudioBuffer:
+        out = np.zeros((n_frames, 2), dtype=np.float32)
+        if not self._ensure_open():
+            return AudioBuffer(out, self.sr)
+
+        try:
+            filled = 0
+            while filled < n_frames:
+                chunk = self._stream.read(min(self.chunk_frames,
+                                              n_frames - filled))
+                if chunk is None or len(chunk) == 0:
+                    raise OSError("stream ended")
+                take = min(len(chunk), n_frames - filled)
+                out[filled:filled + take] = chunk[:take]
+                filled += take
+        except Exception:
+            self._dead = True
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+            return AudioBuffer(np.zeros((n_frames, 2), dtype=np.float32),
+                               self.sr)
+
+        return AudioBuffer(out, self.sr)
+
+    def close(self) -> None:
+        if self._stream is not None:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        self._dead = True
+
+
+def radio_source_from(url: str | None, sr: int) -> SpeechSource:
+    """A radio source for ``url``, or silence when none is configured."""
+    return RadioSource(url, sr) if url else SilentSource(sr)
