@@ -145,3 +145,45 @@ def test_seconds_still_overrides_the_nights_own_length(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert seen["max_blocks"] == 12
+
+
+def test_night_says_it_is_running_on_synthesis_when_nothing_is_prepared(
+        tmp_path, monkeypatch):
+    """A person who has not run `prepare` should be told, not left guessing
+    why it sounds the same as yesterday.
+
+    ``_no_network`` and ``_fake_device`` are plain helper functions in this
+    file, not pytest fixtures — neither carries an ``@pytest.fixture``
+    decorator, and this file's other tests all call them explicitly rather
+    than requesting them as arguments. The task brief wrote them as fixture
+    parameters, which pytest would refuse to collect (``fixture
+    '_fake_device' not found``). Called directly here, matching the existing
+    convention in this file.
+
+    Deliberately does not force the ``sounddevice`` import to fail: Phase 1
+    moved that check above every ``click.echo`` on purpose, so the mode line
+    below it is unreachable on that path. ``_fake_device`` exists precisely
+    so the command can run far enough to print it without real hardware.
+    Undoing that fix to make this test easier would be how the fix stops
+    being a fix.
+    """
+    _no_network(monkeypatch)
+    _fake_device(monkeypatch)
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    result = CliRunner().invoke(main, ["night", "--seconds", "1"])
+    assert "synthesis" in result.output.lower()
+
+
+def test_night_names_the_sources_it_found(tmp_path, monkeypatch):
+    """See the docstring above: ``_no_network``/``_fake_device`` are called
+    directly, not requested as fixtures, matching this file's convention."""
+    _no_network(monkeypatch)
+    _fake_device(monkeypatch)
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    from sleepmix.night.sources import SourceProfile, write_profile
+    write_profile(SourceProfile(source_id="a", source_path="/a.wav",
+                                loop_paths=("/a.wav",),
+                                loop_frames=(1000,), pitch_set=(55.0,),
+                                sr=44100))
+    result = CliRunner().invoke(main, ["night", "--seconds", "1"])
+    assert "1 source" in result.output

@@ -5,6 +5,7 @@ its predecessors. If that ever stops holding, block independence was a hope
 rather than a property — and the most likely cause is something live having
 been routed into this module, which is exactly what the last test here forbids.
 """
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -394,6 +395,137 @@ def test_a_voice_evicted_from_the_cache_still_renders_the_same():
 
     again = stream.block(0)
     assert np.array_equal(first.data, again.data)
+
+
+# -- sources in play ---------------------------------------------------
+
+def _source_context(tmp_path, seed=3, n_sources=2):
+    """A context with real, loadable prepared loops."""
+    import soundfile as sf
+    from sleepmix.night.sources import SourceProfile
+    profiles = []
+    for i in range(n_sources):
+        t = np.arange(int(3.0 * SR)) / SR
+        y = (0.4 * np.sin(2 * np.pi * (110.0 + 30 * i) * t)).astype(np.float32)
+        path = tmp_path / f"loop-{i}.wav"
+        sf.write(str(path), np.stack([y, y], axis=1), SR)
+        profiles.append(SourceProfile(
+            source_id=f"s{i}", source_path=str(tmp_path / f"song-{i}.wav"),
+            loop_paths=(str(path),), loop_frames=(len(y),),
+            pitch_set=(55.0 + 4 * i,), sr=SR))
+    ctx = _context(seed=seed)
+    return replace(ctx, sources=tuple(profiles))
+
+
+def test_a_block_with_sources_is_the_right_shape(tmp_path):
+    stream = NightStream(_source_context(tmp_path), sr=SR)
+    block = stream.block(6)
+    assert block.n_frames == int(BLOCK_S * SR)
+    assert block.n_channels == 2
+
+
+def test_source_material_actually_reaches_the_audio(tmp_path):
+    """The whole point: a night with sources must not sound like a night
+    without them."""
+    with_sources = NightStream(_source_context(tmp_path), sr=SR).block(6)
+    without = NightStream(_context(seed=3), sr=SR).block(6)
+    assert not np.array_equal(with_sources.data, without.data)
+
+
+def test_the_stream_actually_passes_profiles_to_render_voice(tmp_path, monkeypatch):
+    """Defeats a confound the test above cannot rule out on its own.
+
+    ``plan_voices`` draws a different-shaped RNG stream the moment
+    ``ctx.sources`` is non-empty at all (stride 2, four extra draws a step
+    — see its docstring), regardless of whether any loop audio is ever
+    rendered. So the block above differs from a sourceless night even with
+    ``stream._rendered``'s call reverted to
+    ``render_voice(voice, self.sr, self.ctx.seed)`` — the pre-fix call that
+    drops ``profiles`` on the floor. Checked empirically: with that call
+    reverted, ``test_source_material_actually_reaches_the_audio`` still
+    passes. This test isolates the wiring itself by spying on the name
+    ``stream.py`` calls, rather than inferring it from a block that could
+    differ for an unrelated reason.
+    """
+    import sleepmix.night.stream as stream_mod
+    real = stream_mod.render_voice
+    seen: list = []
+
+    def spy(voice, sr, seed, profiles=()):
+        seen.append(profiles)
+        return real(voice, sr, seed, profiles)
+
+    monkeypatch.setattr(stream_mod, "render_voice", spy)
+    ctx = _source_context(tmp_path)
+    NightStream(ctx, sr=SR).block(6)
+    assert seen, "render_voice was never called"
+    assert all(p == ctx.sources for p in seen), (
+        "stream._rendered did not pass ctx.sources through to render_voice")
+
+
+def test_block_independence_holds_with_sources(tmp_path):
+    ctx = _source_context(tmp_path)
+    alone = NightStream(ctx, sr=SR).block(37)
+    sequential = NightStream(ctx, sr=SR)
+    for index in range(38):
+        produced = sequential.block(index)
+    assert np.array_equal(alone.data, produced.data)
+
+
+def test_block_independence_holds_across_a_handover(tmp_path):
+    """The seam between two sources is the one place composition could
+    reintroduce an order dependency.
+
+    As briefed this rendered the seam block twice from two *fresh*
+    instances and called the match a proof of independence — but two fresh
+    instances rendering the same single block only demonstrates the render
+    is deterministic, which every voice already has to be regardless of
+    sources. It cannot fail even if composition were order-dependent, since
+    neither instance renders anything before the seam block. The genuine
+    claim needs the seam block rendered alone compared against the seam
+    block reached by rendering every block before it in sequence — the same
+    shape ``test_block_independence_holds_with_sources`` uses above, aimed
+    at the exact frame where ``schedule_sources`` hands the stage to the
+    next source.
+    """
+    from sleepmix.night.plan import schedule_sources
+    ctx = _source_context(tmp_path, n_sources=3)
+    schedule = schedule_sources(ctx, SR, int(ctx.night_length_s * SR))
+    seam_block = schedule[0].end_frame // int(BLOCK_S * SR)
+    alone = NightStream(ctx, sr=SR).block(seam_block)
+    sequential = NightStream(ctx, sr=SR)
+    for index in range(seam_block + 1):
+        produced = sequential.block(index)
+    assert np.array_equal(alone.data, produced.data)
+
+
+def test_blocks_with_sources_render_in_any_order(tmp_path):
+    """Stronger than alone-versus-sequence: defeats any eviction-order or
+    accumulation effect in either cache."""
+    ctx = _source_context(tmp_path)
+    reference = {i: NightStream(ctx, sr=SR).block(i).data for i in range(0, 40, 7)}
+    shuffled = NightStream(ctx, sr=SR)
+    for index in [35, 0, 21, 7, 28, 14]:
+        assert np.array_equal(shuffled.block(index).data, reference[index])
+
+
+def test_a_profile_whose_loop_has_gone_costs_its_voice_not_the_block(tmp_path):
+    from sleepmix.night.sources import SourceProfile
+    ctx = _source_context(tmp_path)
+    broken = replace(ctx, sources=(SourceProfile(
+        source_id=ctx.sources[0].source_id,
+        source_path=ctx.sources[0].source_path,
+        loop_paths=("/gone/x.wav",),
+        loop_frames=(1000,), pitch_set=(55.0,), sr=SR),))
+    block = NightStream(broken, sr=SR).block(6)
+    assert block.n_frames == int(BLOCK_S * SR)
+    assert np.all(np.isfinite(block.data))
+
+
+def test_nothing_clips_with_sources(tmp_path):
+    stream = NightStream(_source_context(tmp_path), sr=SR)
+    for index in (0, 6, 60, 600):
+        assert np.abs(stream.summed(index)).max() <= 1.0
 
 
 def test_the_stream_never_touches_a_speech_source():

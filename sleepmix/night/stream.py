@@ -97,6 +97,15 @@ class NightStream:
     the same block from two different instances, and rendering an early block
     again from one instance after its voices have certainly been evicted from
     that instance's own cache.
+
+    Prepared-source profiles arrive on ``ctx.sources`` rather than as a
+    constructor argument, for exactly this reason: a profile that lived on
+    the instance instead would still be part of what ``block(i)`` reads, but
+    it would no longer be visible in the signature that the independence
+    argument is stated against. Keeping it on ``ctx`` means ``block(i)``
+    stays a pure function of ``(ctx, sr, block_s, i)`` with no amendment, and
+    the independence proof carries over to a night with sources in play
+    unchanged.
     """
 
     def __init__(self, ctx: NightContext, sr: int = 44100,
@@ -120,7 +129,7 @@ class NightStream:
             self._cache.move_to_end(voice.index)
             return cached
 
-        raw = render_voice(voice, self.sr, self.ctx.seed)
+        raw = render_voice(voice, self.sr, self.ctx.seed, self.ctx.sources)
 
         tail = int(_TAIL_S * self.sr)
         padded = AudioBuffer(

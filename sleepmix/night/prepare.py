@@ -36,12 +36,22 @@ _log = logging.getLogger(__name__)
 # internal variety without any one recurring often. A placeholder.
 LOOPS_PER_SOURCE = 3
 
-# Short enough to carry no phrase. Four bars is roughly eight seconds at 120
+# Short enough to carry no phrase. Two bars is roughly four seconds at 120
 # BPM, and moves with the detected tempo. A placeholder.
-LOOP_BARS = 4
+#
+# LOOP_BARS and STRETCH_SPEED interact and neither can be changed alone: the
+# effective loop length is
+#     bars * beats_per_bar * 60 / tempo / STRETCH_SPEED
+# At four bars and 0.6x this reached ~13.2 s against the plan's stated 4-12 s
+# band — and four bars of source material is a phrase, which defeats the
+# band's own stated purpose ("short enough to carry no phrase"). Two bars at
+# the same stretch lands at roughly 6.7 s: inside the band, and genuinely
+# sub-phrase.
+LOOP_BARS = 2
 
 # Slower than played, which pulls gesture below the rate the ear tracks
-# phrasing at. A placeholder.
+# phrasing at. A placeholder. See LOOP_BARS above — this and that constant
+# together determine the effective loop length.
 STRETCH_SPEED = 0.6
 
 # A drum kit looping under you at 2 AM is what `sleepmix render`'s shipped

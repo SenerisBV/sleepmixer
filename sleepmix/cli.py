@@ -177,6 +177,7 @@ def night(seconds: int | None) -> None:
     from .config import SoundbedConfig
     from .night.context import build_context
     from .night.player import NightPlayer, room_directory
+    from .night.sources import load_profiles, sources_directory
     from .night.speech import radio_source_from, room_sources_from
     from .night.stream import BLOCK_S, NightStream
 
@@ -185,7 +186,9 @@ def night(seconds: int | None) -> None:
     seed = int(os.environ.get("SLEEPMIX_SEED", random.randrange(2 ** 31)))
     sr = 44100
 
-    ctx = build_context(dt.datetime.now(dt.timezone.utc), lat, lon, seed)
+    profiles = load_profiles()
+    ctx = build_context(dt.datetime.now(dt.timezone.utc), lat, lon, seed,
+                        sources=profiles)
     # The bed is on for a night, and only for a night — ``SoundbedConfig``'s
     # own default stays off, because every other caller (render, preview) has
     # a mix underneath it and this one does not. A night is mostly gaps: at
@@ -203,6 +206,13 @@ def night(seconds: int | None) -> None:
     click.echo(f"Night {seed}: {ctx.night_length_s / 3600:.1f} h until light.")
     click.echo(f"Room audio: {room_directory()}")
     click.echo("Ends on its own at first light. Ctrl-C to stop it sooner.")
+    if profiles:
+        loops = sum(len(p.loop_paths) for p in profiles)
+        click.echo(f"Material: {len(profiles)} source(s), {loops} loop(s).")
+    else:
+        click.echo(f"Material: synthesis only — nothing prepared yet. "
+                   f"Drop audio in {sources_directory()} and run "
+                   f"`sleepmix prepare`.")
 
     # **The night ends by ending.** The design spec is plain about it — "Phase
     # 1 descends toward near-silence over an assumed night and stops" — and it

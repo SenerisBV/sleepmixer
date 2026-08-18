@@ -78,10 +78,15 @@ def test_the_loop_files_actually_exist_and_match_their_frame_counts(tmp_path, mo
 
 
 def test_the_loops_are_short_enough_to_carry_no_phrase(tmp_path, monkeypatch):
+    """Pins the plan's stated 4-12 s band, not the loose 1-40 s bound that
+    used to stand in for it. That bound was wide enough to pass while
+    LOOP_BARS=4 produced ~13.2 s loops — four bars of source material, which
+    is a phrase, defeating this test's own name. See LOOP_BARS in
+    night/prepare.py for the formula the two constants share."""
     monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
     profile = prepare_source(_write_song(tmp_path / "song.wav"), sr=SR)
     for frames in profile.loop_frames:
-        assert 1.0 <= frames / profile.sr <= 40.0
+        assert 4.0 <= frames / profile.sr <= 12.0
 
 
 def test_a_prepared_loop_does_not_click_at_the_wrap(tmp_path, monkeypatch):
