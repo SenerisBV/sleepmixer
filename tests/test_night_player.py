@@ -250,6 +250,30 @@ def test_run_closes_its_speech_sources():
 # are born every 20-70 s early in the night. That is an underrun once or
 # twice a minute. ``queue_depth`` was stored and read by nothing.
 
+def _is_bed(block) -> bool:
+    """The player's own bed rather than music, judged on the back half.
+
+    The front of a block can belong to the block before it now: a change of
+    kind is crossfaded, so the first 75 ms of the bed that opens a stall is
+    mostly the music it came out of.
+    """
+    half = block.data[block.n_frames // 2:]
+    return bool(np.abs(half).max() < 0.05)
+
+
+def _slow_render_player(delay_s: float = 1.0):
+    """A player whose renderer cannot keep up, so the queue drains."""
+    stream = NightStream(_context(), sr=SR)
+    real = stream.block
+
+    def slow(index):
+        time.sleep(delay_s)
+        return real(index)
+
+    stream.block = slow  # type: ignore[method-assign]
+    return NightPlayer(stream, SilentSource(SR), SilentSource(SR))
+
+
 def test_a_slow_renderer_produces_fallback_blocks_rather_than_a_stall():
     """The degradation the spec names: "the block queue drains into a bed the
     *player* generates". It is also the only thing that ever makes
@@ -273,9 +297,95 @@ def test_a_slow_renderer_produces_fallback_blocks_rather_than_a_stall():
     assert len(delivered) == 6
     # It did not wait for six slow renders in series.
     assert elapsed < 6.0
-    # Some of what came out is the player's own bed rather than music.
-    beds = [b for b in delivered if np.abs(b.data).max() < 0.05]
-    assert beds, "a renderer this slow should have drained the queue"
+    # Some of what came out is the player's own bed rather than music. Judged
+    # on the back half of the block: a bed that *opens* a stall is crossfaded
+    # out of the music before it, so its first 75 ms carries the music's level
+    # and its whole-block peak is not a witness to what it is.
+    assert [b for b in delivered if _is_bed(b)], \
+        "a renderer this slow should have drained the queue"
+
+
+def test_consecutive_fallback_blocks_are_not_the_same_noise():
+    """A stall must not become a loop.
+
+    ``fallback_block`` is a pure function of ``(seed, "night:fallback",
+    index)``, and the consumer used to advance its index only when a real
+    block arrived — so every empty in a run of empties emitted a byte-
+    identical ten seconds. Measured before the fix, with the renderer slowed
+    to 1 s a block: peaks ``[0.2009, 0.0121, 0.0121, 0.0121, 0.2022, ...]``,
+    blocks 2 and 3 bit-identical to block 1. A thirty-second stall played one
+    loop three times, and repetition and pattern are exactly what this design
+    argues wake people.
+    """
+    delivered = []
+    _slow_render_player().run(max_blocks=8, sink=delivered.append)
+
+    assert len(delivered) == 8
+    beds = [b for b in delivered if _is_bed(b)]
+    assert len(beds) >= 2, "a renderer this slow should have stalled twice"
+    for i, first in enumerate(delivered):
+        for second in delivered[i + 1:]:
+            assert not np.array_equal(first.data, second.data), (
+                f"block {i} was played again later in the same run")
+
+
+def test_the_seam_between_music_and_the_fallback_bed_does_not_step():
+    """The same 4x threshold ``test_consecutive_blocks_join_without_a_step``
+    and ``test_the_bed_joins_across_a_block_seam_without_a_step`` apply, at
+    the one boundary neither of them covers.
+
+    Music and the player's own bed differ by more than a factor of ten in
+    level and know nothing about each other. Butted together, the return to
+    music measured a step 7.58x the largest motion anywhere inside a block.
+
+    Every seam in the run is checked rather than a chosen pair: which block
+    the queue happens to hand over when is a matter of thread timing, and the
+    property is meant to hold at all of them anyway.
+    """
+    ctx = _context()
+    stream = NightStream(ctx, sr=SR)
+    real = stream.block
+
+    def sometimes(index):
+        if index in (1, 2):
+            raise RuntimeError("render failed")
+        return real(index)
+
+    stream.block = sometimes  # type: ignore[method-assign]
+    player = NightPlayer(stream, SilentSource(SR), SilentSource(SR))
+
+    delivered = []
+    player.run(max_blocks=6, sink=delivered.append)
+    assert len(delivered) == 6
+
+    peaks = [float(np.abs(b.data).max()) for b in delivered]
+    assert max(peaks) > 5 * min(peaks), (
+        f"the run never crossed between music and bed at all: {peaks}")
+
+    for i in range(len(delivered) - 1):
+        first, second = delivered[i].data, delivered[i + 1].data
+        step = float(np.abs(second[0] - first[-1]).max())
+        within = float(np.abs(np.diff(first, axis=0)).max())
+        assert step <= within * 4.0, (
+            f"the output steps at the seam after block {i}: "
+            f"{step:.5f} against {within:.5f} within the block")
+
+
+def test_the_crossfade_only_touches_the_head_of_a_block():
+    """It is a seam treatment, not a fade: everything past ``_SEAM_S`` is the
+    block exactly as it was rendered."""
+    from sleepmix.night.player import _SEAM_S
+
+    player = _player()
+    plain = player.fallback_block(4)
+    tail = np.full((int(_SEAM_S * SR), 2), 0.3, dtype=np.float32)
+    crossed = player._cross_into(plain, tail)
+
+    seam = player._seam_frames()
+    assert seam == int(_SEAM_S * SR)
+    assert np.array_equal(crossed.data[seam:], plain.data[seam:])
+    # And it opens exactly where the previous block left off.
+    assert crossed.data[0] == pytest.approx(tail[-1], abs=1e-6)
 
 
 def test_the_render_thread_does_not_outlive_run():
