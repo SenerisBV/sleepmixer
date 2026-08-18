@@ -38,9 +38,23 @@ _MAX_DISTANCE_CENTS = 1200.0
 
 @dataclass(frozen=True)
 class SourceProfile:
-    """One prepared song, as numbers and paths."""
+    """One prepared song, as numbers and paths.
+
+    ``source_path`` is the absolute path of the song this was prepared from —
+    added so ``prepare_all`` can recognise a source edited in place (same
+    path, new content, new ``source_id``) and delete the profile it
+    superseded, rather than leaving both loadable and schedulable as though
+    they were two different songs. A profile written before this field
+    existed has no ``source_path`` key in its JSON; ``_read_profile`` treats
+    that the same as any other missing key — a skip, not a raise — which
+    means such a profile simply stops loading and gets re-prepared the next
+    time ``prepare_all`` runs. Nothing had shipped when this field was added,
+    so that one-time re-preparation cost was accepted rather than designed
+    around.
+    """
 
     source_id: str
+    source_path: str
     loop_paths: tuple[str, ...]
     loop_frames: tuple[int, ...]
     pitch_set: tuple[float, ...]
@@ -97,12 +111,20 @@ def write_profile(profile: SourceProfile) -> str:
 
 
 def _read_profile(path: str) -> SourceProfile | None:
-    """One profile, or ``None`` if it is unusable for any reason."""
+    """One profile, or ``None`` if it is unusable for any reason.
+
+    ``raw["source_path"]`` is indexed the same way every other field here
+    is — no ``.get`` default — so a profile written before ``source_path``
+    existed raises ``KeyError``, caught below like any other malformed file,
+    and is skipped rather than crashing ``load_profiles``. See
+    ``SourceProfile``'s docstring for why that is the accepted outcome.
+    """
     try:
         with open(path) as fh:
             raw = json.load(fh)
         profile = SourceProfile(
             source_id=str(raw["source_id"]),
+            source_path=str(raw["source_path"]),
             loop_paths=tuple(str(p) for p in raw["loop_paths"]),
             loop_frames=tuple(int(n) for n in raw["loop_frames"]),
             pitch_set=tuple(float(f) for f in raw["pitch_set"]),

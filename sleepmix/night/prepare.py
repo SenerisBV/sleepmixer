@@ -25,8 +25,8 @@ from ..separation import separate
 from ..timestretch import slow_and_pitch
 from .pitch import pitch_set
 from .sources import (
-    SourceProfile, load_profiles, profiles_directory, sources_directory,
-    write_profile,
+    PROFILE_SUFFIX, SourceProfile, load_profiles, profiles_directory,
+    sources_directory, write_profile,
 )
 
 # How many loops one song contributes. Enough that a stretch of the night has
@@ -68,6 +68,14 @@ def source_id_for(path: str) -> str:
     all, which is how the id-stability tests exercise this function — falls
     back to hashing the path alone, which is what made this function
     deterministic before the size/mtime were added.
+
+    The trade this makes: hashing the file's *contents* would catch every
+    edit and nothing else, but costs a full read of every song on every
+    ``prepare_all`` sweep just to answer "did this change?". ``size:mtime``
+    is the cheap proxy instead — right in the common case (an edit changes
+    at least one of them), wrong in the uncommon one (a ``touch``, a backup
+    restore, or a copy that loses timestamps triggers a needless
+    re-separation of unchanged audio). Wasted minutes, not wrong output.
     """
     stem = os.path.splitext(os.path.basename(path))[0]
     slug = re.sub(r"[^A-Za-z0-9]+", "-", stem).strip("-").lower()[:40]
@@ -95,13 +103,20 @@ def _kept_stems(stems: dict) -> dict:
     return kept or dict(stems)
 
 
-def prepare_source(path: str, sr: int = 44100) -> SourceProfile | None:
+def prepare_source(path: str, sr: int = 44100,
+                   *, source_id: str | None = None) -> SourceProfile | None:
     """Separate, loop, stretch and analyse one song. ``None`` if it will not.
 
     Every failure is one fewer source rather than a raised exception: a
     directory a person drops files into will contain things that are not
     songs, and finding one is ordinary. The one exception is ``write_profile``
-    below, which is deliberately called outside that net — see its comment.
+    below, which is deliberately called partly outside that net — see its
+    comment.
+
+    ``source_id`` is computed from ``path`` if not given. ``prepare_all``
+    already has to compute it once to decide whether to call this function at
+    all; passing it through here saves a second `stat` and hash of the same
+    file rather than silently redoing work its caller already did.
     """
     # LOOPS_PER_SOURCE and _SEARCH_WINDOWS are both constants defined a few
     # lines apart in this file, and nothing enforces that they stay in step.
@@ -116,7 +131,8 @@ def prepare_source(path: str, sr: int = 44100) -> SourceProfile | None:
             f"_SEARCH_WINDOWS; add more windows or lower LOOPS_PER_SOURCE."
         )
 
-    source_id = source_id_for(path)
+    if source_id is None:
+        source_id = source_id_for(path)
     try:
         stems = _kept_stems(separate(path))
         # `sr` is the profile's promised sample rate, not merely a display
@@ -156,6 +172,7 @@ def prepare_source(path: str, sr: int = 44100) -> SourceProfile | None:
         pooled = sum_buffers(analysed)
         profile = SourceProfile(
             source_id=source_id,
+            source_path=os.path.abspath(path),
             loop_paths=tuple(loop_paths),
             loop_frames=tuple(loop_frames),
             pitch_set=pitch_set(pooled),
@@ -164,16 +181,61 @@ def prepare_source(path: str, sr: int = 44100) -> SourceProfile | None:
     except Exception:
         return None
 
-    # `write_profile` validates its own caller's input and raises rather than
-    # skips for an unsafe `source_id` — its docstring says so explicitly: "a
-    # source_id that could escape profiles_directory() is a programming error
-    # to be caught at the source, not a fact about the world to route
-    # around." Wrapping this call in the broad `except Exception` above would
-    # turn that deliberate raise back into a silent skip, which is exactly
-    # the behaviour its docstring argues against — so it is called after that
-    # net, not inside it.
-    write_profile(profile)
+    # `write_profile` can fail two genuinely different ways, and they are not
+    # treated the same. Its own docstring is explicit that an unsafe
+    # `source_id` — the ``ValueError`` case — is "a programming error to be
+    # caught at the source, not a fact about the world to route around," so
+    # that one is left to propagate rather than being caught here; every
+    # `source_id` this module hands it comes from `source_id_for`, so seeing
+    # one anyway means that function is broken, not that this song is
+    # unusable. An `OSError` (disk full, permissions, a failed `os.replace`)
+    # says nothing about whether the id was safe — it is the same kind of
+    # ordinary environmental failure every other line in the `try` above is
+    # allowed to have, and losing the other nineteen songs in a batch to one
+    # disk hiccup on the twentieth would be exactly backwards. So only
+    # `OSError` is caught here; a bad id still surfaces loudly.
+    try:
+        write_profile(profile)
+    except OSError:
+        return None
     return profile
+
+
+def _delete_superseded(new_profile: SourceProfile,
+                       prior: tuple[SourceProfile, ...]) -> None:
+    """Remove any profile in ``prior`` that names the same source file as
+    ``new_profile`` but under a different id.
+
+    That combination — same ``source_path``, different ``source_id`` — is
+    exactly what a source edited in place produces: `source_id_for` folds in
+    size and mtime, so the edit earns a new id, and without this the old
+    profile would simply sit alongside the new one, both loadable, both
+    schedulable, as though they were two different songs rather than two
+    versions of one.
+
+    Matched on the *full* ``source_path``, never a prefix — this deletes
+    files, and a prefix match would treat an unrelated song whose path merely
+    starts the same way as the same source.
+
+    Wrapped in its own ``try``/``except OSError``: failing to clean up an old
+    profile must not cost the new one that is already written and valid on
+    disk. Best-effort, not load-bearing.
+    """
+    for old in prior:
+        if old.source_path != new_profile.source_path:
+            continue
+        if old.source_id == new_profile.source_id:
+            continue
+        try:
+            old_json = os.path.join(
+                profiles_directory(), old.source_id + PROFILE_SUFFIX)
+            if os.path.exists(old_json):
+                os.remove(old_json)
+            for loop_path in old.loop_paths:
+                if os.path.exists(loop_path):
+                    os.remove(loop_path)
+        except OSError:
+            pass
 
 
 def prepare_all(progress: Callable[[str], None] | None = None
@@ -184,7 +246,8 @@ def prepare_all(progress: Callable[[str], None] | None = None
     running this again after adding one song costs one song. "Already exists"
     is decided by `source_id_for`, which folds in the file's size and mtime —
     so a song replaced in place, not just a song newly added, is picked up
-    again rather than skipped forever.
+    again rather than skipped forever. Its old profile is then deleted, not
+    left behind — see `_delete_superseded`.
     """
     def say(line: str) -> None:
         if progress is not None:
@@ -197,13 +260,23 @@ def prepare_all(progress: Callable[[str], None] | None = None
     except OSError:
         return ()
 
-    existing = {p.source_id for p in load_profiles()}
+    # Snapshotted once: every candidate for "this is the stale profile of a
+    # source being reprocessed right now" already existed before this sweep
+    # started. A profile this same sweep writes for a *different* file always
+    # has a different `source_path` (distinct paths from the directory
+    # listing above), so it can never be mistaken for one of these.
+    prior_profiles = load_profiles()
+    existing_ids = {p.source_id for p in prior_profiles}
     for path in names:
-        if source_id_for(path) in existing:
+        source_id = source_id_for(path)
+        if source_id in existing_ids:
             say(f"already prepared: {os.path.basename(path)}")
             continue
         say(f"preparing: {os.path.basename(path)}")
-        if prepare_source(path) is None:
+        new_profile = prepare_source(path, source_id=source_id)
+        if new_profile is None:
             say(f"  skipped (could not prepare): {os.path.basename(path)}")
+            continue
+        _delete_superseded(new_profile, prior_profiles)
 
     return load_profiles()

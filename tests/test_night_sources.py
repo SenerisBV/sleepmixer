@@ -17,9 +17,11 @@ from sleepmix.night.sources import (
 )
 
 
-def _profile(source_id="a", pitches=(55.0, 82.5), loops=("/tmp/x.wav",),
+def _profile(source_id="a", source_path="/tmp/song.wav",
+             pitches=(55.0, 82.5), loops=("/tmp/x.wav",),
              frames=(220500,), sr=44100):
-    return SourceProfile(source_id=source_id, loop_paths=tuple(loops),
+    return SourceProfile(source_id=source_id, source_path=source_path,
+                         loop_paths=tuple(loops),
                          loop_frames=tuple(frames), pitch_set=tuple(pitches),
                          sr=sr)
 
@@ -130,6 +132,23 @@ def test_pitch_distance_survives_a_zero_or_negative_pitch():
     mixed = pitch_distance(_profile(pitches=(0.0, 55.0, 82.5)),
                            _profile(pitches=(55.0, 82.5)))
     assert mixed == pytest.approx(0.0)
+
+
+def test_a_profile_missing_source_path_is_skipped(tmp_path, monkeypatch):
+    """New field, old shape: a profile written before ``source_path``
+    existed has no such key in its JSON. Nothing had shipped when the field
+    was added, so failing to parse (and getting re-prepared later) is the
+    accepted outcome -- not a raise, and not a profile with a fabricated
+    path."""
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    write_profile(_profile(source_id="good"))
+    legacy = os.path.join(profiles_directory(), "legacy" + PROFILE_SUFFIX)
+    with open(legacy, "w") as fh:
+        json.dump({
+            "source_id": "legacy", "loop_paths": ["/a.wav"],
+            "loop_frames": [1000], "pitch_set": [55.0], "sr": 44100,
+        }, fh)
+    assert [p.source_id for p in load_profiles()] == ["good"]
 
 
 def test_a_profile_with_a_non_positive_sample_rate_is_skipped(tmp_path, monkeypatch):

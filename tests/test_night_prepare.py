@@ -15,7 +15,10 @@ from sleepmix.night import prepare as prepare_mod
 from sleepmix.night.prepare import (
     LOOPS_PER_SOURCE, prepare_all, prepare_source, source_id_for,
 )
-from sleepmix.night.sources import load_profiles, sources_directory
+from sleepmix.night.sources import (
+    PROFILE_SUFFIX, SourceProfile, load_profiles, profiles_directory,
+    sources_directory, write_profile,
+)
 
 SR = 22050
 
@@ -217,17 +220,134 @@ def test_loops_per_source_beyond_search_windows_fails_loudly(tmp_path, monkeypat
         prepare_source(song, sr=SR)
 
 
+def test_a_disk_error_writing_the_profile_costs_one_source_not_the_batch(
+        tmp_path, monkeypatch):
+    """``write_profile`` can fail from a genuine disk fault, not just a bad
+    id. Unlike the bad-id ``ValueError``, that must not abort the rest of a
+    ``prepare_all`` batch."""
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    _write_song(os.path.join(sources_directory(), "one.wav"))
+    _write_song(os.path.join(sources_directory(), "two.wav"), freqs=(146.83,))
+
+    real = prepare_mod.write_profile
+    calls = {"n": 0}
+
+    def flaky(profile):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("disk full")
+        return real(profile)
+
+    monkeypatch.setattr(prepare_mod, "write_profile", flaky)
+    profiles = prepare_all()
+    assert len(profiles) == 1
+
+
+def test_editing_a_source_supersedes_the_old_profile(tmp_path, monkeypatch):
+    """Not just reprocessed: the old profile (and its loop files) must not
+    also survive an edit, or a night could schedule two versions of the same
+    song as though they were unrelated sources."""
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    path = os.path.join(sources_directory(), "one.wav")
+    _write_song(path, freqs=(110.0,))
+    prepare_all()
+    before = load_profiles()
+    assert len(before) == 1
+    old_loop_paths = before[0].loop_paths
+    old_json = os.path.join(
+        profiles_directory(), before[0].source_id + PROFILE_SUFFIX)
+
+    _write_song(path, freqs=(146.83, 220.0))
+    future = time.time() + 5
+    os.utime(path, (future, future))
+    prepare_all()
+
+    after = load_profiles()
+    assert len(after) == 1
+    assert after[0].source_id != before[0].source_id
+    assert not os.path.exists(old_json)
+    for p in old_loop_paths:
+        assert not os.path.exists(p)
+
+
+def test_supersession_matches_the_full_source_path_not_a_prefix(
+        tmp_path, monkeypatch):
+    """This deletes files, so the match must be exact. A prefix match would
+    let a similarly-named but genuinely different source delete a profile
+    that is still current."""
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    old_loop = os.path.join(profiles_directory(), "old-0.wav")
+    open(old_loop, "w").close()
+    old = SourceProfile(source_id="old", source_path="/x/song.wav",
+                        loop_paths=(old_loop,), loop_frames=(1,),
+                        pitch_set=(55.0,), sr=44100)
+    write_profile(old)
+    old_json = os.path.join(profiles_directory(), "old" + PROFILE_SUFFIX)
+
+    # "/x/song.wav" is a strict prefix of "/x/song.wav.bak" -- a different
+    # file, not an edit of the same one.
+    new = SourceProfile(source_id="new", source_path="/x/song.wav.bak",
+                        loop_paths=(), loop_frames=(), pitch_set=(55.0,),
+                        sr=44100)
+    prepare_mod._delete_superseded(new, (old,))
+
+    assert os.path.exists(old_loop)
+    assert os.path.exists(old_json)
+
+
+def test_prepare_all_computes_source_id_once_per_file(tmp_path, monkeypatch):
+    """The skip check and ``prepare_source`` used to hash and ``stat`` the
+    same file separately; ``prepare_all`` now computes the id once and
+    passes it through."""
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    _write_song(os.path.join(sources_directory(), "one.wav"))
+    calls = {"n": 0}
+    real = prepare_mod.source_id_for
+
+    def counted(path):
+        calls["n"] += 1
+        return real(path)
+
+    monkeypatch.setattr(prepare_mod, "source_id_for", counted)
+    prepare_all()
+    assert calls["n"] == 1
+
+
+# Every file in sleepmix/night/ is on the live playback path except these
+# two, and the guard below sweeps the directory rather than naming files —
+# a hand-picked list silently stops covering a file the moment someone adds
+# a module here and forgets to add it there too. Whoever adds the next
+# night/*.py file is guarded by default, not by remembering.
+_AUDIO_SIDE_MODULES = {
+    "prepare.py",  # this is the module being forbidden; it cannot forbid itself
+    "pitch.py",    # audio-touching by design, but only ever imported by prepare.py
+}
+
+
 def test_the_night_module_never_imports_prepare():
     """The promise that bedtime is silent: nothing on the playback path may
-    reach the module that runs Demucs."""
+    reach the module that runs Demucs.
+
+    Swept over every file in the package rather than a hand-picked list —
+    see `_AUDIO_SIDE_MODULES`. A prior version of this test named seven
+    files and silently missed two (`speech.py`, `sky.py`), both reachable
+    from `sleepmix night`: `player.py` imports `speech.py`, `context.py`
+    imports `sky.py`. `forbidden_imports` only checks the one file it is
+    given, not what that file transitively pulls in, so a hand-picked list
+    has to be exhaustive by construction to mean what it claims.
+    """
     import pathlib
     from .import_guard import forbidden_imports
     root = pathlib.Path(__file__).resolve().parent.parent
     forbidden = {"sleepmix.night.prepare", "sleepmix.separation",
                  "sleepmix.separation_process", "sleepmix.analysis",
                  "sleepmix.timestretch"}
-    for name in ("plan.py", "palette.py", "stream.py", "player.py",
-                 "clock.py", "context.py", "sources.py"):
-        offenders = forbidden_imports(
-            root / "sleepmix" / "night" / name, root, forbidden)
-        assert offenders == set(), f"{name} reaches preparation: {offenders}"
+    night_dir = root / "sleepmix" / "night"
+    swept = sorted(p for p in night_dir.glob("*.py")
+                   if p.name not in _AUDIO_SIDE_MODULES)
+    # A glob that silently matched nothing (a moved directory, a typo`'d
+    # pattern) would make every assertion below vacuously true.
+    assert len(swept) > 5, f"expected several night modules, found {swept}"
+    for path in swept:
+        offenders = forbidden_imports(path, root, forbidden)
+        assert offenders == set(), f"{path.name} reaches preparation: {offenders}"
