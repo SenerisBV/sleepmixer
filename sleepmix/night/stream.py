@@ -209,11 +209,29 @@ class NightStream:
         ``index`` alone and block independence is untouched.
 
         (The circular convolution in ``_soft_lowpass`` was the suspected cause
-        and is not it. Measured against a linearly-convolved reference: the
-        wrap contributes at most -41 dB relative to the block's peak, entirely
-        within the first and last ~2 ms, with the interior identical to within
-        float32 rounding. It is real and it is inaudible; the seam was the
-        noise, not the filter.)
+        and is not it — but the number that used to be quoted here was wrong.
+        It said "at most -41 dB relative to the block's peak", and that figure
+        does not reproduce against this module's own input. Re-measured
+        against a linearly-convolved reference, using the pink noise
+        ``_bed_window`` actually generates at 44.1 kHz (seed 3, block 6, one
+        whole window): the wrap reaches **-17.3 dB** relative to the block's
+        peak at a 500 Hz cutoff and **-16.2 dB** at 3000 Hz, worst case
+        -9.8 dB across twenty seed/block combinations. Two independently
+        constructed linear references — zero-padded filtering, and an explicit
+        zero-phase FIR convolved long — agree on those figures to the digit.
+
+        What did survive the correction is the *shape* of the error, which is
+        what the conclusion rested on. It is at the window's first and last
+        samples, because that is where a circular filter reads the opposite
+        end of its own window: above -60 dB only within 1.6 ms of each edge at
+        500 Hz and 0.3 ms at 3000 Hz, with the interior matching the linear
+        reference to -71.7 dB and -127.0 dB respectively. Those first and last
+        samples are exactly the ones the equal-power ramp above multiplies by
+        approximately zero, so the crossfade that fixed the seam attenuates
+        this too. The one place it is not attenuated is the head of block 0,
+        which has no previous window to cross out of. The seam was the noise,
+        not the filter — but the filter's edge error is an order of magnitude
+        larger than this docstring used to claim.)
         """
         if not self.bed.enabled or self.bed.noise_type in (None, "", "none"):
             return np.zeros((self.block_frames, 2), dtype=np.float32)

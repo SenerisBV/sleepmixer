@@ -67,8 +67,8 @@ start of the branch. Its own section below is the record.
 Plan 5, Phase 1 (`feat/night-stream`, 9 tasks plus this one) sits on top of
 all of that and is a different kind of change from every plan before it: it
 does not touch the finite-mix pipeline at all. `sleepmix/night/` is a new
-package, reachable only from a new `sleepmix night` subcommand, producing an
-indefinite ambient stream instead of a rendered file. 482 tests pass against
+package, reachable only from a new `sleepmix night` subcommand, producing a
+night-long ambient stream instead of a rendered file. 482 tests pass against
 the 356-test baseline at the start of that branch. Its own section, first
 below, is the record — and it opens with what the plan's own reference code
 got wrong, because that is the part most worth not losing.
@@ -205,10 +205,30 @@ And the rest, briefly:
   underneath it and this one does not.
 
 One thing the review suspected and measurement cleared: **the circular
-convolution in `stream._soft_lowpass` is not the bed's seam artefact.**
-Measured against a linearly-convolved reference, the wrap contributes at most
--41 dB relative to the block's peak, entirely within the first and last ~2 ms,
-with the interior identical to within float32 rounding. The seam was real —
+convolution in `stream._soft_lowpass` is not the bed's seam artefact.** The
+number this paragraph used to give for it, though, was wrong, and is corrected
+here rather than quietly widened. It said the wrap contributes "at most -41 dB
+relative to the block's peak"; that figure does not reproduce against the
+module's own input. **Re-measured with the pink noise `_bed_window` actually
+generates** — 44.1 kHz, seed 3, block 6, one whole `block + overlap` window,
+against two independently constructed linear references (zero-padded
+filtering, and an explicit zero-phase FIR convolved long) that agree to the
+digit — the wrap reaches **-17.3 dB relative to the block's peak at a 500 Hz
+cutoff and -16.2 dB at 3000 Hz**, worst case -9.8 dB across twenty seed/block
+combinations. White noise, the same way, gives -9.7 dB and -12.4 dB. The old
+figure was stated as a property of the filter when it was a property of one
+measurement.
+
+The conclusion is unchanged, because it never rested on the size of the number
+— it rested on *where* the error is. A circular filter reads the opposite end
+of its own window, so the error lives at the window's first and last samples:
+above -60 dB only within 1.6 ms of each edge at 500 Hz and 0.3 ms at 3000 Hz,
+with the interior matching the linear reference to -71.7 dB and -127.0 dB
+against peaks of 0.669 and 0.778. Those first and last samples are exactly the
+ones the overlap crossfade multiplies by approximately zero, so the fix for the
+seam attenuates this as well. The one place it is not attenuated is the head of
+block 0, which has no previous window to cross out of — one sample at the very
+start of a night, before anything is asleep in it. The seam was real —
 7.3x the largest within-block step, past the same 4x threshold the music's own
 seam test uses — but it was **independent noise per block**, which is
 inaudible while the noise is broadband and stops being inaudible the moment
@@ -365,6 +385,88 @@ None of the three was found by looking for guards to distrust; each was found
 because a reviewer tried to defeat the specific one in front of them. The
 generalisable point, stated plainly because it is worth stating plainly: **a
 guard nobody has tried to defeat is decorative.**
+
+A fourth of the same shape surfaced when the branch was handed over: **both
+cache tests asserted `len(_cache) <= 24`, a number that stopped corresponding
+to anything the moment the cache moved from an entry ceiling to a byte
+ceiling** — and which a 256 MB cache satisfies trivially at the test suite's
+22.05 kHz. Worse, *nothing asserted the byte bound at all*: deleting
+`self._cache_bytes -= evicted.data.nbytes` from `_rendered` would let the
+running total climb forever, collapse the cache to a single entry, and thrash
+every voice on every block, and the whole suite would still have gone green.
+The assertions now check the bound the code is actually written against
+(`_cache_bytes <= _CACHE_BYTES`), that the running total equals the bytes
+really held (`sum(buf.data.nbytes ...)`, which is the assertion that fails if
+the subtraction is ever lost), and that more than one entry survives — so a
+thrashing cache is a failure rather than a silent slowdown. The mutation was
+run to confirm it: with the subtraction deleted, both tests fail with
+`assert 1746182320 <= 268435456`.
+
+### The queue's own degradation path arrived with a loop in it
+
+The render-ahead queue was added late on this branch, and it changed what the
+fallback bed *is*. Before the queue, `NightPlayer.fallback_block` was reached
+only when a render raised — an exception path, rare by construction. After it,
+the queue draining is the ordinary way a slow renderer degrades, and the spec
+names it as such ("the block queue drains into a bed the *player*
+generates"). A path that went from exception-only to routine arrived carrying
+two defects that nobody would have noticed while it was rare.
+
+**Every fallback block in a run of them was byte-identical.** `run`'s
+`next_music_index` advanced only when a real block arrived from the queue; on
+the `queue.Empty` path it was used and not incremented. `fallback_block` is a
+pure function of `(seed, "night:fallback", index)`, so a thirty-second stall
+played one ten-second noise loop three times. Measured with the renderer
+slowed to 1 s per block, before the fix:
+
+```
+peaks: [0.2009, 0.0121, 0.0121, 0.0121, 0.2022, 0.0119, 0.0119, 0.0119]
+  block 2 identical to block 1, block 3 identical to block 1
+```
+
+Repetition and pattern are exactly what this design argues wake people, and
+this design goes to some length elsewhere — per-block noise keys, a root that
+descends by one semitone across eight hours — to avoid producing either.
+
+**And the return to music stepped.** Music and the player's own bed differ by
+more than a factor of ten in level and know nothing about each other, so
+butting them together put a jump at the seam **7.58x** the largest motion
+anywhere inside a block, against the 4x threshold that
+`test_consecutive_blocks_join_without_a_step` and
+`test_the_bed_joins_across_a_block_seam_without_a_step` both apply elsewhere
+on this branch. The same metric, the same threshold, at the one boundary
+neither test covered.
+
+Both are fixed. The block counter advances on the empty path as well as the
+full one, and never backwards — `max(next_music_index, index + 1)`, because a
+renderer far enough behind hands over a block whose index the fallbacks have
+already passed, and letting the counter rewind to it made the next fallback
+repeat one from thirty seconds earlier. And a change of kind, in either
+direction, is crossed over 75 ms rather than stepped
+(`NightPlayer._cross_into`).
+
+**The crossfade's outgoing material is the previous block's tail, reversed,**
+which is the part worth explaining. By the time a kind change is detected the
+previous block is already at the device — nothing can be faded out of it after
+the fact — and there is no continuation of it to fade with either: if the
+renderer had one, this would not be a fallback. Reversing the tail gives a
+signal that *begins* on the exact sample the device last played and carries on
+with the same spectrum and the same texture, so the step at the seam is zero
+by construction rather than small by measurement. Time-reversed noise is
+noise, and time-reversed drone is drone. Measured after the fix, the same run:
+
+```
+peaks: [0.2009, 0.1144, 0.0119, 0.0118, 0.2022, 0.1082, 0.0115, 0.0115]
+  no two blocks identical
+  seam ratios 0.00, 0.02, 0.49, 0.00, 0.00, 0.04, 0.35   (threshold 4.0)
+```
+
+None of this reaches the renderer: block independence is a property of
+`NightStream`, and the crossfade happens downstream of it on the buffer about
+to be handed to the device. One consequence for anyone reading a delivered
+block: a bed that *opens* a stall now carries the music's level in its first
+75 ms, so a whole-block peak no longer identifies which kind it is — the
+tests judge that on the back half of the block instead.
 
 ### A diagnosis that measurement overturned
 
@@ -539,30 +641,43 @@ other three.
   the tone generator so a block's tone picks up where the previous block's
   left off, which nothing in the current per-block generation model supplies.
   Deferred rather than shipped broken.
-- **Two of the six steering rows do nothing, as of this commit — not one.**
-  Wind is mapped to nothing: the spec's steering table gives it "depth of the
-  drones' slow amplitude drift," but drift lives entirely inside
-  `night/palette.py`'s `_slow_drift`, which receives only `(n, sr, rng)` and
-  no `NightContext` at all. Threading a context into the palette to reach it
-  would put steering logic in a second place, against the rule stated at the
-  top of `night/clock.py` — "steering enters here and only here" — and
-  enforced nowhere but by that rule being followed. **Moon phase is mapped to
-  nothing either, and this was missed in an earlier pass of this document.**
-  `NightContext.moon_phase` is computed in `sky.py` and carried into the
-  context, and then read by nobody: `clock.py`'s `_brightness_multiplier`
-  reads cloud, rain, pressure trend and season and never touches it, and
-  `plan.py` draws a voice's interval from the fixed `_INTERVALS_CENTS` tuple
-  with a uniform `rng.choice` — nothing narrows or widens that set by phase.
-  The spec's own row for it is "width of the interval set." **This is worth
-  correcting loudly rather than quietly, because this document exists
-  specifically to prevent false confidence about what is implemented, and an
-  earlier version of this section stated the opposite of the truth about a
-  feature the operator asked for by name.** An earlier version of this
-  paragraph also said moon phase was "scheduled for the branch's final fix
-  wave." **It was not in that wave's brief and it did not land.** Both rows
-  are still dead as the branch is handed over, and the note that they were
-  about to be fixed is exactly the kind of quiet promise this section exists
-  to stop being made.
+- **One of the six steering rows does nothing, as of this commit — wind.**
+  The spec's steering table gives it "depth of the drones' slow amplitude
+  drift," but drift lives entirely inside `night/palette.py`'s `_slow_drift`,
+  which receives only `(n, sr, rng)` and no `NightContext` at all. Threading a
+  context into the palette to reach it would put steering logic in a second
+  place at the same level, against the rule stated at the top of
+  `night/clock.py` and enforced nowhere but by that rule being followed. It is
+  dead as the branch is handed over, and no promise is made here about when it
+  will not be.
+
+  **Moon phase was the second dead row and is now implemented.** For most of
+  this branch's life `NightContext.moon_phase` was computed in `sky.py`,
+  carried into the context, and read by nobody: `clock.py`'s
+  `_brightness_multiplier` reads cloud, rain, pressure trend and season and
+  never touched it, and `plan.py` drew a voice's interval from the fixed
+  `_INTERVALS_CENTS` tuple with a uniform `rng.choice`. The spec's own row for
+  it is "width of the interval set," and the operator selected moon phase by
+  name when asked which inputs the stream should read, so it was undelivered
+  scope rather than an optional extra. `plan.interval_set(moon_phase)` now
+  supplies it: openness is `1 - 2 * |phase - 0.5|`, and it selects how many of
+  `_INTERVALS_CENTS` are reachable, from four at new moon (unison, second,
+  fourth, fifth) to all six at full (adding the octave and the fifth above
+  it). It lives in `plan.py` rather than `clock.py` because an interval set is
+  not one of the arc's four descending ceilings — see `docs/architecture.md`
+  — and emphatically not in `palette.py`, which still receives no context. The
+  draw stays a fixed-width slot into the whole tuple, folded into the
+  reachable set, so the moon cannot move a single birth time
+  (`test_no_moon_moves_a_single_birth`); at full moon the plan is bit-identical
+  to what it was before the moon reached it.
+
+  **The history of this paragraph is worth keeping.** An earlier version of it
+  stated the opposite of the truth about a feature the operator asked for by
+  name, and a version after that said moon phase was "scheduled for the
+  branch's final fix wave" when it was not in that wave's brief and did not
+  land. This document exists specifically to prevent false confidence about
+  what is implemented, so both the wrong claim and the quiet promise are
+  recorded here rather than deleted along with the gap they described.
 - **The spec's own memory figure for the voice cache is wrong and is left
   standing.** `docs/superpowers/specs/2026-08-18-night-stream-design.md` says
   "Voices are minutes long and there are three or four at a time, so the cache
@@ -573,30 +688,54 @@ other three.
   `docs/architecture.md`, and the code is bounded by bytes rather than by
   entries. A reader who reaches the spec's sentence first should treat this
   paragraph as its erratum.
-- **The stream does not stop; it holds.** The design spec's "Control
-  surface" section states the intended behaviour plainly: "Phase 1 descends
-  toward near-silence over an assumed night and stops." The shipped
-  `NightPlayer.run()` does not do that — with no `max_blocks` (the case
-  `sleepmix night` actually runs, since `--seconds` is explicitly for trying
-  it out) it loops indefinitely, and `night/clock.py`'s `arc_at` clamps time
-  outside the night to the arc's own quietest values rather than raising or
-  signalling an end
+- **The stream did not stop; it held. It stops now.** The design spec's
+  "Control surface" section states the intended behaviour plainly: "Phase 1
+  descends toward near-silence over an assumed night and stops." What shipped
+  did not do that — with no `max_blocks` (the case `sleepmix night` actually
+  ran, since `--seconds` is explicitly for trying it out) `NightPlayer.run()`
+  looped indefinitely, and `night/clock.py`'s `arc_at` clamps time outside the
+  night to the arc's own quietest values rather than raising or signalling an
+  end
   (`tests/test_night_stream.py::test_a_block_past_the_end_of_the_night_still_renders`,
   whose own docstring says so: "the arc clamps rather than ending, so the
-  stream never runs out"). In practice a night descends to near-silence and
-  then holds there — the audible target the spec wanted — but nothing
-  actually ends the process; `cli.py` prints "Ctrl-C to stop" because Ctrl-C
-  is, in fact, the only way. This was not raised as a deviation at the time
-  it was built, and it is recorded here because the spec's own words promise
-  something the code does not do.
+  stream never runs out"). A night descended to near-silence and then held
+  there — the audible target the spec wanted — but nothing ended the process;
+  `cli.py` printed "Ctrl-C to stop" because Ctrl-C was, in fact, the only way,
+  and `sleepmix night` would still have been playing at noon. That was a third
+  behaviour nobody chose: not the spec's ending, and not an honest
+  "indefinite" either.
+
+  **Closed.** `cli.py` now derives `max_blocks` from the night's own length —
+  `ceil(ctx.night_length_s / BLOCK_S)` — whenever `--seconds` is absent, and
+  `--seconds` still overrides it
+  (`tests/test_cli.py::test_a_night_with_no_seconds_is_bounded_by_the_nights_own_length`,
+  `::test_seconds_still_overrides_the_nights_own_length`). Nothing about the
+  sound changed: the arc still clamps at its quietest past the end, so the
+  rounding-up that keeps the last of the descent from being clipped costs at
+  most one block of already-clamped audio. What changed is that the process
+  ends. `run()` itself still accepts `max_blocks=None` and still loops
+  forever on it — that is what
+  `test_run_gives_up_after_consecutive_sink_failures_rather_than_looping_forever`
+  needs in order to prove anything, and the player is not the layer that knows
+  how long a night is.
 
 ### `RadioSource` never reconnects, and that is deliberate
 
 Every failure a live HTTP stream can produce — a refused connection, a DNS
 failure, a stream that stops mid-night, a decoder that gives up — lands in the
-same place: `RadioSource._dead` is set, and the source goes permanently quiet
-for the rest of that night. Nothing retries and nothing rotates to a backup
-feed. The class's own docstring states the reasoning directly: "a retry loop
+same place: `RadioSource._fill_loop` returns, the ring drains, and the source
+goes permanently quiet for the rest of that night. Nothing retries and nothing
+rotates to a backup feed.
+
+There is no dead *flag*, and that is deliberate rather than an oversight. A
+`_dead` attribute was set on all four of those paths and read by none of them
+— written four times, consulted zero. The only place it could have been
+consulted is a short-circuit at the top of `read`, and that would discard the
+audio that had already arrived before the connection dropped, which
+`test_a_radio_source_that_dies_mid_night_goes_silent_once_it_drains` exists
+specifically to assert still plays out. So it was removed rather than wired
+up: deadness is a state `read` already answers correctly by finding nothing
+available and writing zeros. The class's own docstring states the reasoning directly: "a retry loop
 inside the playback path is a stall inside the playback path, and there is no
 version of 'the network came back' that is worth a gap in the audio at 3 AM."
 A dropped feed is permanent for that night, by choice, not by an unhandled

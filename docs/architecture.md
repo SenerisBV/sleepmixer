@@ -166,8 +166,10 @@ cannot disagree about it.
 
 ## The night: block independence is the purity property, renamed
 
-`sleepmix/night/` (Plan 5, Phase 1) renders an indefinite, self-quieting
-ambient stream in place of a finite mix. It is a new package, imported from
+`sleepmix/night/` (Plan 5, Phase 1) renders an unbounded, self-quieting
+ambient stream in place of a finite mix — unbounded in the sense that the plan
+is, not that playback is: `cli.py` bounds a night by its own length, and the
+stream ends when the arc it was built for runs out. It is a new package, imported from
 nowhere the existing pipeline touches, and it exists because of a fact this
 document already spent its first section on: **decay is a pure function of
 progress.** That fact was engineered in for a completely different reason —
@@ -279,9 +281,18 @@ argument was wrong. See `docs/project-state.md`.)
 
 **Why decay runs at `progress = 1.0`, with the arc supplying the endpoints,
 rather than each voice decaying within itself.** A voice's own
-`StemDecayConfig` in this design carries no `*_start` values worth reading —
-`_decay_for` only ever sets the `*_end` fields, from the arc sampled at birth
-— because `NightStream._rendered` decays every voice at `progress = 1.0`
+`StemDecayConfig` in this design carries almost no `*_start` values worth
+reading — `_decay_for` sets the `*_end` fields from the arc sampled at birth
+and leaves the starts at the dataclass defaults, with one deliberate
+exception: it sets `noise_start_db` as well, to the same value as
+`noise_end_db`. (`plan.py`'s own docstring documents that exception and this
+paragraph did not, for a while, which is how a reader could come away
+believing `_decay_for` "only ever sets the `*_end` fields".) The hiss is
+pinned to both ends so that it cannot matter which progress a future caller
+renders at, and so that it descends with `arc.level_db` rather than sitting at
+an absolute level the arc cannot touch — see `NOISE_BELOW_LEVEL_DB`. The
+starts are otherwise unread because `NightStream._rendered` decays every voice
+at `progress = 1.0`
 (`apply_decay(padded, 1.0, voice.decay, rng)`). `plan.py`'s own docstring
 states the reasoning plainly: "the ceiling is not a limit it approaches — it
 is where it already is." A voice already carries the night's erosion at
@@ -295,6 +306,35 @@ moving through its own arc. Each voice's lifetime is otherwise ordinary decay,
 exactly as the existing pipeline applies it to a stem — only the endpoint
 comes from outside the voice instead of from a config field a person set by
 hand.
+
+**Steering enters the arc in one place, and moon phase is the one row that is
+not an arc row.** `clock.py`'s docstring is the rule — one input, one
+parameter, monotone, bounded, and all of it in `_brightness_multiplier` — and
+five of the spec's six steering rows either land there or land on a value the
+arc already carries. The sixth, moon phase → width of the interval set, has no
+`NightArc` field it could occupy: an interval set is not a ceiling, it does not
+descend, and nothing about it belongs on a curve. It lands instead in
+`plan.py`'s `interval_set`, which is downstream of the arc and already owns
+pitch. That is one step further along the same path, not a second path: what
+the rule forbids is steering appearing at the same level in two modules — a
+weather term inside `palette.py`, say — and `palette.py` still receives no
+`NightContext` at all.
+
+The mapping keeps the discipline it inherits. Openness is `1 - 2 * |phase -
+0.5|`, so a waxing and a waning quarter give the same night; it selects how
+many of `_INTERVALS_CENTS` — ordered tightest to widest exactly so that a
+prefix is always legal — are reachable, from four at new moon to all six at
+full. Bounded by construction rather than by a clamp: every result is a
+non-empty prefix of a tuple of consonant intervals, so no phase, including a
+nonsense one, can produce an empty set or a dissonant interval
+(`tests/test_night_plan.py::test_the_moons_effect_is_bounded_over_the_whole_phase_range`).
+The draw itself is over the whole tuple's length whatever the moon is doing,
+and only what it lands on changes — because that generator is shared with
+`_birth_gap_s`, and a draw whose width varied with the phase would move every
+birth time in the night, turning one input into two parameters
+(`test_no_moon_moves_a_single_birth`). A side effect worth knowing: at full
+moon the whole expression is bit-identical to what it was before the moon
+reached it.
 
 **`night/plan.py` may not import anything that decodes or generates audio,
 which is the same rule `arrangement.py` lives by and for the same reason.**
