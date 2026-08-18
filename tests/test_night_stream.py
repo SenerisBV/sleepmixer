@@ -297,8 +297,14 @@ def test_the_bed_joins_across_a_block_seam_without_a_step():
     block; the same 4x threshold the music's own seam test uses.
 
     (The circular convolution in ``_soft_lowpass`` was suspected and is not
-    the cause — measured at -41 dB relative to the block peak, confined to
-    the first and last ~2 ms. The seam was the noise, not the filter.)
+    the cause. The figure once quoted here, -41 dB relative to the block
+    peak, was wrong: re-measured against a linearly-convolved reference with
+    the pink noise the bed actually generates, the wrap reaches -17.3 dB at a
+    500 Hz cutoff and -16.2 dB at 3000 Hz. It is still confined to the
+    window's first and last samples — above -60 dB only within 1.6 ms of
+    either edge, interior matching to -71.7 dB — and those are the samples
+    the crossfade below multiplies by approximately zero. The seam was the
+    noise, not the filter; see ``stream._bed``.)
     """
     stream = _bedded()
     for index in (6, int(4 * 3600 / BLOCK_S), int(7 * 3600 / BLOCK_S)):
@@ -336,15 +342,41 @@ def test_a_block_past_the_end_of_the_night_still_renders():
     assert block.n_frames == int(BLOCK_S * SR)
 
 
+def _cache_bytes_held(stream: NightStream) -> int:
+    return sum(buf.data.nbytes for buf in stream._cache.values())
+
+
 def test_the_voice_cache_does_not_grow_without_bound():
+    """Bounded by bytes, which is the bound the code actually keeps.
+
+    Both cache tests used to assert ``len(_cache) <= 24`` — a number that
+    stopped corresponding to anything when the cache moved from an entry
+    ceiling to a byte ceiling, and that a 256 MB cache satisfies trivially at
+    the test suite's sample rate. Worse, nothing asserted the byte bound at
+    all: deleting ``self._cache_bytes -= evicted.data.nbytes`` from
+    ``_rendered`` would let the running total climb forever, collapse the
+    cache to a single entry, and thrash — and every test would still pass.
+    """
+    from sleepmix.night.stream import _CACHE_BYTES
+
     stream = _stream()
     for index in range(300):
         stream.block(index)
-    assert len(stream._cache) <= 24
+
+    # The bound the eviction loop is written against.
+    assert stream._cache_bytes <= _CACHE_BYTES
+    # The running total is what it claims to be. This is the assertion that
+    # fails if the subtraction on eviction is ever lost.
+    assert stream._cache_bytes == _cache_bytes_held(stream)
+    # And it is a cache rather than a single slot being thrashed: several
+    # voices overlap at any moment and all of them stay resident.
+    assert len(stream._cache) > 1
 
 
 def test_a_voice_evicted_from_the_cache_still_renders_the_same():
     """Eviction is invisible to correctness: cache size is not part of the contract."""
+    from sleepmix.night.stream import _CACHE_BYTES
+
     stream = _stream()
     first = stream.block(0)
 
@@ -354,7 +386,8 @@ def test_a_voice_evicted_from_the_cache_still_renders_the_same():
 
     for index in range(1, 400):
         stream.block(index)
-    assert len(stream._cache) <= 24
+    assert stream._cache_bytes <= _CACHE_BYTES
+    assert stream._cache_bytes == _cache_bytes_held(stream)
     # Confirm eviction actually happened for block 0's voices, rather than
     # merely hoping it did.
     assert not (born_at_zero & set(stream._cache))

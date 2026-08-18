@@ -532,6 +532,17 @@ class RadioSource:
     The ring is deliberately allowed to overwrite itself. This is live radio:
     if nothing has read for a while, the *old* audio is the wrong audio to
     keep.
+
+    **There is no dead flag, and that is the design rather than an omission.**
+    A source is dead when its fill thread has returned and the ring has
+    drained — which is a state ``read`` already answers correctly, by finding
+    nothing available and writing zeros. There used to be a ``_dead``
+    attribute, set on all four failure paths and read by none of them; the
+    only thing it could have been used for is a short-circuit at the top of
+    ``read``, and that would throw away the audio that had already arrived
+    before the connection dropped. Playing that out is exactly what
+    ``test_a_radio_source_that_dies_mid_night_goes_silent_once_it_drains``
+    asserts, so the flag was removed rather than wired up.
     """
 
     def __init__(self, url: str, sr: int, chunk_s: float = _STREAM_CHUNK_S,
@@ -549,7 +560,6 @@ class RadioSource:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._started = False
-        self._dead = False
 
     # -- the network, on its own thread ---------------------------------
     def _fill_loop(self) -> None:
@@ -560,7 +570,6 @@ class RadioSource:
         except Exception:
             _log.warning("night: radio feed %s did not open", self.url,
                          exc_info=True)
-            self._dead = True
             return
 
         try:
@@ -573,7 +582,6 @@ class RadioSource:
             _log.warning("night: radio feed %s stopped", self.url,
                          exc_info=True)
         finally:
-            self._dead = True
             try:
                 stream.close()
             except Exception:
@@ -633,7 +641,6 @@ class RadioSource:
 
     def close(self) -> None:
         self._stop.set()
-        self._dead = True
         thread, self._thread = self._thread, None
         if thread is not None and thread.is_alive():
             thread.join(timeout=2.0)
