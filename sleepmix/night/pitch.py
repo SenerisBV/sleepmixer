@@ -28,6 +28,16 @@ FOLD_HIGH_HZ = 110.0
 # A peak must carry at least this fraction of the strongest peak's magnitude
 # to count as a pitch. Below it, the "peak" is the shoulder of a real one or
 # it is noise.
+#
+# This is the only tonality gate here. Two others were tried and dropped:
+# a peak-to-median-floor ratio (fit to white noise, then failed on pink
+# noise, band-limited noise, and this repo's own cached stems — see
+# task-1-report.md, "Finding 1"), and spectral flatness computed over the
+# in-band spectrum (a principled, standard measure, but one that reads any
+# signal concentrated in a sub-band of _MIN_HZ.._MAX_HZ as "tonal" by
+# construction — band-limited noise scored as more tonal than every real
+# instrument tested, so it could not separate the two either). Rejecting
+# noise without a pitch was never in this task's spec; it is not attempted.
 MIN_PEAK_FRACTION = 0.02
 
 # Frequencies outside this are not pitches for this purpose: below it is
@@ -37,16 +47,6 @@ _MAX_HZ = 4000.0
 
 # Two folded pitches closer than this are the same pitch.
 _MERGE_CENTS = 45.0
-
-# The strongest in-band bin must clear the in-band median by at least this
-# multiple before anything is trusted as a pitch at all. Broadband noise has
-# no bin that stands out from the general level — across 200 trials of the
-# noise this module is tested against, the loudest bin never exceeded 4.6x
-# the median. A real partial clears it by many orders of magnitude. Without
-# this gate, MIN_PEAK_FRACTION alone does not reject noise: it only compares
-# peaks to each other, and noise has thousands of local maxima within 2% of
-# one another, filling max_pitches with numbers that are not pitches.
-_MIN_PEAK_TO_FLOOR = 8.0
 
 
 def _fold(hz: float) -> float:
@@ -82,15 +82,13 @@ def pitch_set(buf: AudioBuffer, max_pitches: int = 6) -> tuple[float, ...]:
         return ()
 
     windowed = mono * np.hanning(n).astype(np.float32)
-    raw_spectrum = np.abs(np.fft.rfft(windowed))
+    spectrum = np.abs(np.fft.rfft(windowed))
     freqs = np.fft.rfftfreq(n, 1.0 / buf.sr)
 
     in_band = (freqs >= _MIN_HZ) & (freqs <= _MAX_HZ)
-    band_magnitudes = raw_spectrum[in_band]
-    if band_magnitudes.size == 0 or not np.any(band_magnitudes):
+    spectrum = np.where(in_band, spectrum, 0.0)
+    if not np.any(spectrum):
         return ()
-
-    spectrum = np.where(in_band, raw_spectrum, 0.0)
 
     # A local maximum, so the shoulders of one partial do not become three.
     peaks = np.zeros(len(spectrum), dtype=bool)
@@ -100,14 +98,6 @@ def pitch_set(buf: AudioBuffer, max_pitches: int = 6) -> tuple[float, ...]:
         return ()
 
     strongest = float(spectrum[peak_idx].max())
-
-    # Material with nothing standing out from its own noise floor has no
-    # peak worth the name, whatever MIN_PEAK_FRACTION says below — that
-    # constant only ever compares peaks to each other.
-    floor = float(np.median(band_magnitudes))
-    if floor <= 0 or strongest < _MIN_PEAK_TO_FLOOR * floor:
-        return ()
-
     peak_idx = peak_idx[spectrum[peak_idx] >= strongest * MIN_PEAK_FRACTION]
     if peak_idx.size == 0:
         return ()
@@ -117,13 +107,13 @@ def pitch_set(buf: AudioBuffer, max_pitches: int = 6) -> tuple[float, ...]:
 
     kept: list[float] = []
     for idx in peak_idx:
+        if len(kept) >= max_pitches:
+            break
         folded = _fold(float(freqs[idx]))
         if folded <= 0:
             continue
         if any(abs(1200.0 * np.log2(folded / k)) < _MERGE_CENTS for k in kept):
             continue
         kept.append(folded)
-        if len(kept) >= max_pitches:
-            break
 
     return tuple(sorted(kept))

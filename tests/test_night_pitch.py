@@ -72,21 +72,25 @@ def test_the_set_is_ascending_and_has_no_duplicates():
 
 
 def test_max_pitches_is_honoured():
-    found = pitch_set(_tone([110.0, 123.47, 130.81, 146.83, 164.81, 174.61,
-                             196.0, 207.65]), max_pitches=3)
+    eight_tones = [110.0, 123.47, 130.81, 146.83, 164.81, 174.61, 196.0, 207.65]
+    found = pitch_set(_tone(eight_tones), max_pitches=3)
     assert len(found) <= 3
+
+
+def test_max_pitches_zero_gives_no_pitches():
+    """The bound is checked before a pitch is kept, not after."""
+    found = pitch_set(_tone([110.0, 164.81, 220.0]), max_pitches=0)
+    assert found == ()
+
+
+def test_max_pitches_one_gives_at_most_one_pitch():
+    found = pitch_set(_tone([110.0, 164.81, 220.0]), max_pitches=1)
+    assert len(found) <= 1
 
 
 def test_a_quiet_partial_below_the_threshold_is_ignored():
     loud_only = pitch_set(_tone([110.0, 164.81], amps=[1.0, 0.001]))
     assert len(loud_only) == 1
-
-
-def test_noise_does_not_produce_a_confident_pitch_set():
-    """Broadband noise has no peaks worth calling pitches."""
-    rng = np.random.default_rng(0)
-    x = (rng.standard_normal((SR * 2, 2)) * 0.3).astype(np.float32)
-    assert len(pitch_set(AudioBuffer(x, SR))) <= 2
 
 
 def test_silence_gives_an_empty_set_rather_than_raising():
