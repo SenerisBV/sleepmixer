@@ -157,10 +157,16 @@ HANDOVER_COVER_S = 90.0
 # decided once — so it costs nothing in block independence: a window planned
 # from any offset walks the identical cursors.
 #
-# Kept under ``_BIRTH_GAP_MIN_S`` (20 s, the smallest gap any density can
-# draw) so the step born before a seam reaches past it on its very next draw
-# rather than creeping up on it in several. A placeholder like everything
-# around it — but a bounded one.
+# The correctness condition is staying below the *maximum* birth gap
+# (~980 s at the sparsest density the walk draws), not the minimum: that is
+# what keeps the clamp able to fire at all. Measured at 0.001 s, 1 s, 60 s,
+# and 200 s — all above ``_BIRTH_GAP_MIN_S`` — every one still gives zero
+# bare seams and zero ceiling breaches; only 1200 s, above the maximum birth
+# gap, breaches. Kept under ``_BIRTH_GAP_MIN_S`` (20 s, the smallest gap any
+# density can draw) anyway, but that is a nicety rather than a requirement:
+# it means the step born before a seam reaches past it on its very next
+# draw rather than creeping toward it over several. A placeholder like
+# everything around it — but a bounded one.
 SEAM_APPROACH_S = 15.0
 
 # Away from a handover, a ghost outliving its source is a flourish rather than
@@ -662,12 +668,19 @@ def schedule_sources(ctx: NightContext, sr: int,
             # night.
             candidates = [i for i in range(len(ctx.sources)) if i not in played]
             if not candidates:
-                # The round is out. Start a new one, still refusing to hand
-                # a source straight back to itself — that rule predates this
-                # one and is the reason ``played`` is reset to ``{current}``
-                # rather than to the empty set. With exactly two sources
-                # this is the whole mechanism: the round is out after every
-                # stage, and the pair simply alternates, as it did before.
+                # The round is out. Start a new one. The ``i != current``
+                # filter just below is what refuses to hand a source
+                # straight back to itself here — with exactly two sources
+                # this reset path runs at every boundary, so that filter is
+                # the entire no-repeat mechanism, and the pair simply
+                # alternates as before. ``played = {current}`` is a
+                # different, weaker thing: it keeps the source that just
+                # finished out of the *new* round's rotation too, rather
+                # than letting it come back as soon as one other source has
+                # played. That is a rotation nicety, not a repeat guard —
+                # nothing currently exercises it (``played = set()`` here
+                # passes the full suite unchanged), so a future test that
+                # wants to pin it starts here.
                 played = {current}
                 candidates = [i for i in range(len(ctx.sources))
                               if i != current]

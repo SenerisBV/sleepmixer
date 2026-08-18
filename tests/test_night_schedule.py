@@ -222,12 +222,15 @@ def test_exactly_two_sources_simply_alternate():
     and the case the ledger recorded as untested.
 
     With two sources the round is out after every single stage, so the
-    reset path — and only the reset path — runs at every boundary. It
-    must keep refusing to hand a source straight back to itself, which is
-    the older rule the reset is careful not to break: resetting to the
-    empty set instead of to ``{current}`` would let a source follow
-    itself, producing a stage boundary that is not a handover and a night
-    that sits on one song for twice as long without saying so."""
+    reset path — and only the reset path — runs at every boundary. What
+    keeps a source from following itself is the ``i != current`` filter
+    inside that reset path, not what ``played`` is reset to: resetting to
+    the empty set instead of ``{current}`` still passes this test and the
+    rest of the suite unchanged (mutation-checked), because the filter
+    already excludes ``current`` on its own. What ``played = {current}``
+    actually buys is a rotation nicety — keeping the source that just
+    finished out of the very next round too — and that property is
+    currently unguarded by any test."""
     sources = [_profile("a", (55.0, 82.5)), _profile("b", (58.0, 87.0))]
     for seed in (1, 2, 3, 7, 11):
         schedule, _ = _schedule(sources, seed=seed)

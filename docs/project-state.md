@@ -166,15 +166,24 @@ target that moves with the material.
 Rendering one voice costs a peak RSS of roughly **34x the buffer it produces**,
 and the multiplier is stable across lengths — measured at 44.1 kHz through
 `NightStream._rendered`: 240 s → 2.90 GB peak against a 0.081 GB buffer
-(35.9x), 590 s → 6.69 GB against 0.196 GB (34.2x), 944 s → 10.29 GB against
-0.312 GB (33.0x). That stability says it is a fixed number of full-buffer
-temporaries inside `apply_decay` rather than anything about voice length or
-about the night. The unbounded part of the problem is gone — see
-`SEAM_APPROACH_S` below — but a night still peaks near 6.7 GB in its worst
-case, and even a Phase 1 night with no sources at all peaks near 2.9 GB for
-its 240 s worst case, which predates this phase entirely. Reducing it means
-changing `disintegration.py`, on the render path `sleepmix render` shares, so
-it wants its own measurement pass rather than a patch on the way out.
+(35.9x), 944 s → 10.29 GB against 0.312 GB (33.0x). That stability says it is
+a fixed number of full-buffer temporaries inside `apply_decay` rather than
+anything about voice length or about the night. The unbounded part of the
+problem is gone — see `SEAM_APPROACH_S` below — but the honest post-fix
+headline is **10.29 GB → about 7.0 GB (7.2 GB for a noise band)**, not the
+6.69 GB once recorded here: that figure was measured for a 589.9 s voice,
+which the fix wave's own wider sweep (400 seeds x five source counts)
+superseded with a true post-fix worst case of 598.4 s, measuring 6.98 GB for
+a drone and 7.19 GB for a noise band — `noiseband` is consistently more
+expensive than `drone`, and the original measurement covered only the drone
+path. The stated ceiling, `MAX_VOICE_TOTAL_S = 690 s`, bounds peak RSS at
+roughly 8.0 GB (measured 7.8–8.0 GB at that length). Even a Phase 1 night
+with no sources at all peaks near 2.9 GB for its 240 s worst case, which
+predates this phase entirely. The remaining term is `apply_decay`'s
+33–36x multiplier, already recorded above as an out-of-scope follow-up:
+reducing it means changing `disintegration.py`, on the render path
+`sleepmix render` shares, so it wants its own measurement pass rather than a
+patch on the way out.
 
 - **`LOOPS_PER_SOURCE = 3`** (`night/prepare.py`) — how many loops one song
   contributes. Enough for internal variety without one loop recurring often;
@@ -203,11 +212,16 @@ it wants its own measurement pass rather than a patch on the way out.
 - **`SEAM_APPROACH_S = 15.0`** (`night/plan.py`) — how close before a genuine
   handover the walk forces a birth, so the cover spans a bounded distance
   rather than whatever birth gap happened to cross the seam. It is a
-  placeholder in its exact value only: something under `_BIRTH_GAP_MIN_S`
-  (20 s) is *required*, so that the step born before a seam reaches past it
-  on its very next draw. Fifteen seconds is the guess inside that
-  requirement. Audibly, this is what makes births cluster slightly at
-  handovers.
+  placeholder in its exact value only: the actual correctness condition is
+  staying under the *maximum* birth gap (~980 s at the sparsest density),
+  so the clamp still has room to fire — measured at 0.001 s, 1 s, 60 s, and
+  200 s, all well above `_BIRTH_GAP_MIN_S`, still giving zero bare seams and
+  zero ceiling breaches, while 1200 s (above the maximum birth gap) does
+  breach. Staying under `_BIRTH_GAP_MIN_S` (20 s) is a nicety rather than a
+  requirement: it means the step born before a seam reaches past it on its
+  very next draw rather than creeping toward it over several. Fifteen
+  seconds is the guess inside that nicety. Audibly, this is what makes
+  births cluster slightly at handovers.
 - **`MAX_VOICE_TOTAL_S = 690.0`** (`night/plan.py`) — not a taste value but a
   derived ceiling (`MAX_VOICE_S * OUTLIVE_MAX + HANDOVER_COVER_S`), listed
   here because it moves whenever any of those three do, and a test asserts
