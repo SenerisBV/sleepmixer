@@ -6,10 +6,18 @@ these values are at hour six, so nothing can inject fresh energy at 4 AM. That
 is why the arc is a constraint on what may exist rather than an automation
 curve laid over the top: there is no louder thing for it to be fighting.
 
-Steering enters here and only here, and the discipline is one input, one
-parameter, monotone, bounded. Every mapping below is a small multiplier on a
-starting value, and the sweep in ``tests/test_night_clock.py`` is what enforces
-that no combination of them can escape the design's ceilings.
+Steering enters *the arc* here and only here, and the discipline is one input,
+one parameter, monotone, bounded. Every mapping below is a small multiplier on
+a starting value, and the sweep in ``tests/test_night_clock.py`` is what
+enforces that no combination of them can escape the design's ceilings.
+
+The one steering row that is not an arc row is moon phase → width of the
+interval set, which lands in ``plan.py``. It is not an exception being carved
+out: an interval set is not a descending ceiling, so there is no field of
+``NightArc`` it could have occupied, and ``plan.py`` is the one module
+downstream of this one that already owns pitch. What this docstring forbids is
+steering appearing in a *second* place at the same level — a weather term
+inside ``palette.py``, say — and that still holds.
 """
 from __future__ import annotations
 

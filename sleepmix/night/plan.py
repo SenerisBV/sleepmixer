@@ -12,6 +12,12 @@ at hour six enters dark and quiet and has no way to be anything else.
 assert properties of an eight-hour night without rendering a sample, and it is
 the same rule ``arrangement.py`` lives by for the same reason.
 
+**One steering input lands here rather than in ``clock.py``.** Moon phase
+sets the width of the interval set — the spec's own row for it — and an
+interval set is not one of the arc's four descending ceilings, so there is no
+field of ``NightArc`` it could have been. ``interval_set`` below carries the
+reasoning, including why it is not threaded into ``palette.py``.
+
 **The walk always starts at voice zero**, even when only a ten-second window is
 wanted. That looks wasteful and is not: a night holds a few hundred voices and
 the walk is arithmetic, so a whole night plans in well under a millisecond.
@@ -51,7 +57,18 @@ _ROOT_CHOICES_HZ = (55.00, 61.74, 65.41, 73.42, 82.41)
 # second, perfect fourth, perfect fifth, octave, and a fifth above that. No
 # thirds — they colour a chord major or minor, and a night should not have a
 # mood it is asserting.
+#
+# Ordered from tightest to widest on purpose: the moon reaches this tuple by
+# controlling how much of its *upper end* is available, so a prefix of it is
+# always a legal interval set. See ``interval_set``.
 _INTERVALS_CENTS = (0, 200, 500, 700, 1200, 1900)
+
+# The fewest intervals a night may draw from — unison, second, fourth, fifth.
+# A new moon narrows to exactly these. It is a floor rather than a limit that
+# can be reached from below: a set that could empty, or that could be narrowed
+# to unison alone, would turn one steering input into the difference between
+# music and a single held tone.
+_MIN_INTERVAL_WIDTH = 4
 
 # How far the root falls across a whole night. Imperceptible minute to minute,
 # unmistakable between 23:00 and 05:00, and the same gesture the decay engine
@@ -112,6 +129,39 @@ def _birth_gap_s(density: float, rng) -> float:
     return float(rng.uniform(_BIRTH_GAP_MIN_S, _BIRTH_GAP_MAX_S)) * stretch
 
 
+def interval_set(moon_phase: float) -> tuple[int, ...]:
+    """The intervals a voice may sit at under this moon.
+
+    The spec's steering table gives moon phase exactly one job — "width of the
+    interval set", full → more open, new → nearer unison — and this is it.
+    Openness is ``1 - 2 * |phase - 0.5|``: 1.0 at full moon, 0.0 at new, and
+    monotone in the distance from full in both directions, so a waxing and a
+    waning quarter are the same night. That openness picks how many of
+    ``_INTERVALS_CENTS`` are reachable, from ``_MIN_INTERVAL_WIDTH`` at new to
+    all of them at full — so a full moon can reach the octave and the fifth
+    above it, and a new moon cannot.
+
+    **Why this lives here and not in ``clock.py``.** The rule at the top of
+    ``clock.py`` is that steering enters the *arc* in one place, and the arc is
+    four descending ceilings. Interval width is not a ceiling: it is not a
+    thing that descends, and there is no arc field it could be. So it enters
+    at the one place downstream of the arc that already owns pitch, with the
+    same discipline the arc's own mappings keep — one input, one parameter,
+    monotone, bounded. It emphatically does not enter ``palette.py``, which
+    would be a second home for steering rather than a further step of one.
+
+    Bounded by construction, which is what makes "no combination is unsafe"
+    checkable rather than empirical: the result is always a non-empty prefix
+    of a tuple every member of which is consonant, so no phase — including a
+    nonsense one — can produce an empty set or a dissonant interval.
+    """
+    phase = min(max(float(moon_phase), 0.0), 1.0)
+    openness = 1.0 - 2.0 * abs(phase - 0.5)
+    span = len(_INTERVALS_CENTS) - _MIN_INTERVAL_WIDTH
+    width = _MIN_INTERVAL_WIDTH + int(round(openness * span))
+    return _INTERVALS_CENTS[:width]
+
+
 def _pitch_hz(root_hz: float, cents: float) -> float:
     return root_hz * (2.0 ** (cents / 1200.0))
 
@@ -151,6 +201,7 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
     root_rng = iteration_rng(ctx.seed, "night:root", 0)
     root_hz = float(root_rng.choice(_ROOT_CHOICES_HZ))
     night_frames = max(int(ctx.night_length_s * sr), 1)
+    intervals = interval_set(ctx.moon_phase)
 
     voices: list[Voice] = []
     base_decay = StemDecayConfig()
@@ -168,7 +219,17 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
         # The root falls as the night goes; the interval sits on top of it.
         elapsed = min(max(cursor / night_frames, 0.0), 1.0)
         descent = -ROOT_DESCENT_SEMITONES * elapsed * 100.0
-        cents = int(rng.choice(_INTERVALS_CENTS))
+        # The draw is over the *whole* tuple's length whatever the moon is
+        # doing, and the moon only decides what that draw lands on. That is
+        # not a stylistic preference: this generator is shared with
+        # ``_birth_gap_s`` below, so a draw whose width varied with the phase
+        # would move every birth time in the night and the moon would be
+        # steering the schedule as well as the pitch. Drawing a fixed-width
+        # slot and folding it into the reachable set leaves the RNG stream
+        # identical for every phase — and, at full moon, leaves the whole
+        # expression identical to what it was before the moon reached it.
+        slot = int(rng.choice(len(_INTERVALS_CENTS)))
+        cents = intervals[slot % len(intervals)]
         pitch = _pitch_hz(root_hz, cents + descent)
 
         voice = Voice(
