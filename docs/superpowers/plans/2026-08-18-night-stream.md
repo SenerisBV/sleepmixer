@@ -1575,10 +1575,14 @@ def test_a_block_past_the_end_of_the_night_still_renders():
 
 
 def test_the_voice_cache_does_not_grow_without_bound():
+    from sleepmix.night.stream import _CACHE_BYTES
+
     stream = _stream()
     for index in range(300):
         stream.block(index)
-    assert len(stream._cache) <= 24
+    assert stream._cache_bytes <= _CACHE_BYTES
+    assert stream._cache_bytes == sum(buf.data.nbytes
+                                      for buf in stream._cache.values())
 
 
 def test_the_stream_never_touches_a_speech_source():
@@ -1609,8 +1613,10 @@ of here.
 **A voice is rendered once, whole, and then sliced.** Blocks are seconds and
 voices are minutes, so every voice spans several blocks. Teaching the decay
 engine to render part of a placement would mean changing the contract at the
-heart of this codebase; rendering the voice complete and slicing it costs a few
-tens of megabytes and changes nothing. It also solves the reverb problem for
+heart of this codebase; rendering the voice complete and slicing it costs a
+bounded amount of memory (see ``_CACHE_BYTES`` — a single voice is tens of
+megabytes, not the whole cache) and changes nothing. It also solves the
+reverb problem for
 free: reverb is applied to the *whole* voice before it is cached, so the tail
 lives inside the cached buffer and survives being sliced. No block is ever
 reverbed, so no reverb tail is ever cut off at a seam.
@@ -1641,10 +1647,17 @@ from .plan import Voice, plan_voices
 
 BLOCK_S = 10.0
 
-# How many rendered voices to keep. A voice is at most four minutes, blocks are
-# ten seconds, and a handful sound at once — so this holds every voice that can
-# still be needed several times over, and evicts in birth order.
-_CACHE_SIZE = 24
+# How much rendered audio to keep, in bytes.
+#
+# The cache was drafted as a count of *entries* — 24 of them, on the reasoning
+# that a voice is a few megabytes. It is not. At 44.1 kHz a voice averages
+# 52.7 MB and peaks at 86.6 MB (four minutes, stereo, float32, plus a
+# six-second reverb tail), so 24 entries is 1.27 GB typical and 2.08 GB worst
+# case, held resident for eight hours. At most about eight voices are ever
+# alive at one moment, so the entry count was buying nothing the byte ceiling
+# does not — and a byte ceiling also behaves the same way at every sample
+# rate, which an entry count does not.
+_CACHE_BYTES = 256 * 1024 * 1024
 
 # Reverb tail kept past a voice's death, so the room does not stop with it.
 _TAIL_S = 6.0
@@ -1674,6 +1687,7 @@ class NightStream:
         self.reverb = reverb if reverb is not None else ReverbConfig()
         self.bed = bed if bed is not None else SoundbedConfig()
         self._cache: OrderedDict[int, AudioBuffer] = OrderedDict()
+        self._cache_bytes = 0
 
     # -- voices ---------------------------------------------------------
     def _rendered(self, voice: Voice) -> AudioBuffer:
@@ -1694,9 +1708,11 @@ class NightStream:
         wet = apply_reverb(decayed, self.reverb)
 
         self._cache[voice.index] = wet
+        self._cache_bytes += wet.data.nbytes
         self._cache.move_to_end(voice.index)
-        while len(self._cache) > _CACHE_SIZE:
-            self._cache.popitem(last=False)
+        while len(self._cache) > 1 and self._cache_bytes > _CACHE_BYTES:
+            _, evicted = self._cache.popitem(last=False)
+            self._cache_bytes -= evicted.data.nbytes
         return wet
 
     # -- bed ------------------------------------------------------------

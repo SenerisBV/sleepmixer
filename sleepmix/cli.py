@@ -143,5 +143,94 @@ def ui(host, port, open_browser, allow_remote):
                 log_level="info")
 
 
+@main.command()
+@click.option("--seconds", type=int, default=None,
+              help="Stop after this many seconds instead of at the end of the "
+                   "night. For trying it out; a real night takes no arguments "
+                   "at all.")
+def night(seconds: int | None) -> None:
+    """Play a self-quieting ambient stream until the night it was built for
+    runs out.
+
+    Deliberately takes no configuration. Location comes from SLEEPMIX_LAT and
+    SLEEPMIX_LON (defaulting to Amsterdam), a comfort show comes from whatever
+    is in the `room` folder under the data directory, and a radio feed comes
+    from SLEEPMIX_RADIO_URL if one is set. Everything else is derived from the
+    sky, the weather, and a seed.
+    """
+    import datetime as dt
+    import math
+    import os
+    import random
+
+    # The device check goes first, before anything is printed. Printing "Night
+    # 12345: 9.2 h until light." and where the room folder is and *then*
+    # refusing to start reads as encouragement followed by a slap; a user
+    # without the extra should see only the one line that tells them what to
+    # install.
+    try:
+        import sounddevice as sd
+    except Exception:
+        raise click.ClickException(
+            'sounddevice is not installed — run: pip install "sleepmix[night]"')
+
+    from .config import SoundbedConfig
+    from .night.context import build_context
+    from .night.player import NightPlayer, room_directory
+    from .night.speech import radio_source_from, room_sources_from
+    from .night.stream import BLOCK_S, NightStream
+
+    lat = float(os.environ.get("SLEEPMIX_LAT", "52.3676"))
+    lon = float(os.environ.get("SLEEPMIX_LON", "4.9041"))
+    seed = int(os.environ.get("SLEEPMIX_SEED", random.randrange(2 ** 31)))
+    sr = 44100
+
+    ctx = build_context(dt.datetime.now(dt.timezone.utc), lat, lon, seed)
+    # The bed is on for a night, and only for a night — ``SoundbedConfig``'s
+    # own default stays off, because every other caller (render, preview) has
+    # a mix underneath it and this one does not. A night is mostly gaps: at
+    # 6.5 h in, voice coverage measured 26 of 30 consecutive blocks as exact
+    # digital silence, with gaps up to 694 s. The bed is what is *there*
+    # between voices, and it is also the only thing the "cloud and rain → the
+    # noise bed's level and character" steering row has to act on.
+    stream = NightStream(ctx, sr=sr, bed=SoundbedConfig(enabled=True))
+    player = NightPlayer(
+        stream,
+        room_sources_from(room_directory(), sr),
+        radio_source_from(os.environ.get("SLEEPMIX_RADIO_URL"), sr),
+    )
+
+    click.echo(f"Night {seed}: {ctx.night_length_s / 3600:.1f} h until light.")
+    click.echo(f"Room audio: {room_directory()}")
+    click.echo("Ends on its own at first light. Ctrl-C to stop it sooner.")
+
+    # **The night ends by ending.** The design spec is plain about it — "Phase
+    # 1 descends toward near-silence over an assumed night and stops" — and it
+    # argues the case: with no configuration there is no alarm time, so "a
+    # system that guesses when you are getting up and is wrong is worse than
+    # one that does not try". What shipped did neither: with no ``--seconds``
+    # the loop ran forever and the only way out was Ctrl-C, which is a third
+    # behaviour nobody chose. The night's own length is the one number that
+    # says when it is over, so that is what bounds it.
+    #
+    # This is about the stream terminating, not about the sound. ``arc_at``
+    # clamps time past the end of the night to the arc's quietest values, so a
+    # block or two of overrun degrades nothing — which is why rounding up is
+    # safe and rounding down would clip the last of the descent.
+    if seconds is not None:
+        max_blocks = int(seconds / BLOCK_S)
+    else:
+        max_blocks = int(math.ceil(ctx.night_length_s / BLOCK_S))
+    with sd.OutputStream(samplerate=sr, channels=2, dtype="float32") as out:
+        try:
+            player.run(max_blocks=max_blocks, sink=lambda b: out.write(b.data))
+        except (KeyboardInterrupt, Exception):
+            # A night that ends should end silently, not with a stack trace.
+            # ``run`` itself already degrades everything degradable; this is
+            # the last-resort catch for whatever it could not — Ctrl-C, or a
+            # sink failure that outlasted the retry budget inside ``run``.
+            pass
+
+
 if __name__ == "__main__":
     main()

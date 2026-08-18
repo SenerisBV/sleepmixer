@@ -164,6 +164,233 @@ exactly such an argument, and the argument was false. See
 segment), extracted so the planner, the renderer and the density measurement
 cannot disagree about it.
 
+## The night: block independence is the purity property, renamed
+
+`sleepmix/night/` (Plan 5, Phase 1) renders an unbounded, self-quieting
+ambient stream in place of a finite mix — unbounded in the sense that the plan
+is, not that playback is: `cli.py` bounds a night by its own length, and the
+stream ends when the arc it was built for runs out. It is a new package, imported from
+nowhere the existing pipeline touches, and it exists because of a fact this
+document already spent its first section on: **decay is a pure function of
+progress.** That fact was engineered in for a completely different reason —
+so a preview could cost one iteration instead of twenty minutes — and it turns
+out to be exactly the guarantee an unbounded stream needs, with one word
+changed. Where the top of this document says of the purity property that
+"repetition 400 of 1200 does not need repetitions 1 through 399 to have been
+computed first," the night's own invariant reads: **any block of the night's
+music must be renderable without rendering what precedes it, and must be
+bit-identical to the corresponding slice of a continuous render.** An
+eight-hour stream cannot be a buffer — it has to be produced in pieces ahead of
+playback — and a piece is only usable if it is correct in isolation.
+`sleepmix/night/stream.py`'s `NightStream.block(index)` is that piece, and
+`tests/test_night_stream.py::test_a_block_rendered_alone_matches_one_rendered_in_sequence`
+and `test_far_apart_blocks_are_independent_too` assert it numerically — block
+37 rendered alone against block 37 reached by rendering 0 through 37 in
+sequence, and a block six hours in against itself, both compared for bit
+equality — the same posture this document already takes toward the purity
+property: asserted, not argued.
+
+**The invariant is scoped to the music, and the speech layer is excluded from
+it by necessity, not convenience — and the exclusion is what makes the
+guarantee testable rather than a hope.** Live audio cannot be deterministic: a
+block rendered thirty seconds ahead of playback would carry whatever
+transmission was on the air thirty seconds ago, and a block reached by
+rendering in sequence would carry a different one. That is not a defect to
+design around, it is what *live* means, and trying to fold it into the
+invariant would just make the invariant false. So the two layers are built by
+different code at different times: `stream.py` renders the deterministic
+layer entire, ahead of playback, and `player.py`'s `NightPlayer._speech` reads
+the live sources and sums them into each block only as that block is handed to
+the device (`mixed_block`, which calls `self.stream.block(index)` and adds
+`self._speech(...)` on top). Putting the live layer at playback, rather than
+finding some way to make it deterministic, is the whole answer to the
+conflict — `stream.py`'s own module docstring states the boundary directly:
+"Nothing live reaches this module and nothing live may be added to it. That is
+the boundary the design's central invariant is drawn at." The boundary is
+enforced, not just documented: `tests/test_night_stream.py::test_the_stream_never_touches_a_speech_source`
+asserts, via an AST-resolved import walk (`tests/import_guard.py`, see below),
+that `stream.py` imports nothing from `sleepmix.night.speech` — the only
+module in the package that talks to a live source.
+
+**Two nested clocks, and the night one always wins.** `night/clock.py`'s
+`arc_at(t_s, ctx) -> NightArc` is the outer clock: one monotone descent,
+hours long, never resets, governing four ceilings at once — `density`,
+`brightness_hz`, `level_db`, `intelligibility`. `night/plan.py`'s `Voice` is
+the inner one: minutes long, born, decayed, dead. The rule that makes the
+nesting do anything is that **a voice born at hour six may not start bright.**
+`plan_voices` samples `arc_at` once, at the cursor position, at the exact
+moment a voice is conceived (`plan.py:134`, before the cursor advances), and
+`_decay_for` builds that voice's `StemDecayConfig` with `lowpass_end_hz` and
+`amp_end_db` set *from that sample* — not from the night's opening ceiling and
+not from some later one. `tests/test_night_plan.py::test_a_voice_is_never_born_above_the_ceiling_at_its_birth`
+pins this for every voice in an eight-hour night. The consequence is
+architectural rather than decorative: the night arc is not an automation curve
+laid over a mix that a sufficiently loud voice could fight, because there is
+no mechanism by which a voice could ever be born above the ceiling in the
+first place. `clock.py`'s own docstring says as much — "there is no louder
+thing for it to be fighting" — and it is the single fact that makes "quieter
+and sparser as the night goes on" a structural property of the design rather
+than a level automation somebody could defeat by pressing play at the wrong
+moment.
+
+**A voice is rendered once, in full, cached, and sliced — rather than teaching
+`apply_decay` to render a partial placement.** The obvious alternative is
+changing `apply_decay`'s contract so it can render a sub-range of a
+placement's own duration, which is precisely the load-bearing property at the
+top of this document — a whole buffer, one progress value, no dependency on
+anything outside itself — and changing it for every existing caller to solve a
+problem only `night/` has is a cost the rest of the pipeline would carry
+forever. Instead `NightStream._rendered` renders a voice's whole lifetime the
+moment it is first needed, decays and reverbs it once, and holds it in a
+small LRU cache (`_CACHE_BYTES = 256 MB`, evicted via `move_to_end`);
+`block(index)` takes whatever slice of whichever cached voices falls inside
+the ten-second window it is assembling, and `apply_decay`'s existing contract
+— a whole buffer, one progress value — is untouched.
+
+**The cache is bounded by bytes and not by entries, and the reason is that
+"a few tens of megabytes" was wrong by a factor of forty.** The design
+document and the first implementation both said the cache costs a few tens of
+megabytes and sized it at 24 entries on that basis. A *voice* is a few tens of
+megabytes: at 44.1 kHz one averages 52.7 MB and peaks at 86.6 MB (up to four
+minutes, stereo, float32, plus a six-second reverb tail). Twenty-four of them
+is 1.27 GB typical and 2.08 GB worst case, resident for eight hours, and no
+test noticed because the suite runs at 22.05 kHz where every figure halves.
+The entry count was buying nothing in any case: measured over the first 120
+blocks of a night at 44.1 kHz, at most **three** voices sound at once and the
+whole stretch needs eleven distinct voices, of which a 256 MB ceiling renders
+exactly eleven — no re-renders, peak residency 262 MB across five entries.
+A byte ceiling also behaves the same way at every sample rate, which an entry
+count does not. **This also solves the
+reverb-tail-at-a-seam problem for free, and by a different route than the one
+"Reverb on a window that has to loop" above uses for the same shape of
+problem.** That section reverbs a fragment together with a leading iteration
+of context and trims the result, because a preview window has to loop
+seamlessly and reverbing it in isolation would prepend a gap. The night has no
+such constraint — a voice is reverbed exactly once, as a whole, before it ever
+enters the cache — so the tail simply lives inside the cached buffer and
+survives being sliced across however many blocks it spans. No block is ever
+reverbed on its own, so no reverb tail is ever cut off at a block boundary.
+(One real defect surfaced by this design and fixed during implementation:
+`apply_reverb`'s pedalboard backend shifts the *whole* buffer, dry signal
+included, by its pre-delay, so an unadjusted cached voice's frame 0 was not
+that voice's birth — `effects.reverb_dry_offset`, described above, exists
+exactly to compensate and `stream.py`'s `_rendered` now calls it before
+caching. `night/speech.py`'s `through_a_wall` calls it too, for the same
+reason; a branch of this document once argued it should not, and that
+argument was wrong. See `docs/project-state.md`.)
+
+**Why decay runs at `progress = 1.0`, with the arc supplying the endpoints,
+rather than each voice decaying within itself.** A voice's own
+`StemDecayConfig` in this design carries almost no `*_start` values worth
+reading — `_decay_for` sets the `*_end` fields from the arc sampled at birth
+and leaves the starts at the dataclass defaults, with one deliberate
+exception: it sets `noise_start_db` as well, to the same value as
+`noise_end_db`. (`plan.py`'s own docstring documents that exception and this
+paragraph did not, for a while, which is how a reader could come away
+believing `_decay_for` "only ever sets the `*_end` fields".) The hiss is
+pinned to both ends so that it cannot matter which progress a future caller
+renders at, and so that it descends with `arc.level_db` rather than sitting at
+an absolute level the arc cannot touch — see `NOISE_BELOW_LEVEL_DB`. The
+starts are otherwise unread because `NightStream._rendered` decays every voice
+at `progress = 1.0`
+(`apply_decay(padded, 1.0, voice.decay, rng)`). `plan.py`'s own docstring
+states the reasoning plainly: "the ceiling is not a limit it approaches — it
+is where it already is." A voice already carries the night's erosion at
+whatever point in the arc it was born; decaying it a second time across its
+own few minutes would double the effect the nesting already produces once, and
+would need the voice's own arc reconciled against the night arc's — two decay
+curves layered on the same buffer for no gain over one. The descent the
+listener hears across a night comes entirely from the *sequence* of voices
+being conceived under successively lower ceilings, never from any one voice
+moving through its own arc. Each voice's lifetime is otherwise ordinary decay,
+exactly as the existing pipeline applies it to a stem — only the endpoint
+comes from outside the voice instead of from a config field a person set by
+hand.
+
+**Steering enters the arc in one place, and moon phase is the one row that is
+not an arc row.** `clock.py`'s docstring is the rule — one input, one
+parameter, monotone, bounded, and all of it in `_brightness_multiplier` — and
+five of the spec's six steering rows either land there or land on a value the
+arc already carries. The sixth, moon phase → width of the interval set, has no
+`NightArc` field it could occupy: an interval set is not a ceiling, it does not
+descend, and nothing about it belongs on a curve. It lands instead in
+`plan.py`'s `interval_set`, which is downstream of the arc and already owns
+pitch. That is one step further along the same path, not a second path: what
+the rule forbids is steering appearing at the same level in two modules — a
+weather term inside `palette.py`, say — and `palette.py` still receives no
+`NightContext` at all.
+
+The mapping keeps the discipline it inherits. Openness is `1 - 2 * |phase -
+0.5|`, so a waxing and a waning quarter give the same night; it selects how
+many of `_INTERVALS_CENTS` — ordered tightest to widest exactly so that a
+prefix is always legal — are reachable, from four at new moon to all six at
+full. Bounded by construction rather than by a clamp: every result is a
+non-empty prefix of a tuple of consonant intervals, so no phase, including a
+nonsense one, can produce an empty set or a dissonant interval
+(`tests/test_night_plan.py::test_the_moons_effect_is_bounded_over_the_whole_phase_range`).
+The draw itself is over the whole tuple's length whatever the moon is doing,
+and only what it lands on changes — because that generator is shared with
+`_birth_gap_s`, and a draw whose width varied with the phase would move every
+birth time in the night, turning one input into two parameters
+(`test_no_moon_moves_a_single_birth`). A side effect worth knowing: at full
+moon the whole expression is bit-identical to what it was before the moon
+reached it.
+
+**`night/plan.py` may not import anything that decodes or generates audio,
+which is the same rule `arrangement.py` lives by and for the same reason.**
+`config.py` must never import `arrangement.py` so that a plan can be reasoned
+about in milliseconds with no Demucs, no librosa and no WAV file in sight;
+`plan.py` may import nothing that decodes or generates audio — `numpy`,
+`scipy`, `soundfile`, `pedalboard`, `sleepmix.audio`, `sleepmix.effects`,
+`sleepmix.disintegration`, `sleepmix.soundbed`, and its own siblings
+`night.palette` and `night.stream` are all forbidden
+(`tests/test_night_plan.py::test_plan_module_imports_no_audio`) — so that an
+eight-hour night can be planned and asserted against invented numbers in a
+unit test that runs in microseconds
+(`tests/test_night_plan.py::test_planning_a_whole_night_is_fast`). The
+enforcement is an AST-resolved import walk rather than a string search —
+`tests/import_guard.py`'s `forbidden_imports` resolves every import in a file
+to its fully-qualified dotted module name (accounting for the file's own
+package when resolving `from . import x` and `from .. import y`) and matches
+by dotted-prefix, so `numpy.fft` is caught by forbidding `numpy` and
+`from sleepmix import audio` is caught by forbidding `sleepmix.audio`. That
+precision was not the first attempt; see `docs/project-state.md` for what the
+first two attempts missed and why a source-text search is worth exactly
+nothing against an ordinary import spelling.
+
+**Three architectures were put up against this design and rejected, each on a
+different axis.**
+
+- **A true realtime DSP graph** — voices, filters and a mixer inside an audio
+  callback, steering applied instantaneously as new samples arrive. This is
+  the honest architecture for a hosted, browser-based version, and it was
+  rejected for Phase 1 on two grounds: `apply_decay` is a buffer transform,
+  not a streaming processor, so none of the existing decay engine survives the
+  move intact, and the realtime discipline a callback demands — no
+  allocation, no blocking — is a cost paid for the benefit of exactly one
+  steering input, the microphone, which is Phase 2 and deferred anyway. If a
+  hosted version is ever built, the block planner is the half that ports; the
+  block-ahead renderer is the half that does not need to.
+- **A long render with live layers on top** — ninety minutes rendered offline
+  with the existing pipeline, looped, with only speech and level trims
+  applied live. Far cheaper than either alternative, and rejected on the
+  single ground that mattered: a ninety-minute loop is still a loop, and the
+  seam is audible by night three. That is exactly the monotony this whole
+  design exists to escape, so the cheap version fails the brief on its own
+  terms rather than on any technical count.
+- **A harvested speech pool, for the live layer specifically** — a daytime
+  job pulling hours of HF radio into local storage the night draws from
+  instead of a live connection. Recommended on robustness grounds during
+  design: no realtime network dependency at 3 AM, works with the wifi off,
+  and far politer to a volunteer receiver's eight open slots than an
+  eight-hour connection held all night. Rejected because it destroys the one
+  property live speech has that a pool cannot reproduce — that *someone is
+  awake somewhere right now*, which is a real part of why an always-on human
+  voice reads as company rather than as programming. The failure rules under
+  "Nothing that goes wrong at night may make a sound" (the design spec) are
+  the cheaper answer to the same robustness concern: the speech layer is
+  allowed to disappear silently, and the music continues.
+
 ## What each module owns
 
 - **`paths.py`** — where sleepmix keeps data on disk. `data_dir()` resolves to
