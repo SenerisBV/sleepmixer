@@ -14,7 +14,8 @@ import soundfile as sf
 
 from sleepmix.night import prepare as prepare_mod
 from sleepmix.night.prepare import (
-    LOOPS_PER_SOURCE, prepare_all, prepare_source, source_id_for,
+    LOOP_MAX_S, LOOP_MIN_S, LOOPS_PER_SOURCE, prepare_all, prepare_source,
+    source_id_for,
 )
 from sleepmix.night.sources import (
     PROFILE_SUFFIX, SourceProfile, load_profiles, profiles_directory,
@@ -24,9 +25,25 @@ from sleepmix.night.sources import (
 SR = 22050
 
 
-def _write_song(path, seconds=30.0, sr=SR, freqs=(110.0, 164.81)):
+def _write_song(path, seconds=30.0, sr=SR, freqs=(110.0, 164.81), bpm=None):
+    """A tone, optionally with accents on the beat so a tempo is findable.
+
+    ``bpm`` is what lets a test choose material whose detected tempo puts the
+    loop length outside the stated band; without it the song is the plain
+    two-tone drone every other test here uses, and the tempo is whatever
+    librosa makes of it."""
     t = np.arange(int(seconds * sr)) / sr
     y = sum(np.sin(2 * np.pi * f * t) for f in freqs)
+    if bpm is not None:
+        beat = 60.0 / bpm
+        accents = np.zeros_like(t)
+        width = int(0.04 * sr)
+        for k in range(int(seconds / beat)):
+            i = int(k * beat * sr)
+            n = min(width, len(accents) - i)
+            accents[i:i + n] += np.exp(-np.linspace(0.0, 8.0, n))
+        noise = np.random.default_rng(0).normal(0.0, 1.0, len(t))
+        y = y * 0.4 + accents * noise * 0.6
     y = (y / np.abs(y).max() * 0.5).astype(np.float32)
     sf.write(str(path), np.stack([y, y], axis=1), sr)
     return str(path)
@@ -82,11 +99,101 @@ def test_the_loops_are_short_enough_to_carry_no_phrase(tmp_path, monkeypatch):
     used to stand in for it. That bound was wide enough to pass while
     LOOP_BARS=4 produced ~13.2 s loops — four bars of source material, which
     is a phrase, defeating this test's own name. See LOOP_BARS in
-    night/prepare.py for the formula the two constants share."""
+    night/prepare.py for the formula the two constants share.
+
+    The bounds are imported rather than written as 4.0 and 12.0, so the
+    band is stated in exactly one place and a retune moves the test with
+    the code instead of against it."""
     monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
     profile = prepare_source(_write_song(tmp_path / "song.wav"), sr=SR)
     for frames in profile.loop_frames:
-        assert 4.0 <= frames / profile.sr <= 12.0
+        assert LOOP_MIN_S <= frames / profile.sr <= LOOP_MAX_S
+
+
+def test_the_band_holds_for_material_at_an_unhelpful_tempo(tmp_path,
+                                                           monkeypatch):
+    """The band is tempo-dependent and was, until this fix, unenforced.
+
+    A finished loop is `LOOP_BARS * beats_per_bar * 60 / tempo /
+    STRETCH_SPEED` seconds less the seam crossfade — 800/tempo at the
+    shipped constants — so it only lands inside 4-12 s for tempi between
+    roughly 67 and 195 BPM. Nothing bounded the detected tempo, and
+    nothing has to conspire for it to land outside: `librosa.beat.
+    beat_track` routinely halves or doubles a reported tempo, and either
+    direction walks straight out of the band.
+
+    Fifty BPM is the case measured to breach it here: without the clamp
+    this song's loops come out at **15.86 s**, a third again the ceiling
+    and unmistakably long enough to carry a phrase; with it, 11.40 s.
+    Material had to be written for this — the repository's one real
+    source file happens to land at 4.27-4.64 s on its own, so the clamp
+    never fires for it and the existing fixture could not have caught
+    this. `_clamped_to_band` is tested directly below for both edges;
+    this is the end-to-end half, so that the two constants and the real
+    stretcher are in the loop rather than only the arithmetic.
+    """
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    profile = prepare_source(
+        _write_song(tmp_path / "slow.wav", bpm=50.0), sr=SR)
+    assert profile is not None
+    for frames in profile.loop_frames:
+        assert LOOP_MIN_S <= frames / profile.sr <= LOOP_MAX_S, (
+            f"a 50 BPM song produced a {frames / profile.sr:.2f}s loop, "
+            f"outside the stated {LOOP_MIN_S}-{LOOP_MAX_S}s band")
+
+
+def test_the_band_clamp_moves_both_edges_and_leaves_the_middle_alone():
+    """`_clamped_to_band` on its own, which is where the arithmetic is.
+
+    Three cases and the reasoning for each. A slice already inside the
+    band is returned untouched, so LOOP_BARS still decides where in the
+    band a well-behaved song lands and the clamp only bites at the edges.
+    A slice too short is lengthened, and a slice too long shortened, to
+    whatever raw duration inverts to the band edge through the stretch and
+    the seam crossfade — `(finished + crossfade) * STRETCH_SPEED` — inset
+    by `_BAND_MARGIN` so an inexact stretcher does not land just outside.
+
+    Asserted on the *finished* duration rather than the raw one, because
+    the raw figure is an implementation detail and the finished figure is
+    the promise.
+    """
+    from sleepmix.analysis import LoopPoint
+    from sleepmix.night.prepare import (
+        STRETCH_SPEED, _BAND_MARGIN, _clamped_to_band,
+    )
+
+    fade_ms = 120.0
+    sr = SR
+    total = int(600.0 * sr)
+
+    def finished_s(point):
+        raw_s = (point.end - point.start) / sr
+        return raw_s / STRETCH_SPEED - fade_ms / 1000.0
+
+    # Too short: 2 s raw is ~3.2 s finished, under the floor.
+    short = _clamped_to_band(LoopPoint(0, int(2.0 * sr), 120.0),
+                             total, sr, fade_ms)
+    assert finished_s(short) == pytest.approx(
+        LOOP_MIN_S * (1.0 + _BAND_MARGIN), abs=0.01)
+
+    # Too long: 20 s raw is ~33 s finished, well over the ceiling.
+    long = _clamped_to_band(LoopPoint(int(100.0 * sr), int(120.0 * sr), 120.0),
+                            total, sr, fade_ms)
+    assert finished_s(long) == pytest.approx(
+        LOOP_MAX_S * (1.0 - _BAND_MARGIN), abs=0.01)
+
+    # Inside already: untouched, to the frame.
+    middle = LoopPoint(int(10.0 * sr), int(14.0 * sr), 120.0)
+    assert _clamped_to_band(middle, total, sr, fade_ms) == middle
+
+    # Lengthening a slice that already runs to the end of the track
+    # reaches backwards rather than giving up.
+    at_the_end = _clamped_to_band(
+        LoopPoint(total - int(1.0 * sr), total, 120.0), total, sr, fade_ms)
+    assert at_the_end.end == total
+    assert at_the_end.start >= 0
+    assert finished_s(at_the_end) == pytest.approx(
+        LOOP_MIN_S * (1.0 + _BAND_MARGIN), abs=0.01)
 
 
 def test_a_prepared_loop_does_not_click_at_the_wrap(tmp_path, monkeypatch):
@@ -106,26 +213,41 @@ def test_a_prepared_loop_does_not_click_at_the_wrap(tmp_path, monkeypatch):
     typical in-body step of ~0.0067 — roughly 50x, an audible click every
     loop repeat. After the fix (stretch, then seam) the wrap step is smaller
     than the loop's own largest in-body step.
+
+    **Every loop the profile carries, not just the first.** This test used
+    to load `loop_paths[0]` alone, and loop 0 of this fixture happens to be
+    *benign* under the reverted ordering — wrap 0.0063 against a body step
+    of 0.0180, which passes — while loops 1 and 2 fail hard at 0.0544 and
+    0.1116. So the regression test for this branch's worst audible defect
+    passed with the defect reintroduced. The re-reviewer who justified the
+    fix measured all three loops; the assertion that shipped sampled one.
+    The general rule, which is worth more than this bug: **when a reviewer
+    measures N cases to justify a fix, the test must assert over all N.**
     """
     monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
     profile = prepare_source(_write_song(tmp_path / "song.wav"), sr=SR)
     assert profile is not None
+    assert len(profile.loop_paths) > 1, (
+        "sanity: this test exists to check every loop, so there had better "
+        "be more than one")
 
     from sleepmix.audio import load_audio
-    loop = load_audio(profile.loop_paths[0])
-    n = loop.n_frames
-    tiled = np.tile(loop.data, (4, 1))
+    for path in profile.loop_paths:
+        loop = load_audio(path)
+        n = loop.n_frames
+        tiled = np.tile(loop.data, (4, 1))
 
-    steps = np.abs(np.diff(tiled, axis=0)).max(axis=1)
-    wrap_indices = [k * n - 1 for k in range(1, 4)]
-    mask = np.ones(len(steps), dtype=bool)
-    mask[wrap_indices] = False
+        steps = np.abs(np.diff(tiled, axis=0)).max(axis=1)
+        wrap_indices = [k * n - 1 for k in range(1, 4)]
+        mask = np.ones(len(steps), dtype=bool)
+        mask[wrap_indices] = False
 
-    wrap_step = steps[wrap_indices].max()
-    body_step = steps[mask].max()
-    assert wrap_step <= body_step, (
-        f"wrap step {wrap_step} exceeds the loop's own largest in-body step "
-        f"{body_step} — the tiled loop clicks at the seam")
+        wrap_step = steps[wrap_indices].max()
+        body_step = steps[mask].max()
+        assert wrap_step <= body_step, (
+            f"{os.path.basename(path)}: wrap step {wrap_step} exceeds the "
+            f"loop's own largest in-body step {body_step} — the tiled loop "
+            "clicks at the seam")
 
 
 def test_dropped_stems_do_not_reach_the_loops(tmp_path, monkeypatch):
@@ -484,3 +606,49 @@ def test_the_night_module_never_imports_prepare():
     for path in swept:
         offenders = forbidden_imports(path, root, forbidden)
         assert offenders == set(), f"{path.name} reaches preparation: {offenders}"
+
+
+def test_the_night_subcommand_never_imports_prepare():
+    """`cli.py` is on the playback path too, and the sweep above does not
+    reach it.
+
+    `sleepmix night` is what a person actually runs at bedtime, and
+    `cli.night()` is the function that builds the whole stream. A
+    `from .night.prepare import prepare_all` inside it — to be helpful, say,
+    and prepare anything new before starting — would pass every guard on the
+    branch: the sweep above only walks `sleepmix/night/`, and
+    `test_no_shipped_module_imports_the_night_package` in
+    `tests/test_night_sky.py` exempts `cli.py` from the layering rule at
+    function scope, because hosting the subcommand is exactly what that
+    exemption is for. Nothing else looked at this file.
+
+    Checked **per function, not per file**, and that distinction is the
+    whole design of this guard rather than a convenience. The same module
+    also hosts `sleepmix prepare`, whose entire job is to import
+    `night.prepare` — a whole-file check fails on it immediately, and
+    loosening the forbidden set to accommodate it would give away the thing
+    being guarded. What has to be true is narrower and exactly expressible:
+    *the function a person runs at bedtime* reaches nothing that spins a
+    fan. `within_function="night"` says that, and `resolved_imports` raises
+    if no such function exists, so renaming the subcommand cannot silently
+    retire the guard.
+
+    Every scope inside that function, not just its top level: a lazy import
+    is a legitimate module-scope pattern precisely because it does not run
+    until the function is called — which, here, is the case being forbidden.
+
+    Shape borrowed from `tests/test_night_sky.py:67`, which already does a
+    `module_scope_only` check on this same file for the opposite direction.
+    """
+    import pathlib
+    from .import_guard import forbidden_imports
+    root = pathlib.Path(__file__).resolve().parent.parent
+    forbidden = {"sleepmix.night.prepare", "sleepmix.separation",
+                 "sleepmix.separation_process", "sleepmix.analysis",
+                 "sleepmix.timestretch"}
+    cli = root / "sleepmix" / "cli.py"
+    assert cli.exists(), "cli.py has moved; this guard is no longer guarding"
+    offenders = forbidden_imports(cli, root, forbidden,
+                                  within_function="night")
+    assert offenders == set(), (
+        f"cli.night() reaches preparation from the playback path: {offenders}")

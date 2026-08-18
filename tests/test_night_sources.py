@@ -216,11 +216,22 @@ def test_write_profile_sweeps_a_stale_partial_for_the_same_id(tmp_path, monkeypa
     that same ``source_id`` should not be confused by it, and none should
     remain once the write completes -- mirroring ``separation._write_cache``,
     which is what this module's docstring claims parity with.
+
+    **The stale file is made read-only, and that is the whole test.** With
+    an ordinary writable leftover this test passed with the sweep deleted,
+    because ``open(staging, "w")`` truncates an existing file anyway and
+    ``os.replace`` then renames it into place — the assertions below held
+    for a reason unrelated to the sweep's existence. At mode 0o444 the same
+    ``open`` raises ``PermissionError`` when the sweep is not there, while
+    ``os.remove`` still succeeds when it is: removing a file needs write
+    permission on its *directory*, not on the file. So the sweep becomes
+    the only thing standing between this test and a failure.
     """
     monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
     stale = os.path.join(profiles_directory(), "a" + PROFILE_SUFFIX + ".partial")
     with open(stale, "w") as fh:
         fh.write("leftover from a killed prepare")
+    os.chmod(stale, 0o444)
 
     write_profile(_profile(source_id="a"))
 

@@ -138,6 +138,44 @@ measured, in the same spirit as Phase 1's own list above. The person who can
 fix any of them is the one who has slept through a night carrying them, which
 as of this section is nobody.
 
+**The top follow-up, and it is not a taste question: `MAX_SOURCE_RATIO` does
+not control the quantity its own name and documentation describe.**
+`palette.render_voice` peak-normalises each voice independently *before*
+`Voice.gain` is applied, so the two halves of a pair reach the mix with
+unrelated crest factors — a tiled recording is peaky, a drone is not, a noise
+band is somewhere else again — and an equal-power gain pair therefore realises
+whatever energy split those crest factors imply rather than the one asked for.
+Measured across ten consecutive real pairs: an intended 0.85 realised as
+anywhere from **0.60 to 0.91**. It is also the explanation for a number
+already recorded below as a datum without anyone noticing it was a
+discrepancy: the 22:30 excerpt reads 69/31 against an intended 85/15.
+
+This is **documented and deliberately not fixed**, for two reasons that are
+about sequencing rather than difficulty. The safety property the constant
+exists for survives intact — the ghost is never absent, and at the top of the
+observed spread it is still about −10 dB rather than gone — so nothing in the
+spec is being violated, only a docstring's implied precision. And the fix
+(normalising by RMS instead of by peak) would move every level on this branch
+and invalidate the listening excerpts for the **fourth** time on this project,
+before anyone has listened to the current set even once. Whoever picks this up
+should expect to re-render the excerpts and to have the previous numbers stop
+comparing. Until then, anyone tuning `MAX_SOURCE_RATIO` by ear is chasing a
+target that moves with the material.
+
+**The second follow-up is memory, and it is not the night's to fix.**
+Rendering one voice costs a peak RSS of roughly **34x the buffer it produces**,
+and the multiplier is stable across lengths — measured at 44.1 kHz through
+`NightStream._rendered`: 240 s → 2.90 GB peak against a 0.081 GB buffer
+(35.9x), 590 s → 6.69 GB against 0.196 GB (34.2x), 944 s → 10.29 GB against
+0.312 GB (33.0x). That stability says it is a fixed number of full-buffer
+temporaries inside `apply_decay` rather than anything about voice length or
+about the night. The unbounded part of the problem is gone — see
+`SEAM_APPROACH_S` below — but a night still peaks near 6.7 GB in its worst
+case, and even a Phase 1 night with no sources at all peaks near 2.9 GB for
+its 240 s worst case, which predates this phase entirely. Reducing it means
+changing `disintegration.py`, on the render path `sleepmix render` shares, so
+it wants its own measurement pass rather than a patch on the way out.
+
 - **`LOOPS_PER_SOURCE = 3`** (`night/prepare.py`) — how many loops one song
   contributes. Enough for internal variety without one loop recurring often;
   a guess.
@@ -162,6 +200,27 @@ as of this section is nobody.
 - **`HANDOVER_COVER_S = 90.0`** (`night/plan.py`) — how far past a handover
   the covering voice must reach. Long enough that the incoming source has
   clearly arrived; a guess at what "clearly" needs.
+- **`SEAM_APPROACH_S = 15.0`** (`night/plan.py`) — how close before a genuine
+  handover the walk forces a birth, so the cover spans a bounded distance
+  rather than whatever birth gap happened to cross the seam. It is a
+  placeholder in its exact value only: something under `_BIRTH_GAP_MIN_S`
+  (20 s) is *required*, so that the step born before a seam reaches past it
+  on its very next draw. Fifteen seconds is the guess inside that
+  requirement. Audibly, this is what makes births cluster slightly at
+  handovers.
+- **`MAX_VOICE_TOTAL_S = 690.0`** (`night/plan.py`) — not a taste value but a
+  derived ceiling (`MAX_VOICE_S * OUTLIVE_MAX + HANDOVER_COVER_S`), listed
+  here because it moves whenever any of those three do, and a test asserts
+  it. It is deliberately looser than the true bound: the two mechanisms that
+  lengthen a voice do not compose, so the real maximum is the larger of them
+  (600 s), and the longest voice found anywhere in a 2000-night sweep
+  (400 seeds x five source counts) is 598.4 s.
+- **`LOOP_MIN_S = 4.0` / `LOOP_MAX_S = 12.0` and `_BAND_MARGIN = 0.05`**
+  (`night/prepare.py`) — the band a finished loop must land in, now enforced
+  by clamping the slice rather than hoped for from `LOOP_BARS` and a detected
+  tempo. The band itself is the plan's own stated intent ("short enough to
+  carry no phrase"); the margin is a guess large enough to absorb the
+  stretchers' inexactness. Nobody has listened to either end of the band.
 - **`OUTLIVE_CHANCE = 0.15`**, **`OUTLIVE_MIN`, `OUTLIVE_MAX = 1.5, 2.5`**
   (`night/plan.py`) — how often, away from a handover, a ghost survives past
   its source as a flourish rather than the rule, and by what multiple of its

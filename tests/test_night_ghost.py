@@ -120,8 +120,11 @@ def test_with_no_sources_the_walk_is_byte_identical_to_phase_one():
     stride fix already handled that — but it shifted where the birth-gap
     draw lands in the per-step generator's own state, so ``gap_s``, the
     cursor, and every voice after the first came out different: 82
-    voices instead of 81, and voice index 1 born at frame 1280197 instead
-    of the correct 1116270. If a future change moves Phase 1's audio
+    voices instead of 81, and voice index 1 born at frame 1116270 instead
+    of the correct 1280197 (which is the value pinned below, and the two
+    were printed the wrong way round here until the whole-branch review
+    caught it — a false statement inside the one deliberately-brittle
+    test on the branch). If a future change moves Phase 1's audio
     again, this test should fail and someone should look at it on
     purpose, not have it pass by construction."""
     ctx = _context()
@@ -406,48 +409,131 @@ def test_planning_a_whole_night_with_sources_is_still_fast():
 
 
 # -- regression: bugs found in the plan's draft ------------------------
-def test_a_solitary_pair_still_covers_a_stage_it_spans_alone():
-    """Named hazard: a birth gap sparse enough to leave only one pair born
-    in a whole stage must still have that pair's ghost reach the far
-    seam, and the MAX_VOICE_S*3 cap on ghost length must not undo that
-    reach. Regression for a bug in the brief's draft, where the cap was
-    applied to the ghost's length *after* the handover extension had
-    already been folded into it, silently shortening a ghost that had
-    just been stretched to cover a seam.
+def test_the_cover_reaches_its_full_distance_past_every_handover():
+    """A seam is not merely *crossed* — something reaches
+    ``HANDOVER_COVER_S`` past it, so the incoming source has clearly
+    arrived before the covering voice lets go.
 
-    Seed 2 with three sources over an eight-hour night was found by a
-    sweep of seeds 1-300 as one where a real crossing ghost's required
-    ``reach`` exceeds the ``MAX_VOICE_S * 3`` cap (roughly 820s needed
-    against a 720s cap) — chosen deliberately rather than left to chance,
-    because for most seeds every crossing ghost's reach happens to fall
-    comfortably under the cap and the assertion below would pass
-    vacuously without ever exercising the ordering it exists to check.
-    The ``assert triggered`` line is what stops this test from silently
-    stopping to mean anything if the constants ever change under it.
+    This replaces an earlier test that pinned the same code by a
+    different route: it looked for a crossing voice whose required
+    ``reach`` exceeded the ``MAX_VOICE_S * 3`` cap, proving the cap was
+    applied *before* the cover rather than after. That case is no longer
+    reachable, and deliberately so. ``reach`` is
+    ``(seam - cursor) + HANDOVER_COVER_S``, and ``SEAM_APPROACH_S`` now
+    bounds ``seam - cursor`` at 15 s, so ``reach`` cannot exceed 105 s
+    against a 720 s cap — the ordering the old test guarded has become
+    unobservable because the quantity it guarded is bounded two orders of
+    magnitude below the cap. Rather than keep an assertion that could only
+    pass vacuously (``assert triggered`` would fail, which is how this was
+    noticed), the guard moves to the property that survives: whatever the
+    cover does, it delivers the full ``HANDOVER_COVER_S`` past the seam.
+
+    Checked over every genuine handover of several seeds, not one, per
+    the standing rule that a fix justified by N measurements is asserted
+    over N.
     """
-    from sleepmix.night.plan import MAX_VOICE_S, HANDOVER_COVER_S
+    from sleepmix.night.plan import HANDOVER_COVER_S
 
-    ctx = _context([_profile(n, (55.0 + i * 2,)) for i, n in enumerate("abc")],
-                   seed=2)
-    schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
-    voices = _night(ctx)
-    cap_frames = int(MAX_VOICE_S * SR * 3)
-    triggered = False
-    for stage in schedule[:-1]:
-        crossing = [v for v in voices
-                    if v.birth_frame < stage.end_frame
-                    and v.birth_frame + v.n_frames > stage.end_frame]
-        assert crossing, f"handover at {stage.end_frame} is bare"
-        for v in crossing:
-            reach = stage.end_frame - v.birth_frame + int(HANDOVER_COVER_S * SR)
-            if reach > cap_frames:
-                triggered = True
-                assert v.n_frames >= reach, (
-                    "the handover-cover extension was clamped away by the "
-                    "MAX_VOICE_S*3 cap")
-    assert triggered, (
-        "this seed no longer exercises reach > cap; the regression this "
-        "test guards is no longer being checked by it")
+    cover = int(HANDOVER_COVER_S * SR)
+    checked = 0
+    for seed in (1, 2, 5, 11, 29):
+        ctx = _context([_profile(n, (55.0 + i * 2,))
+                        for i, n in enumerate("abc")], seed=seed)
+        schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+        voices = _night(ctx)
+        for i in range(len(schedule) - 1):
+            if schedule[i].source_index == schedule[i + 1].source_index:
+                continue
+            seam = schedule[i].end_frame
+            crossing = [v for v in voices if v.birth_frame < seam
+                        and v.birth_frame + v.n_frames > seam]
+            assert crossing, f"seed {seed}: handover at {seam} is bare"
+            furthest = max(v.birth_frame + v.n_frames for v in crossing)
+            checked += 1
+            assert furthest >= seam + cover, (
+                f"seed {seed}: the cover at {seam} stops "
+                f"{(seam + cover - furthest) / SR:.1f}s short of the full "
+                f"{HANDOVER_COVER_S}s")
+    assert checked > 60, (
+        f"only {checked} genuine handovers were checked; this test has "
+        "stopped exercising what it claims to")
+
+
+def test_no_voice_ever_exceeds_the_stated_ceiling():
+    """Critical, reviewer-found: the handover cover had no upper bound.
+
+    ``reach = max(seams) - cursor + HANDOVER_COVER_S`` was applied after
+    every cap, deliberately — but ``max(seams) - cursor`` was bounded only
+    by the birth gap, which at the sparsest late-night density reaches
+    ~980 s. Measured at 44.1 kHz across 119 seeds: the longest voice of a
+    night was 240.0 s with no sources and **943.9 s with two or more**,
+    and rendering one cost a peak RSS of **10.3 GB** against a 0.31 GB
+    output buffer. And ``stream.summed``'s per-voice ``except Exception``
+    catches ``MemoryError``, so an OOM drops the voice — the very voice
+    extended to cover the seam.
+
+    ``MAX_VOICE_TOTAL_S`` is the bound the fix earns; see its comment in
+    ``plan.py`` for why it is stated as a sum of two things that do not
+    actually compose. Swept wide on purpose: 63 of those 119 seeds
+    breached the ceiling, so a single seed would be a coin toss rather
+    than a guard, and the breach only appears at two or more sources, so
+    the source count is swept too — with no sources at all the longest
+    voice is 240.0 s and nothing here would ever fire.
+    """
+    from sleepmix.night.plan import MAX_VOICE_TOTAL_S
+
+    ceiling = int(MAX_VOICE_TOTAL_S * SR)
+    worst = (0, None)
+    for n_sources in (0, 1, 2, 3, 6):
+        sources = [_profile(chr(97 + i), (55.0 + i * 4.0, 82.0 + i * 3.0))
+                   for i in range(n_sources)]
+        for seed in range(1, 120):
+            for voice in _night(_context(sources, seed=seed)):
+                if voice.n_frames > worst[0]:
+                    worst = (voice.n_frames, (n_sources, seed, voice.index))
+                assert voice.n_frames <= ceiling, (
+                    f"{n_sources} sources, seed {seed}: voice "
+                    f"{voice.index} is {voice.n_frames / SR:.1f}s, past the "
+                    f"{MAX_VOICE_TOTAL_S}s ceiling")
+    assert worst[0] > 0
+
+
+def test_a_voice_is_born_within_reach_of_every_handover():
+    """The clamp itself, rather than its consequence.
+
+    The ceiling test above would also pass if someone bounded the cover by
+    truncating it — which would put the bare seam straight back. What
+    actually makes the bound safe is that the *walk* stops short of a
+    seam, so a voice is born ``SEAM_APPROACH_S`` before it and covers it
+    from close range. Assert that directly: every genuine handover has a
+    voice born in the ``SEAM_APPROACH_S`` before it.
+
+    Swept over source counts because with one source there are no genuine
+    seams at all, and over seeds because at density 1.0 an unclamped walk
+    would land close to a seam by luck often enough for one seed to pass.
+    """
+    from sleepmix.night.plan import SEAM_APPROACH_S
+
+    approach = int(SEAM_APPROACH_S * SR)
+    seams_checked = 0
+    for n_sources in (2, 3, 6):
+        sources = [_profile(chr(97 + i), (55.0 + i * 4.0, 82.0 + i * 3.0))
+                   for i in range(n_sources)]
+        for seed in range(1, 30):
+            ctx = _context(sources, seed=seed)
+            schedule = schedule_sources(ctx, SR, int(NIGHT_S * SR))
+            births = {v.birth_frame for v in _night(ctx)}
+            for i in range(len(schedule) - 1):
+                if schedule[i].source_index == schedule[i + 1].source_index:
+                    continue
+                seam = schedule[i].end_frame
+                seams_checked += 1
+                assert any(seam - approach <= b < seam for b in births), (
+                    f"{n_sources} sources, seed {seed}: nothing is born in "
+                    f"the {SEAM_APPROACH_S}s before the handover at {seam}, "
+                    "so whatever covers it is covering from an unbounded "
+                    "distance")
+    assert seams_checked > 100
 
 
 def test_a_gap_that_skips_a_whole_stage_still_covers_every_seam_it_skipped():
@@ -591,3 +677,39 @@ def test_the_moon_still_does_not_move_a_single_birth_with_sources_in_play():
         night = [(v.index, v.birth_frame, v.n_frames, v.texture)
                  for v in _night(ctx)]
         assert night == reference, f"moon {phase} moved the night's schedule"
+
+
+def test_no_source_voice_is_born_once_its_half_of_the_pair_is_inaudible():
+    """``MIN_AUDIBLE_RATIO`` gates both halves of the pair, and only the
+    ghost's half was covered by a test.
+
+    The source half is gated by ``ratio > MIN_AUDIBLE_RATIO``. Since
+    ``source_ratio`` falls linearly from ``MAX_SOURCE_RATIO`` to zero, the
+    gate closes at ``elapsed = 1 - MIN_AUDIBLE_RATIO / MAX_SOURCE_RATIO``
+    — about 94.1% through the night — after which every voice must be a
+    ghost or the synthesis fallback and never a loop played at a gain of
+    ``sqrt(0.02)``. Removing that condition was caught by nothing.
+
+    The cutoff is derived from the two constants rather than written as
+    0.941, so retuning either moves the test with the code instead of
+    against it. Swept over seeds because the late night is sparse enough
+    that a single seed can have no births in the window at all — which is
+    also why the sanity assertion counts them.
+    """
+    cutoff = 1.0 - MIN_AUDIBLE_RATIO / MAX_SOURCE_RATIO
+    night_frames = int(NIGHT_S * SR)
+    late_births = 0
+    for seed in range(1, 25):
+        ctx = _context([_profile("a"), _profile("b", (58.0, 87.0))], seed=seed)
+        for voice in _night(ctx):
+            elapsed = voice.birth_frame / night_frames
+            if elapsed <= cutoff:
+                continue
+            late_births += 1
+            assert voice.texture != "source", (
+                f"seed {seed}: a source voice is born at elapsed "
+                f"{elapsed:.3f}, past the point where its own half of the "
+                f"pair falls under MIN_AUDIBLE_RATIO={MIN_AUDIBLE_RATIO}")
+    assert late_births > 20, (
+        f"only {late_births} voices were born past elapsed {cutoff:.3f}; "
+        "this test is not reaching the branch it guards")

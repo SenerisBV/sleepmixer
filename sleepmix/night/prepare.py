@@ -18,7 +18,7 @@ import os
 import re
 from typing import Callable
 
-from ..analysis import find_loop, slice_loop
+from ..analysis import LoopPoint, find_loop, slice_loop
 from ..audio import resample, save_audio, sum_buffers
 from ..config import LoopConfig
 from ..looping import make_seamless
@@ -53,6 +53,35 @@ LOOP_BARS = 2
 # phrasing at. A placeholder. See LOOP_BARS above — this and that constant
 # together determine the effective loop length.
 STRETCH_SPEED = 0.6
+
+# The band the plan states for a finished loop, now enforced rather than
+# hoped for.
+#
+# The formula above is tempo-dependent — 800/tempo seconds at the shipped
+# constants — so it lands inside this band only for tempi between roughly 67
+# and 195 BPM, and nothing checked. Nothing has to conspire for a song to sit
+# outside that: `librosa.beat.beat_track` routinely halves or doubles a
+# reported tempo, and either direction walks straight out of the band.
+# Measured end-to-end on 50 BPM material: **15.86 s** without this clamp,
+# against a stated ceiling of 12 — a third again too long, and unmistakably
+# long enough to carry a phrase, which is the band's own stated purpose.
+# (The repository's one real source file happens to land at 4.27-4.64 s
+# unaided, so nothing in the existing fixtures would ever have shown this.)
+#
+# So the slice is clamped to whatever raw duration puts the *finished* loop
+# inside the band — see `_clamped_to_band` — rather than trusting two
+# constants and a detected tempo to agree. LOOP_BARS still decides where in
+# the band a loop lands for well-behaved material; the clamp only bites at
+# the edges.
+LOOP_MIN_S = 4.0
+LOOP_MAX_S = 12.0
+
+# How far inside the band the clamp aims, as a fraction. The stretchers are
+# not exact — rubberband and the librosa fallback both return a length near
+# the requested one rather than at it — so clamping to the exact edge would
+# leave the result landing just outside it. A placeholder chosen to be
+# comfortably larger than any stretch-length error observed.
+_BAND_MARGIN = 0.05
 
 # A drum kit looping under you at 2 AM is what `sleepmix render`'s shipped
 # defaults already turn off by hand.
@@ -102,6 +131,34 @@ def source_id_for(path: str) -> str:
 
     digest = hashlib.sha256(identity.encode()).hexdigest()[:8]
     return f"{slug}-{digest}" if slug else digest
+
+
+def _clamped_to_band(point: LoopPoint, total_frames: int, sr: int,
+                     crossfade_ms: float) -> LoopPoint:
+    """``point``, widened or narrowed so the finished loop lands in the band.
+
+    Works backwards from what actually comes out. A raw slice of ``r``
+    seconds becomes ``r / STRETCH_SPEED`` seconds after `slow_and_pitch`,
+    and `make_seamless` then spends ``crossfade_ms`` of it on the wrap, so
+    the finished loop is ``r / STRETCH_SPEED - crossfade`` — which inverts to
+    a raw duration of ``(finished + crossfade) * STRETCH_SPEED``. Clamping
+    here rather than after the stretch is deliberate: the alternatives are
+    trimming the stretched buffer, which throws away a beat-aligned end for
+    no reason, and tiling it up to the floor, which would put a *second*
+    discontinuity inside a loop whose whole point is not to have one.
+
+    The window is moved rather than only its end, so lengthening a loop that
+    already runs to the end of the track reaches backwards instead of giving
+    up. Material shorter than the floor allows still yields a short loop —
+    there is nothing to invent — and that is the one case the band cannot
+    hold, which is why the guarding test says so.
+    """
+    fade_s = crossfade_ms / 1000.0
+    lo = int((LOOP_MIN_S * (1.0 + _BAND_MARGIN) + fade_s) * STRETCH_SPEED * sr)
+    hi = int((LOOP_MAX_S * (1.0 - _BAND_MARGIN) + fade_s) * STRETCH_SPEED * sr)
+    want = min(max(point.end - point.start, lo), min(hi, total_frames))
+    end = min(point.start + want, total_frames)
+    return LoopPoint(start=max(end - want, 0), end=end, tempo=point.tempo)
 
 
 def _kept_stems(stems: dict) -> dict:
@@ -164,6 +221,10 @@ def prepare_source(path: str, sr: int = 44100,
         for i, (lo, hi) in enumerate(_SEARCH_WINDOWS[:LOOPS_PER_SOURCE]):
             cfg = LoopConfig(bars=LOOP_BARS, search_start=lo, search_end=hi)
             point = find_loop(reference, cfg)
+            # The band is enforced here, not inferred from LOOP_BARS and a
+            # detected tempo. See `_clamped_to_band` and `LOOP_MIN_S`.
+            point = _clamped_to_band(point, reference.n_frames, sr,
+                                     cfg.crossfade_ms)
             raw = slice_loop(reference, point)
             # Stretch first, seam last. A phase vocoder (or the resample
             # fallback) has no idea the first and last samples of its input

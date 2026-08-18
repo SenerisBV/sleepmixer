@@ -102,6 +102,26 @@ NOISE_BELOW_LEVEL_DB = -40.0
 # ghost, so the unprocessed loop is never heard alone, at any hour. This is
 # the most direct implementation of "clearly music, not identifiable", and it
 # is a placeholder nobody has listened to.
+#
+# **It is a gain ratio, applied after each voice is peak-normalised on its
+# own, and not the energy split it reads like.** ``palette.render_voice``
+# normalises every voice to its own peak before ``gain`` is applied, so the
+# two halves of a pair arrive at the mix with unrelated crest factors — a
+# tiled recording is peaky, a drone is not, a noise band is somewhere else
+# again — and an equal-power gain pair therefore realises whatever energy
+# split those crest factors imply. Measured across ten consecutive real
+# pairs: an intended 0.85 realised as anywhere from **0.60 to 0.91**. That is
+# also why the 22:30 listening excerpt reads 69/31 against an intended 85/15.
+#
+# The safety property this constant exists for survives, which is why this is
+# documented rather than fixed: the ghost is never *absent*, and at the top of
+# the observed spread it is still about -10 dB rather than gone. What does not
+# survive is the reading that tuning this number moves the split by a
+# predictable amount — it moves it by an amount that depends on the material.
+# Moving to RMS normalisation would fix that and would also change every level
+# on this branch and invalidate the listening excerpts for a fourth time,
+# before anyone has listened to the current ones. It is the top follow-up in
+# ``docs/project-state.md``, not a change to make on the way out the door.
 MAX_SOURCE_RATIO = 0.85
 
 # Below this a voice in the pair is not worth rendering.
@@ -111,11 +131,55 @@ MIN_AUDIBLE_RATIO = 0.05
 # seam between two sources is never bare.
 HANDOVER_COVER_S = 90.0
 
+# How close before a genuine handover a voice is born, so that the cover
+# hiding that seam spans a *bounded* distance rather than an arbitrary one.
+#
+# The cover stretches whatever a step emits from its own ``cursor`` to past
+# the seam, so its length is ``(seam - cursor) + HANDOVER_COVER_S``. Nothing
+# bounded ``seam - cursor``: it was whatever birth gap that step happened to
+# draw, and at the sparsest late-night density a gap reaches ~980 s. Measured
+# at 44.1 kHz over 119 seeds, before this clamp existed: the longest voice of
+# a night was 240.0 s with no sources but **943.9 s with two or more**, on 63
+# of those 119 seeds, and rendering one cost a peak RSS of **10.3 GB** against
+# a 0.31 GB output buffer — ``apply_decay`` holds roughly 34x its input, at
+# every length. It compounds, too: ``stream.summed``'s per-voice
+# ``except Exception`` catches ``MemoryError``, so an OOM silently drops a
+# voice — and the dropped voice is precisely the one that had been extended
+# to cover the seam. The audible result is a bare handover plus a
+# multi-second stall, in the middle of the night, with nothing said loudly.
+#
+# So the *walk* is clamped rather than the cover. When a genuine seam lies
+# further than this ahead, the step stops short of it, and the voice born
+# ``SEAM_APPROACH_S`` before the seam is the one that covers it. The cover
+# then spans at most ``SEAM_APPROACH_S + HANDOVER_COVER_S``, whatever the
+# density. This is decided from ``schedule``, which is a per-context constant
+# fixed for the whole night — the same standing that lets ``stride`` be
+# decided once — so it costs nothing in block independence: a window planned
+# from any offset walks the identical cursors.
+#
+# Kept under ``_BIRTH_GAP_MIN_S`` (20 s, the smallest gap any density can
+# draw) so the step born before a seam reaches past it on its very next draw
+# rather than creeping up on it in several. A placeholder like everything
+# around it — but a bounded one.
+SEAM_APPROACH_S = 15.0
+
 # Away from a handover, a ghost outliving its source is a flourish rather than
 # the rule — a repeated gesture is the failure mode this design worries about
 # most. All three are placeholders.
 OUTLIVE_CHANCE = 0.15
 OUTLIVE_MIN, OUTLIVE_MAX = 1.5, 2.5
+
+# The longest any single voice may be, and the bound the memory cost of a
+# night rests on. Two things can lengthen a voice past ``MAX_VOICE_S`` and
+# they do not compose: the occasional outliving flourish multiplies a ghost's
+# drawn lifetime by at most ``OUTLIVE_MAX``, and the handover cover *replaces*
+# a length rather than adding to it, reaching at most ``SEAM_APPROACH_S +
+# HANDOVER_COVER_S`` past the birth. So the true ceiling is the larger of
+# those two, and this is stated as their sum instead — a strictly looser
+# bound, chosen because it stays a valid ceiling if either mechanism is
+# retuned, and because summing them is the arithmetic a reader will do anyway.
+# ``tests/test_night_ghost.py`` asserts it across seeds and source counts.
+MAX_VOICE_TOTAL_S = MAX_VOICE_S * OUTLIVE_MAX + HANDOVER_COVER_S
 
 
 @dataclass(frozen=True)
@@ -296,6 +360,30 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
     has_sources = bool(ctx.sources)
     stride = 2 if has_sources else 1
 
+    # Every genuine handover of the night, ascending, computed once.
+    #
+    # **A stage boundary is a seam only when the source actually changes
+    # across it.** ``schedule_sources`` emits a boundary every time a stage
+    # ends, including when the source on both sides is the same one — a
+    # single-source night still walks through several stages, all pointing at
+    # index 0. A boundary from a source back to itself is not a handover: the
+    # material does not change across it, so the ordinary birth gap already
+    # carries it, the same as any other stretch of one source's own night.
+    # Counting every boundary as a seam regardless fired the cover on
+    # stretches with nothing to cover — measured at 17.9% of walk steps on a
+    # one-source night, source voices stretched past 800 s by it, and the
+    # ghost's own ``OUTLIVE_CHANCE`` flourish suppressed (via ``not seams``
+    # below) for most of the night even though nothing needed covering.
+    #
+    # Hoisted out of the walk because it is pure arithmetic on ``schedule``,
+    # which is fixed for the night: recomputing it per step bought nothing,
+    # and the clamp below has to look *ahead* of the cursor rather than only
+    # inside one step's gap.
+    seam_frames = tuple(
+        schedule[i].end_frame for i in range(len(schedule) - 1)
+        if schedule[i].source_index != schedule[i + 1].source_index)
+    approach = max(int(SEAM_APPROACH_S * sr), 1)
+
     voices: list[Voice] = []
     base_decay = StemDecayConfig()
     index = 0
@@ -339,36 +427,50 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
         n_frames = int(lifetime_s * sr)
         decay = _decay_for(arc, base_decay)
         next_cursor = cursor + max(int(gap_s * sr), 1)
+
+        # -- do not let this step jump a seam from an arbitrary distance --
+        #
+        # Whatever this step emits is the last chance to cover any seam its
+        # gap crosses, and the cover reaches from ``cursor``, so an unclamped
+        # gap makes the covering voice as long as the gap is. Instead: if a
+        # genuine seam falls inside this gap and is further than ``approach``
+        # away, stop the step short at ``seam - approach``. This step then
+        # crosses no seam at all, and the *next* step — born ``approach``
+        # before it, well inside the smallest gap any density can draw — is
+        # the one that covers it, from a distance this constant bounds.
+        #
+        # The loop leaves the invariant every seam still admitted is within
+        # ``approach`` of ``cursor``, so ``reach`` below cannot exceed
+        # ``SEAM_APPROACH_S + HANDOVER_COVER_S``. It also terminates and
+        # always advances: the clamp only fires when ``seam - cursor >
+        # approach``, so ``seam - approach`` is strictly past ``cursor``.
+        #
+        # A seam is never skipped by the clamp. ``cursor`` can only land on
+        # or past a seam via a step whose ``next_cursor`` was at least that
+        # seam — and any such step had the seam in its own ``seams``, so it
+        # covered it before moving on.
+        for seam in seam_frames:
+            if seam <= cursor:
+                continue
+            if seam > next_cursor:
+                break
+            if seam - cursor > approach:
+                next_cursor = seam - approach
+                break
+
         stage = stage_at(schedule, cursor)
         emitted: list[Voice] = []
 
-        # Every genuine handover this step's gap would cross without a later
-        # voice being born before it: whatever this step emits is the last
-        # chance to cover it, so it must reach past the *furthest* one, not
-        # just its own stage's end. A gap sparse enough to skip several
-        # handovers still leaves every one of them covered, because the
-        # covering voice's interval is contiguous from ``cursor`` onward
-        # and so passes through all of them on the way to the furthest.
-        # Computed unconditionally — it is pure arithmetic on ``schedule``,
-        # not a draw, so computing it here costs nothing on a night with no
-        # sources, where it is always empty (``schedule`` is empty too).
-        #
-        # **A stage boundary is a seam only when the source actually
-        # changes across it.** ``schedule_sources`` emits a boundary every
-        # time a stage ends, including when the source on both sides is the
-        # same one — a single-source night still walks through several
-        # stages, all pointing at index 0. A boundary from a source back to
-        # itself is not a handover: the material does not change across it,
-        # so the ordinary birth gap already carries it, the same as any
-        # other stretch of one source's own night. Counting every boundary
-        # as a seam regardless fired the cover on stretches with nothing to
-        # cover — measured at 17.9% of walk steps on a one-source night,
-        # source voices stretched past 800 s by it, and the ghost's own
-        # ``OUTLIVE_CHANCE`` flourish suppressed (via ``not seams`` below)
-        # for most of the night even though nothing needed covering.
-        seams = [schedule[i].end_frame for i in range(len(schedule) - 1)
-                if cursor < schedule[i].end_frame <= next_cursor
-                and schedule[i].source_index != schedule[i + 1].source_index]
+        # Every genuine handover this step's gap crosses. Whatever this step
+        # emits must reach past the *furthest* one, not just its own stage's
+        # end — a gap that crosses several still leaves every one covered,
+        # because the covering voice's interval is contiguous from ``cursor``
+        # onward and so passes through all of them on the way to the
+        # furthest. (With ``STAGE_MIN_S`` at 20 minutes against an
+        # ``approach`` of seconds, the clamp above means only one seam can be
+        # in range at a time in practice; the ``max`` costs nothing and keeps
+        # the code correct if either constant moves.)
+        seams = [s for s in seam_frames if cursor < s <= next_cursor]
 
         if stage is None:
             emitted.append(Voice(
@@ -399,6 +501,12 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
                 # occasionally-outliving lifetime, never to the handover
                 # cover below — see the cover step after this branch for
                 # why the cap cannot be allowed to reach that far.
+                #
+                # It no longer binds: ``OUTLIVE_MAX`` is 2.5, so the line
+                # above cannot produce more than ``MAX_VOICE_S * 2.5``
+                # anyway. Kept because the two constants are independent and
+                # nothing else stops a future ``OUTLIVE_MAX`` of 4 from
+                # putting a sixteen-minute ghost into a night.
                 ghost_frames = min(ghost_frames, int(MAX_VOICE_S * sr * 3))
 
                 base_hz = profile.pitch_set[pitch_pick % len(profile.pitch_set)]
@@ -430,6 +538,12 @@ def plan_voices(ctx: NightContext, sr: int, from_frame: int,
             # every cap above, so nothing tunable can shrink it back down —
             # the systematic cover at a handover is not tunable to nothing
             # without reintroducing the event it exists to hide.
+            #
+            # ``reach`` is bounded because the walk was clamped, not because
+            # anything clamps it here: the seam-approach step above
+            # guarantees ``max(seams) - cursor <= approach``, so this is at
+            # most ``SEAM_APPROACH_S + HANDOVER_COVER_S``. See
+            # ``SEAM_APPROACH_S`` for what it used to cost when it was not.
             reach = max(seams) - cursor + int(HANDOVER_COVER_S * sr)
             longest = max(range(len(emitted)), key=lambda i: emitted[i].n_frames)
             if emitted[longest].n_frames < reach:
@@ -476,9 +590,14 @@ def schedule_sources(ctx: NightContext, sr: int,
     source's ghosts outlive it and cover the seam — which is why this function
     only has to decide *who and when*, and never has to soften anything.
 
-    The next source is chosen as the nearest in pitch among those not just
-    used, so the overlap during a handover is consonant. With one source the
-    rule is inert; with none there is no schedule at all.
+    The next source is chosen as the nearest in pitch **among those that have
+    not yet played this round**, so the overlap during a handover is consonant
+    and a night with six songs in it visits six songs. Excluding only the
+    immediately-previous source is not enough: that makes the successor a pure
+    function of the current source, which settles into a two-cycle within a
+    stage or two and turns six prepared songs into a night of two. See the
+    selection rule in the body for the measurement. With one source the rule
+    is inert; with none there is no schedule at all.
 
     **A ``Stage`` boundary is not itself a handover.** With one source every
     stage still names the same ``source_index``, because the selection rule
@@ -497,6 +616,9 @@ def schedule_sources(ctx: NightContext, sr: int,
     step = 0
     current = int(iteration_rng(ctx.seed, "night:stage", 0)
                   .integers(0, len(ctx.sources)))
+    # Who has already held the stage this round. See the selection rule
+    # below for why "this round" and not "ever".
+    played = {current}
 
     while cursor < night_frames:
         rng = iteration_rng(ctx.seed, "night:stage", step + 1)
@@ -513,7 +635,42 @@ def schedule_sources(ctx: NightContext, sr: int,
         step += 1
 
         if len(ctx.sources) > 1:
-            candidates = [i for i in range(len(ctx.sources)) if i != current]
+            # **Nearest among those not yet played this round**, not simply
+            # nearest. The pure-nearest rule was locally correct — the next
+            # source genuinely *was* the closest available — and composed
+            # into something the spec does not want: with only the
+            # immediately-previous source excluded, the successor map is a
+            # pure function of ``current`` with no other input, so it walks
+            # into a cycle and stays there. Measured over eight seeds with
+            # six well-separated sources, every night visited **two or three
+            # distinct sources across ~15 stages** — six prepared songs
+            # yielding a night of two. The spec's own scenario is "an
+            # eight-hour night with six sources taking turns", and a
+            # 2-cycle is not taking turns.
+            #
+            # Tracking who has played turns the map into a function of
+            # ``(current, played)``, which cannot cycle before the round is
+            # out: every source is visited exactly once per round, and the
+            # round then restarts from wherever it ended. The nearest-in-
+            # pitch preference is untouched — it now orders the remaining
+            # candidates rather than all of them, so each handover is still
+            # the most consonant one *available*.
+            #
+            # Deterministic and RNG-free, exactly as before: ``played`` is a
+            # function of the stage index alone, so a schedule is still
+            # reproducible from the seed and identical in every window of the
+            # night.
+            candidates = [i for i in range(len(ctx.sources)) if i not in played]
+            if not candidates:
+                # The round is out. Start a new one, still refusing to hand
+                # a source straight back to itself — that rule predates this
+                # one and is the reason ``played`` is reset to ``{current}``
+                # rather than to the empty set. With exactly two sources
+                # this is the whole mechanism: the round is out after every
+                # stage, and the pair simply alternates, as it did before.
+                played = {current}
+                candidates = [i for i in range(len(ctx.sources))
+                              if i != current]
             # ``, i`` breaks a pitch-distance tie by lowest index, so the
             # pick never depends on the traversal order ``min`` happens to
             # see ties in. ``candidates`` is a plain list built by ascending
@@ -529,6 +686,7 @@ def schedule_sources(ctx: NightContext, sr: int,
             # a formality.
             current = min(candidates, key=lambda i: (
                 pitch_distance(ctx.sources[current], ctx.sources[i]), i))
+            played.add(current)
 
     return tuple(stages)
 

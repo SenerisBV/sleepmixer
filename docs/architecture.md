@@ -505,6 +505,61 @@ most of the night because a spurious "seam in range" kept `not seams` false.
 one-source night measures zero spurious covers and a legitimate
 `OUTLIVE_CHANCE`-bounded ghost as its single longest voice instead.
 
+**The cover is bounded by clamping the walk, not by clamping the cover.**
+A covering voice reaches from wherever it was born to `HANDOVER_COVER_S`
+past the seam, so its length is `(seam - birth) + HANDOVER_COVER_S` — and
+nothing bounded `seam - birth`, because a voice could be born anywhere in
+the birth gap that crosses the seam, and at the sparsest late-night density
+a birth gap reaches about 980 s. Measured at 44.1 kHz over 119 seeds, before
+the fix: the longest voice of a night was 240.0 s with no sources but
+**943.9 s with two or more**, on 63 of those 119 seeds, and rendering one
+cost a peak RSS of **10.3 GB** — `apply_decay` alone accounts for roughly 34x
+the buffer it is handed. It compounded, too: `stream.summed` catches
+`Exception` per voice, which includes `MemoryError`, so the voice dropped on
+an OOM would have been *the very voice extended to cover the seam* — a bare
+handover plus a multi-second stall, in the middle of the night, logged
+quietly.
+
+Shortening the cover was not an option: the whole point of applying it after
+every other cap is that the systematic cover at a handover cannot be tuned to
+nothing without reintroducing the event it exists to hide. So the *walk* is
+clamped instead. When a genuine seam lies further than `SEAM_APPROACH_S`
+(15 s) ahead of the cursor, the step stops short at `seam - SEAM_APPROACH_S`
+rather than jumping over it; the voice born there is the one that covers the
+seam, from a distance the constant bounds. Births therefore cluster slightly
+at handovers, which is where the design already wants material. The decision
+reads only `schedule`, which is fixed for the whole night — the same standing
+that lets the stride be decided once — so a window planned from any offset
+walks identical cursors and block independence is untouched. `SEAM_APPROACH_S`
+is kept under `_BIRTH_GAP_MIN_S` (20 s) so the following step reaches past the
+seam on its very next draw rather than creeping up on it.
+
+With that, `MAX_VOICE_TOTAL_S` (690 s = `MAX_VOICE_S * OUTLIVE_MAX +
+HANDOVER_COVER_S`) is a real ceiling and is asserted as one across seeds and
+source counts. The longest voice measured after the fix is 598.4 s, and that
+is an outliving ghost rather than a cover — the cover now cannot exceed 105 s.
+Peak RSS for the worst case falls from 10.3 GB to 6.7 GB. The remaining cost
+is not the cover's: it is `apply_decay`'s ~34x multiplier over its input
+buffer, which is a separate follow-up recorded in `project-state.md`.
+
+**Sources take turns by round, not merely by not-repeating.** The successor
+rule is "nearest in pitch among those that have not yet played this round",
+and the round resets to `{current}` — never to the empty set — once everyone
+has had a turn, so a source still never follows itself. The obvious simpler
+rule, "nearest in pitch among everyone but the one just used", is *locally*
+correct at every single handover and composes into something the spec does
+not want: with no other input, the successor is a pure function of the
+current source, so the walk enters a cycle and stays in it. Measured over
+eight seeds with six well-separated sources, every night visited **two or
+three distinct sources across about fifteen stages** — six prepared songs
+yielding a night of two, against a spec whose own worked example is "an
+eight-hour night with six sources taking turns". Tracking who has played
+makes the successor a function of `(current, played)`, which cannot cycle
+before the round is out. The nearest-in-pitch preference is untouched; it now
+orders the remaining candidates rather than all of them, so each handover is
+still the most consonant one *available*. With exactly two sources the round
+is out after every stage and the pair simply alternates, exactly as before.
+
 **The determinism rule in the walk has two parts, and both are decided once
 per context rather than once per step.** `plan_voices` walks forward, and at
 every step it draws a lifetime, an interval slot, a texture and a birth gap —

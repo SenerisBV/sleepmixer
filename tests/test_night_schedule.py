@@ -162,3 +162,79 @@ def test_schedule_sources_terminates_at_a_degenerate_sample_rate():
 
     assert schedule
     assert all(s.end_frame > s.start_frame for s in schedule)
+
+
+# -- taking turns: the successor rule must not settle into a cycle -----
+#
+# Excluding only the immediately-previous source made the successor a pure
+# function of ``current`` — no RNG, no history — so the walk enters a cycle
+# within a stage or two and stays there. Measured over eight seeds with six
+# well-separated sources: every seed, every night, two or three distinct
+# sources across ~15 stages. The rule was locally correct (the next source
+# genuinely was the nearest available) and the composition broke the spec's
+# own scenario, "an eight-hour night with six sources taking turns".
+
+def test_six_sources_take_turns_rather_than_settling_into_a_pair():
+    """Six prepared songs must not yield a night of two.
+
+    Swept over seeds rather than pinned to one: the old rule failed on
+    every seed tried, so one seed would catch it — but a partially-fixed
+    rule (say, excluding the last *two* rather than all-not-yet-played)
+    would cycle on some seeds and not others, and that is the regression
+    worth being able to fail on.
+
+    Six sources spread a semitone-ish apart in pitch, so the nearest-in-
+    pitch preference has a real ordering to express and is not degenerate.
+    """
+    sources = [_profile(chr(97 + i), (55.0 + i * 2.0, 82.0 + i * 3.0))
+               for i in range(6)]
+    for seed in range(1, 9):
+        schedule, _ = _schedule(sources, seed=seed)
+        distinct = {s.source_index for s in schedule}
+        assert len(schedule) > 10, (
+            f"seed {seed}: sanity, an eight-hour night should cross many "
+            f"stages, got {len(schedule)}")
+        assert len(distinct) > 2, (
+            f"seed {seed}: {len(schedule)} stages visited only "
+            f"{sorted(distinct)} — six sources yielding a night of "
+            f"{len(distinct)}")
+
+
+def test_six_sources_all_get_a_turn_before_any_repeats():
+    """The stronger statement the fix actually makes: the first ``n``
+    stages of a night are a permutation of all ``n`` sources, because the
+    successor is the nearest among those *not yet played this round*.
+
+    This is what separates the shipped rule from "exclude the last two",
+    which would also pass the test above."""
+    sources = [_profile(chr(97 + i), (55.0 + i * 2.0, 82.0 + i * 3.0))
+               for i in range(6)]
+    for seed in range(1, 9):
+        schedule, _ = _schedule(sources, seed=seed)
+        first_round = [s.source_index for s in schedule[:6]]
+        assert sorted(first_round) == list(range(6)), (
+            f"seed {seed}: the first six stages are {first_round}, not a "
+            "permutation of all six sources")
+
+
+def test_exactly_two_sources_simply_alternate():
+    """The corner where ``candidates`` degenerates to one forced element,
+    and the case the ledger recorded as untested.
+
+    With two sources the round is out after every single stage, so the
+    reset path — and only the reset path — runs at every boundary. It
+    must keep refusing to hand a source straight back to itself, which is
+    the older rule the reset is careful not to break: resetting to the
+    empty set instead of to ``{current}`` would let a source follow
+    itself, producing a stage boundary that is not a handover and a night
+    that sits on one song for twice as long without saying so."""
+    sources = [_profile("a", (55.0, 82.5)), _profile("b", (58.0, 87.0))]
+    for seed in (1, 2, 3, 7, 11):
+        schedule, _ = _schedule(sources, seed=seed)
+        indices = [s.source_index for s in schedule]
+        assert len(indices) > 5
+        assert set(indices) == {0, 1}
+        for earlier, later in zip(indices, indices[1:]):
+            assert earlier != later, (
+                f"seed {seed}: two sources produced {indices}, in which a "
+                "source follows itself")
