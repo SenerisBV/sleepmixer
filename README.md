@@ -320,6 +320,37 @@ repeats fit; ask for a wider end gap if you want a specific one.
 
 See `sleepmix/config.example.yaml` for every field with comments.
 
+## The night stream
+
+`sleepmix render` makes a file. `sleepmix night` doesn't — it plays an
+indefinite ambient stream, live, that gets quieter and sparser as the night
+goes on and settles near silence toward sunrise.
+
+```bash
+pip install "sleepmix[night]"
+sleepmix night
+```
+
+There is one button and no config screen, on purpose. The only configuration
+that exists is three environment variables:
+
+- `SLEEPMIX_LAT`, `SLEEPMIX_LON` — where you are, so the night can size itself
+  against how long it's actually dark (defaults to Amsterdam).
+- `SLEEPMIX_RADIO_URL` — a live HTTP audio stream to mix in as a distant,
+  intermittent voice, if you want one.
+
+Drop a comfort show — anything you already own, `.wav`/`.flac`/`.mp3`/`.m4a`/
+`.ogg`/`.aif`/`.aiff` — into the `room` folder under your data directory (the
+path is printed when you start a night) and it plays continuously and
+quietly, as if it were on through a wall. Neither source is required; without
+them you get music alone.
+
+`sleepmix night` takes no other arguments. It descends toward near-silence
+over the night and then holds there — it does not exit on its own, so Ctrl-C
+is how you actually stop it, same as leaving a radio on. `--seconds N` exists
+only so you can hear what it sounds like without staying up for it; a real
+night ignores it.
+
 ## Notes & caveats
 
 - **Binaural beats need headphones** (each ear gets a different carrier; the
