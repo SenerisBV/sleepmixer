@@ -84,6 +84,45 @@ def test_the_loops_are_short_enough_to_carry_no_phrase(tmp_path, monkeypatch):
         assert 1.0 <= frames / profile.sr <= 40.0
 
 
+def test_a_prepared_loop_does_not_click_at_the_wrap(tmp_path, monkeypatch):
+    """night/palette.py's `_source` tiles a loop end-to-end with
+    ``np.tile`` and applies no crossfade of its own — it depends entirely on
+    `prepare_source` handing back material whose tail already meets its head
+    cleanly. `looping.make_seamless` exists for exactly this, and
+    `prepare_source` calls it, but calling it *before* `slow_and_pitch`
+    let the time-stretcher (a phase vocoder, or the resample fallback) undo
+    the seam it had just been given: neither knows the first and last
+    samples were built to meet, and both are free to touch either end.
+
+    Regression test for that ordering: tile a real prepared loop the way
+    `_source` does, and the sample-to-sample step across the wrap must not
+    stand out from the steps found anywhere else in the tiled signal. Before
+    the fix (seam, then stretch) the wrap step measured ~0.33 against a
+    typical in-body step of ~0.0067 — roughly 50x, an audible click every
+    loop repeat. After the fix (stretch, then seam) the wrap step is smaller
+    than the loop's own largest in-body step.
+    """
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path / "data"))
+    profile = prepare_source(_write_song(tmp_path / "song.wav"), sr=SR)
+    assert profile is not None
+
+    from sleepmix.audio import load_audio
+    loop = load_audio(profile.loop_paths[0])
+    n = loop.n_frames
+    tiled = np.tile(loop.data, (4, 1))
+
+    steps = np.abs(np.diff(tiled, axis=0)).max(axis=1)
+    wrap_indices = [k * n - 1 for k in range(1, 4)]
+    mask = np.ones(len(steps), dtype=bool)
+    mask[wrap_indices] = False
+
+    wrap_step = steps[wrap_indices].max()
+    body_step = steps[mask].max()
+    assert wrap_step <= body_step, (
+        f"wrap step {wrap_step} exceeds the loop's own largest in-body step "
+        f"{body_step} — the tiled loop clicks at the seam")
+
+
 def test_dropped_stems_do_not_reach_the_loops(tmp_path, monkeypatch):
     """Drums looping under you at 2 AM is what the render defaults already
     turn off by hand."""

@@ -262,6 +262,17 @@ def test_the_loop_cache_eviction_does_not_change_what_renders(tmp_path, monkeypa
     same voice, and confirm the second render is byte-identical to the first.
     The cache is documented as an optimisation and never an input — this is
     the regression test for that claim.
+
+    Reviewer-found: the original version of this test asserted only that
+    the two renders matched, which is true whether or not a cache exists at
+    all — deleting the caching mechanism entirely (no dict, no accounting,
+    ``load_audio`` on every call) still passes it, because ``render_voice``
+    is a pure function of stable disk content with or without a cache in
+    front of it. The assertion below that ``profile_a``'s key is actually
+    gone from ``_loop_cache`` after the intervening render is what proves
+    there was a cache entry to evict in the first place, so the "renders
+    match" assertion that follows is actually exercising eviction and not
+    merely restating purity.
     """
     import sleepmix.night.palette as palette_mod
 
@@ -278,12 +289,55 @@ def test_the_loop_cache_eviction_does_not_change_what_renders(tmp_path, monkeypa
     voice = _source_voice(profile_a, seconds=3.0)
     first = render_voice(voice, SR, 1, (profile_a,))
 
+    key_a = (profile_a.loop_paths[0], SR)
+    assert key_a in palette_mod._loop_cache  # there is something to evict
+
     # Render an unrelated source loop, which — with the cache capped at one
     # byte — evicts profile_a's loop out of the module-level cache.
     render_voice(_source_voice(profile_b, seconds=3.0), SR, 1, (profile_b,))
 
+    assert key_a not in palette_mod._loop_cache  # eviction actually happened
+
     second = render_voice(voice, SR, 1, (profile_a,))
     assert np.array_equal(first.data, second.data)
+
+
+def test_the_loop_cache_evicts_the_oldest_entry_first(tmp_path, monkeypatch):
+    """Direct test of the eviction *policy*, not just its transparency.
+
+    Reviewer-found: reverting ``_loop_cache.popitem(last=False)`` to plain
+    ``popitem()`` — LRU to LIFO, a one-keyword slip — left the entire suite
+    green, including the test above (which only checks that *something*
+    consistent comes out, not that the *right* entry was kept). That is
+    exactly the failure mode this project's own plan calls out by name:
+    Phase 1's voice cache was specified as 24 entries and held 1.3 GB
+    because nothing checked the eviction policy directly.
+
+    Insert two loops under a budget that fits one but not both; the older
+    (path_a, inserted first) must be the one evicted, the newer (path_b)
+    must survive, and ``_loop_cache_bytes`` must equal what the surviving
+    entry actually weighs — not merely be `<= budget`, which a policy that
+    evicted the wrong entry would also satisfy.
+    """
+    import sleepmix.night.palette as palette_mod
+
+    path_a, _ = _loop_file(tmp_path, seconds=1.0, freq=220.0)
+    path_b, _ = _loop_file(tmp_path, seconds=1.0, freq=330.0)
+
+    one_entry_bytes = int(1.0 * SR) * 2 * 4  # frames * channels * float32
+    monkeypatch.setattr(palette_mod, "_LOOP_CACHE_BYTES",
+                        int(one_entry_bytes * 1.5))
+
+    palette_mod._loop_for(path_a, SR)
+    palette_mod._loop_for(path_b, SR)
+
+    assert (path_a, SR) not in palette_mod._loop_cache, (
+        "the older entry should have been evicted to make room")
+    assert (path_b, SR) in palette_mod._loop_cache, (
+        "the newer entry should have survived")
+    assert palette_mod._loop_cache_bytes == sum(
+        buf.data.nbytes for buf in palette_mod._loop_cache.values()), (
+        "_loop_cache_bytes has drifted out of sync with the dict")
 
 
 def test_the_loop_cache_never_evicts_down_to_empty(tmp_path, monkeypatch):

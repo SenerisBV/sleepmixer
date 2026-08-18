@@ -155,16 +155,23 @@ def prepare_source(path: str, sr: int = 44100,
             cfg = LoopConfig(bars=LOOP_BARS, search_start=lo, search_end=hi)
             point = find_loop(reference, cfg)
             raw = slice_loop(reference, point)
-            seamless = make_seamless(raw, cfg.crossfade_ms)
-            stretched = slow_and_pitch(seamless, STRETCH_SPEED, 0.0)
+            # Stretch first, seam last. A phase vocoder (or the resample
+            # fallback) has no idea the first and last samples of its input
+            # were built to meet — it is free to touch either end, so
+            # seaming before stretching gets destroyed on the very next
+            # line. Seaming *after* stretching crossfades the material that
+            # is actually tiled by night/palette.py, which is the property
+            # `_source` depends on (see its docstring).
+            stretched = slow_and_pitch(raw, STRETCH_SPEED, 0.0)
             if stretched.n_frames <= 0:
                 continue
+            seamless = make_seamless(stretched, cfg.crossfade_ms)
 
             out = os.path.join(profiles_directory(), f"{source_id}-{i}.wav")
-            save_audio(stretched, out)
+            save_audio(seamless, out)
             loop_paths.append(out)
-            loop_frames.append(stretched.n_frames)
-            analysed.append(stretched)
+            loop_frames.append(seamless.n_frames)
+            analysed.append(seamless)
 
         if not loop_paths:
             return None

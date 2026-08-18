@@ -112,6 +112,16 @@ def _source(voice: Voice, n: int, sr: int,
     file that has moved since `prepare` ran, a profile naming a zero-frame
     loop — costs this voice and nothing else. A person moves folders, and a
     night should survive it.
+
+    Tiling here is a bare ``np.tile`` with no crossfade of its own: it
+    assumes the loop's tail already meets its head cleanly, i.e. that the
+    file is seamless *by construction*. Making that true is
+    ``prepare_source``'s job (``night/prepare.py``, via
+    ``looping.make_seamless``), not this module's — this module has no
+    audio-analysis tools to fix a bad seam with even if it wanted to, and
+    guessing at a crossfade here would double-seam material that is already
+    seamed. If a loop clicks at the wrap, the bug is upstream of this
+    function.
     """
     if n <= 0 or not profiles:
         return None
