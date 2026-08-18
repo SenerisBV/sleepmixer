@@ -47,6 +47,8 @@ def test_plan_module_imports_no_audio():
         "sleepmix.soundbed",
         "sleepmix.night.palette",
         "sleepmix.night.stream",
+        "sleepmix.night.pitch",
+        "sleepmix.night.prepare",
     }
 
     violations = forbidden_imports(plan_path, repo_root, forbidden)

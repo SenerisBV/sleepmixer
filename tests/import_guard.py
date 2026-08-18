@@ -15,7 +15,8 @@ from pathlib import Path
 
 
 def resolved_imports(path: Path, repo_root: Path,
-                     module_scope_only: bool = False) -> set[str]:
+                     module_scope_only: bool = False,
+                     within_function: str | None = None) -> set[str]:
     """Resolve all imports in a file to fully-qualified dotted module names.
 
     The returned set contains module names as they would appear in absolute
@@ -33,12 +34,33 @@ def resolved_imports(path: Path, repo_root: Path,
             called, so it can be a deliberate, contained integration seam in
             a way a top-level import — which runs unconditionally on
             ``import`` — cannot be.
+        within_function: If given, the name of a module-level function, and
+            only imports inside that function's own body (at any depth) are
+            considered. This is the mirror image of ``module_scope_only``,
+            and one file can legitimately need both rules for different
+            forbidden sets: ``sleepmix/cli.py`` hosts both ``night`` — the
+            playback entry point, which must never reach the separation
+            stack at any scope — and ``prepare``, whose entire job is to
+            reach it. A whole-file check cannot express that; a per-function
+            one can. Raises ``LookupError`` if no such function exists,
+            because a guard aimed at a function that has been renamed is a
+            guard that silently stops guarding.
 
     Returns:
         Set of fully-qualified module names that the file imports
     """
     with open(path) as f:
         tree = ast.parse(f.read(), filename=str(path))
+
+    if within_function is not None:
+        matches = [n for n in ast.walk(tree)
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                   and n.name == within_function]
+        if not matches:
+            raise LookupError(
+                f"{path} defines no function named {within_function!r}")
+        tree = ast.Module(body=[b for m in matches for b in m.body],
+                          type_ignores=[])
 
     # Derive the file's own package from its path relative to repo_root
     rel_path = path.relative_to(repo_root)
@@ -100,7 +122,8 @@ def resolved_imports(path: Path, repo_root: Path,
 
 
 def forbidden_imports(path: Path, repo_root: Path, forbidden: set[str],
-                      module_scope_only: bool = False) -> set[str]:
+                      module_scope_only: bool = False,
+                      within_function: str | None = None) -> set[str]:
     """Find imports that match any forbidden module name.
 
     An import is forbidden if it equals or is a dotted-prefix descendant of
@@ -116,12 +139,16 @@ def forbidden_imports(path: Path, repo_root: Path, forbidden: set[str],
         module_scope_only: See ``resolved_imports`` — passed straight
             through, for callers that only want to forbid the module-scope
             spelling and deliberately allow a function-local one.
+        within_function: See ``resolved_imports`` — passed straight through,
+            for callers checking one entry point of a file rather than all
+            of it.
 
     Returns:
         Set of resolved imports that violate the forbidden list (empty if none)
     """
     resolved = resolved_imports(path, repo_root,
-                                module_scope_only=module_scope_only)
+                                module_scope_only=module_scope_only,
+                                within_function=within_function)
     violations = set()
 
     for imp in resolved:

@@ -345,6 +345,30 @@ path is printed when you start a night) and it plays continuously and
 quietly, as if it were on through a wall. Neither source is required; without
 them you get music alone.
 
+### Bring your own music
+
+The music itself doesn't have to be synthesized. Drop songs — the same file
+types as above — into the `sources` folder next to `room`, then run:
+
+```bash
+sleepmix prepare
+```
+
+whenever it suits you. `prepare` is the slow part — it separates each song,
+finds a short loop in it and analyses what it's made of, and on a laptop that
+means the fans spinning up for a few minutes per song. That cost is why it's
+its own command: it never runs at bedtime, and `sleepmix night` never
+triggers it — the night only ever reads what `prepare` has already produced.
+Run it in the afternoon, run it before you leave for work, run it however far
+ahead of sleep you like.
+
+What it buys: a prepared song gets loops of itself early in the night, giving
+way to drones built from that song's own spectrum as the hours pass, so the
+real recording dissolves into its own double rather than a generic pad. A
+sources folder with nothing prepared in it is not an error — `sleepmix night`
+says so on the screen and plays a night of pure synthesis instead, exactly as
+if the folder were never there.
+
 `sleepmix night` takes no other arguments. It ends by ending: the length of
 the night is worked out from your coordinates when you press start, the stream
 descends across exactly that long, and then playback stops. There's no alarm
