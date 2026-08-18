@@ -240,12 +240,25 @@ anything outside itself — and changing it for every existing caller to solve a
 problem only `night/` has is a cost the rest of the pipeline would carry
 forever. Instead `NightStream._rendered` renders a voice's whole lifetime the
 moment it is first needed, decays and reverbs it once, and holds it in a
-small LRU cache
-(`_CACHE_SIZE = 24` entries, evicted via `move_to_end`); `block(index)` takes
-whatever slice of whichever cached voices falls inside the ten-second window
-it is assembling. Voices are minutes long and only a handful sound at once, so
-the cache costs a few tens of megabytes, and `apply_decay`'s existing contract
-— a whole buffer, one progress value — is untouched. **This also solves the
+small LRU cache (`_CACHE_BYTES = 256 MB`, evicted via `move_to_end`);
+`block(index)` takes whatever slice of whichever cached voices falls inside
+the ten-second window it is assembling, and `apply_decay`'s existing contract
+— a whole buffer, one progress value — is untouched.
+
+**The cache is bounded by bytes and not by entries, and the reason is that
+"a few tens of megabytes" was wrong by a factor of forty.** The design
+document and the first implementation both said the cache costs a few tens of
+megabytes and sized it at 24 entries on that basis. A *voice* is a few tens of
+megabytes: at 44.1 kHz one averages 52.7 MB and peaks at 86.6 MB (up to four
+minutes, stereo, float32, plus a six-second reverb tail). Twenty-four of them
+is 1.27 GB typical and 2.08 GB worst case, resident for eight hours, and no
+test noticed because the suite runs at 22.05 kHz where every figure halves.
+The entry count was buying nothing in any case: measured over the first 120
+blocks of a night at 44.1 kHz, at most **three** voices sound at once and the
+whole stretch needs eleven distinct voices, of which a 256 MB ceiling renders
+exactly eleven — no re-renders, peak residency 262 MB across five entries.
+A byte ceiling also behaves the same way at every sample rate, which an entry
+count does not. **This also solves the
 reverb-tail-at-a-seam problem for free, and by a different route than the one
 "Reverb on a window that has to loop" above uses for the same shape of
 problem.** That section reverbs a fragment together with a leading iteration
@@ -260,8 +273,9 @@ reverbed on its own, so no reverb tail is ever cut off at a block boundary.
 included, by its pre-delay, so an unadjusted cached voice's frame 0 was not
 that voice's birth — `effects.reverb_dry_offset`, described above, exists
 exactly to compensate and `stream.py`'s `_rendered` now calls it before
-caching. `night/speech.py`'s `through_a_wall` deliberately does not call it —
-see `docs/project-state.md`.)
+caching. `night/speech.py`'s `through_a_wall` calls it too, for the same
+reason; a branch of this document once argued it should not, and that
+argument was wrong. See `docs/project-state.md`.)
 
 **Why decay runs at `progress = 1.0`, with the arc supplying the endpoints,
 rather than each voice decaying within itself.** A voice's own

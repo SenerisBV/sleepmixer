@@ -9,8 +9,10 @@ of here.
 **A voice is rendered once, whole, and then sliced.** Blocks are seconds and
 voices are minutes, so every voice spans several blocks. Teaching the decay
 engine to render part of a placement would mean changing the contract at the
-heart of this codebase; rendering the voice complete and slicing it costs a few
-tens of megabytes and changes nothing. It also solves the reverb problem for
+heart of this codebase; rendering the voice complete and slicing it costs a
+bounded amount of memory (see ``_CACHE_BYTES`` — a single voice is tens of
+megabytes, not the whole cache) and changes nothing. It also solves the
+reverb problem for
 free: reverb is applied to the *whole* voice before it is cached, so the tail
 lives inside the cached buffer and survives being sliced. No block is ever
 reverbed, so no reverb tail is ever cut off at a seam.
@@ -24,6 +26,7 @@ ceilings — not from any voice decaying within itself.
 """
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
 
 import numpy as np
@@ -36,16 +39,26 @@ from ..soundbed import colored_noise
 from ..util import db_to_amp, iteration_rng
 from .clock import arc_at
 from .context import NightContext
-from .palette import render_voice
+from .palette import fade_envelope, render_voice
 from .plan import Voice, plan_voices
+
+_log = logging.getLogger(__name__)
 
 BLOCK_S = 10.0
 
-# How many rendered voices to keep. A voice is at most four minutes, blocks are
-# ten seconds, and a handful sound at once — so this holds every voice that can
-# still be needed several times over. Eviction is least-recently-used, via
-# ``move_to_end`` on every access.
-_CACHE_SIZE = 24
+# How much rendered audio to keep, in bytes.
+#
+# The cache used to be bounded by *entries* — 24 of them, on the reasoning that
+# a voice is a few megabytes. It is not. At 44.1 kHz a voice averages 52.7 MB
+# and peaks at 86.6 MB (four minutes, stereo, float32, plus a six-second reverb
+# tail), so 24 entries is 1.27 GB typical and 2.08 GB worst case, held resident
+# for eight hours. At most about eight voices are ever alive at one moment, so
+# the entry count was buying nothing that the byte ceiling does not.
+#
+# Bounding by bytes also makes the cache behave the same way at every sample
+# rate, which an entry count does not: the 22.05 kHz test suite was holding
+# half as much as a real night for the same number of entries.
+_CACHE_BYTES = 256 * 1024 * 1024
 
 # Reverb tail kept past a voice's death, so the room does not stop with it.
 _TAIL_S = 6.0
@@ -54,6 +67,10 @@ _TAIL_S = 6.0
 # further by weather: a wet night sounds wet.
 _BED_BASE_DB = -34.0
 _BED_RAIN_BOOST_DB = 6.0
+
+# How much each bed window runs past the end of its own block, so the next
+# block has something to fade out of. See ``NightStream._bed``.
+_BED_OVERLAP_S = 0.25
 
 
 def _soft_lowpass(x: np.ndarray, sr: int, cutoff_hz: float) -> np.ndarray:
@@ -89,9 +106,11 @@ class NightStream:
         self.ctx = ctx
         self.sr = sr
         self.block_frames = int(block_s * sr)
+        self._bed_overlap = min(int(_BED_OVERLAP_S * sr), self.block_frames)
         self.reverb = reverb if reverb is not None else ReverbConfig()
         self.bed = bed if bed is not None else SoundbedConfig()
         self._cache: OrderedDict[int, AudioBuffer] = OrderedDict()
+        self._cache_bytes = 0
 
     # -- voices ---------------------------------------------------------
     def _rendered(self, voice: Voice) -> AudioBuffer:
@@ -120,25 +139,34 @@ class NightStream:
         if trimmed.shape[0] < voice.n_frames:
             trimmed = np.pad(
                 trimmed, ((0, voice.n_frames - trimmed.shape[0]), (0, 0)))
+
+        # The fade goes on last, over the *whole* padded buffer, because two
+        # stages downstream of ``palette``'s own fade put audio back at the
+        # ends of it. ``apply_decay`` mixes its noise floor in after
+        # everything else, so without this a voice's birth stepped from exact
+        # digital silence to broadband hiss in one sample; and the reverb tail
+        # ends wherever the padding ends. Fading here means nothing in the
+        # chain — present or future — can start or stop instantaneously.
+        trimmed = trimmed * fade_envelope(trimmed.shape[0], self.sr)[:, None]
         wet = AudioBuffer(trimmed.astype(np.float32), self.sr)
 
         self._cache[voice.index] = wet
+        self._cache_bytes += wet.data.nbytes
         self._cache.move_to_end(voice.index)
-        while len(self._cache) > _CACHE_SIZE:
-            self._cache.popitem(last=False)
+        while len(self._cache) > 1 and self._cache_bytes > _CACHE_BYTES:
+            _, evicted = self._cache.popitem(last=False)
+            self._cache_bytes -= evicted.data.nbytes
         return wet
 
     # -- bed ------------------------------------------------------------
-    def _bed(self, index: int) -> np.ndarray:
-        """A block of noise bed, keyed by block so it stays independent.
+    def _bed_window(self, index: int) -> np.ndarray:
+        """``block_frames + _BED_OVERLAP`` frames of bed, keyed by block.
 
-        Only noise, never the binaural tone: a tone generated per block would
-        restart its phase at every seam and click. Binaural belongs to a later
-        plan that can carry absolute time into the generator.
+        A window covers global frames ``[index * B, index * B + B + overlap)``
+        — it deliberately runs past the end of its own block, so that the next
+        block has something of *this* window's to fade out of. See ``_bed``.
         """
-        if not self.bed.enabled or self.bed.noise_type in (None, "", "none"):
-            return np.zeros((self.block_frames, 2), dtype=np.float32)
-
+        overlap = self._bed_overlap
         arc = arc_at(index * self.block_frames / self.sr, self.ctx)
         weather = self.ctx.weather
         wetness = min(weather.precipitation_mm / 8.0, 1.0)
@@ -147,19 +175,78 @@ class NightStream:
                     + arc.level_db)
 
         rng = iteration_rng(self.ctx.seed, "night:bed", index)
-        mono = colored_noise(self.block_frames, self.sr,
+        mono = colored_noise(self.block_frames + overlap, self.sr,
                              self.bed.noise_type, rng)
         # The bed must darken with the arc too, or late in the night — once
         # the voices are dim and sparse — the bed's untouched spectrum is most
         # of what is left, and the mix gets brighter in character exactly when
         # the arc wants it darkest.
         mono = _soft_lowpass(mono, self.sr, arc.brightness_hz)
-        return (mono * db_to_amp(level_db)).astype(np.float32)[:, None] \
+        return (mono * db_to_amp(level_db)).astype(np.float32)
+
+    def _bed(self, index: int) -> np.ndarray:
+        """A block of noise bed, keyed by block so it stays independent.
+
+        Only noise, never the binaural tone: a tone generated per block would
+        restart its phase at every seam and click. Binaural belongs to a later
+        plan that can carry absolute time into the generator.
+
+        **Two overlapping windows, crossfaded, rather than one window per
+        block.** Independent noise per block is fine while the noise is
+        broadband — a seam step is indistinguishable from the sample-to-sample
+        motion the signal already has. It stops being fine the moment the arc
+        darkens the bed: lowpassing collapses the within-block motion and
+        leaves the seam standing. Measured at 44.1 kHz mid-night, with one
+        window per block, the step at a seam was 7.3x the largest step
+        anywhere inside a block — the same metric, and past the same
+        threshold, that ``test_consecutive_blocks_join_without_a_step``
+        applies to the music.
+
+        Window ``index`` runs ``_BED_OVERLAP_S`` past the end of block
+        ``index``, and block ``index`` opens by fading from the tail of window
+        ``index - 1`` into the head of window ``index``. Both windows are pure
+        functions of their own index, so the block is still computable from
+        ``index`` alone and block independence is untouched.
+
+        (The circular convolution in ``_soft_lowpass`` was the suspected cause
+        and is not it. Measured against a linearly-convolved reference: the
+        wrap contributes at most -41 dB relative to the block's peak, entirely
+        within the first and last ~2 ms, with the interior identical to within
+        float32 rounding. It is real and it is inaudible; the seam was the
+        noise, not the filter.)
+        """
+        if not self.bed.enabled or self.bed.noise_type in (None, "", "none"):
+            return np.zeros((self.block_frames, 2), dtype=np.float32)
+
+        overlap = self._bed_overlap
+        current = self._bed_window(index)
+        mono = current[:self.block_frames].copy()
+
+        # Block 0 has nothing before it to fade out of, and ``iteration_rng``
+        # would be handed a negative iteration if it were asked for one.
+        if overlap > 0 and index > 0:
+            previous = self._bed_window(index - 1)[self.block_frames:]
+            # Equal-power, so two uncorrelated noises sum to a constant level
+            # through the transition rather than dipping in the middle.
+            ramp = np.linspace(0.0, np.pi / 2, overlap, dtype=np.float32)
+            mono[:overlap] = (previous * np.cos(ramp)
+                              + mono[:overlap] * np.sin(ramp))
+
+        return mono.astype(np.float32)[:, None] \
             * np.ones((1, 2), dtype=np.float32)
 
     # -- blocks ---------------------------------------------------------
-    def block(self, index: int) -> AudioBuffer:
-        """Assemble block ``index``, needing nothing that came before it."""
+    def summed(self, index: int) -> np.ndarray:
+        """Block ``index``, before the safety clip.
+
+        Split out from ``block`` so that a headroom test has something it can
+        actually fail against. Asserting ``max <= 1.0`` on ``block``'s output
+        asserts nothing at all — the last thing ``block`` does is clip to that
+        range — and two tests did exactly that while the real sum was reaching
+        1.27 and clipping 9 blocks in 120. The clip is a guard against a case
+        nobody predicted, not a level control, so what has to be measured is
+        the number arriving at it.
+        """
         start = index * self.block_frames
         end = start + self.block_frames
         out = np.zeros((self.block_frames, 2), dtype=np.float32)
@@ -168,14 +255,28 @@ class NightStream:
         # the query window is widened by the tail rather than by guesswork.
         tail = int(_TAIL_S * self.sr)
         for voice in plan_voices(self.ctx, self.sr, max(start - tail, 0), end):
-            rendered = self._rendered(voice)
-            take_from = max(start - voice.birth_frame, 0)
-            take_to = min(end - voice.birth_frame, rendered.n_frames)
-            if take_to <= take_from:
+            # Degradation is per *voice*, not per block. Without this a single
+            # voice raising anywhere in the chain took the whole ten seconds
+            # with it and the player replaced music with pink noise; the spec
+            # asks for "skip it, log it, continue — one bad voice is a few
+            # seconds of slightly thinner texture."
+            try:
+                rendered = self._rendered(voice)
+                take_from = max(start - voice.birth_frame, 0)
+                take_to = min(end - voice.birth_frame, rendered.n_frames)
+                if take_to <= take_from:
+                    continue
+                chunk = rendered.data[take_from:take_to]
+                offset = max(voice.birth_frame - start, 0)
+                out[offset:offset + len(chunk)] += chunk
+            except Exception:
+                _log.warning("night: skipping voice %d in block %d",
+                             voice.index, index, exc_info=True)
                 continue
-            chunk = rendered.data[take_from:take_to]
-            offset = max(voice.birth_frame - start, 0)
-            out[offset:offset + len(chunk)] += chunk
 
         out += self._bed(index)
-        return AudioBuffer(np.clip(out, -1.0, 1.0), self.sr)
+        return out
+
+    def block(self, index: int) -> AudioBuffer:
+        """Assemble block ``index``, needing nothing that came before it."""
+        return AudioBuffer(np.clip(self.summed(index), -1.0, 1.0), self.sr)

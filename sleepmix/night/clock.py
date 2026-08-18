@@ -60,7 +60,14 @@ def _brightness_multiplier(ctx: NightContext) -> float:
     one-sidedness is what makes the sweep test provable rather than empirical.
     """
     weather = ctx.weather
-    cloud = 1.0 - 0.20 * weather.cloud_cover
+    # Clamped like its three siblings below, and for the reason they are: a
+    # cloud cover outside 0..1 — a unit mix-up, a sentinel, an API returning
+    # percent where a fraction was expected — would make this term greater
+    # than 1.0 and steering could then *brighten* a night rather than only
+    # darken it. Demonstrated: cloud_cover = -5.0 doubled mid-night
+    # brightness, and the sweep test passed anyway because it only checked
+    # bounds that ``arc_at`` clamps to on the way out.
+    cloud = 1.0 - 0.20 * min(max(weather.cloud_cover, 0.0), 1.0)
     rain = 1.0 - 0.15 * min(weather.precipitation_mm / 10.0, 1.0)
     # Falling pressure darkens; rising pressure is merely neutral.
     falling = min(max(-weather.pressure_trend_hpa / 15.0, 0.0), 1.0)

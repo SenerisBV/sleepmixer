@@ -160,6 +160,17 @@ def night(seconds: int | None) -> None:
     import os
     import random
 
+    # The device check goes first, before anything is printed. Printing "Night
+    # 12345: 9.2 h until light." and "Ctrl-C to stop." and *then* refusing to
+    # start reads as encouragement followed by a slap; a user without the
+    # extra should see only the one line that tells them what to install.
+    try:
+        import sounddevice as sd
+    except Exception:
+        raise click.ClickException(
+            'sounddevice is not installed — run: pip install "sleepmix[night]"')
+
+    from .config import SoundbedConfig
     from .night.context import build_context
     from .night.player import NightPlayer, room_directory
     from .night.speech import radio_source_from, room_sources_from
@@ -171,7 +182,14 @@ def night(seconds: int | None) -> None:
     sr = 44100
 
     ctx = build_context(dt.datetime.now(dt.timezone.utc), lat, lon, seed)
-    stream = NightStream(ctx, sr=sr)
+    # The bed is on for a night, and only for a night — ``SoundbedConfig``'s
+    # own default stays off, because every other caller (render, preview) has
+    # a mix underneath it and this one does not. A night is mostly gaps: at
+    # 6.5 h in, voice coverage measured 26 of 30 consecutive blocks as exact
+    # digital silence, with gaps up to 694 s. The bed is what is *there*
+    # between voices, and it is also the only thing the "cloud and rain → the
+    # noise bed's level and character" steering row has to act on.
+    stream = NightStream(ctx, sr=sr, bed=SoundbedConfig(enabled=True))
     player = NightPlayer(
         stream,
         room_sources_from(room_directory(), sr),
@@ -181,12 +199,6 @@ def night(seconds: int | None) -> None:
     click.echo(f"Night {seed}: {ctx.night_length_s / 3600:.1f} h until light.")
     click.echo(f"Room audio: {room_directory()}")
     click.echo("Ctrl-C to stop.")
-
-    try:
-        import sounddevice as sd
-    except Exception:
-        raise click.ClickException(
-            'sounddevice is not installed — run: pip install "sleepmix[night]"')
 
     max_blocks = int(seconds / BLOCK_S) if seconds is not None else None
     with sd.OutputStream(samplerate=sr, channels=2, dtype="float32") as out:

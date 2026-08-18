@@ -58,3 +58,19 @@ def test_night_without_sounddevice_fails_with_an_actionable_message(
     assert result.exit_code != 0
     assert "sounddevice is not installed" in result.output
     assert 'pip install "sleepmix[night]"' in result.output
+
+
+def test_night_checks_for_a_device_before_it_says_anything_encouraging(
+        tmp_path, monkeypatch):
+    """A user without the extra used to read "Night 12345: 9.2 h until
+    light.", "Room audio: ...", and "Ctrl-C to stop." — and *then* be told the
+    thing cannot start. The check goes first, so the only thing they see is
+    the one line that tells them what to install."""
+    _no_network(monkeypatch)
+    monkeypatch.setenv("SLEEPMIX_DATA_DIR", str(tmp_path))
+    monkeypatch.setitem(sys.modules, "sounddevice", None)
+
+    output = CliRunner().invoke(main, ["night"]).output
+    assert "Ctrl-C to stop." not in output
+    assert "until light" not in output
+    assert "Room audio" not in output

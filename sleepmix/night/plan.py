@@ -58,6 +58,27 @@ _INTERVALS_CENTS = (0, 200, 500, 700, 1200, 1900)
 # already makes in the frequency domain.
 ROOT_DESCENT_SEMITONES = 1.0
 
+# How far under the night's level ceiling a voice's tape hiss sits.
+#
+# ``apply_decay`` adds its noise floor *last* — after the lowpass, after the
+# gain — so a fixed value from ``StemDecayConfig``'s defaults is an absolute
+# level that the arc cannot touch. Left at the default -42 dB it defeated three
+# separate things at once: it was broadband, so it walked straight through the
+# brightness ceiling; it was absolute, so a voice born at hour six carried the
+# same hiss as one born at hour zero even though everything else about it had
+# descended; and it was added after ``palette``'s fade, so a voice's first
+# sample stepped from digital silence to audible hiss.
+#
+# Tying it to ``arc.level_db`` fixes the second of those here and the other two
+# are fixed at the ends they belong to (``stream._rendered`` re-fades the whole
+# buffer; the brightness ceiling is a spectral property the fade cannot help
+# with, but a hiss 40 dB under the tone is quiet enough not to dominate it).
+#
+# **This is a taste value and nobody has listened to it.** -40 dB below the
+# level ceiling was chosen so a fresh voice's hiss sits well under its own
+# tone; whether that reads as tape or as nothing at all is a question for ears.
+NOISE_BELOW_LEVEL_DB = -40.0
+
 
 @dataclass(frozen=True)
 class Voice:
@@ -99,12 +120,20 @@ def _decay_for(arc: NightArc, base: StemDecayConfig) -> StemDecayConfig:
     """A decay config whose endpoints *are* this moment's ceilings.
 
     Rendered at ``progress = 1.0``, so the start values never apply and are
-    left at the dataclass defaults rather than being invented here.
+    left at the dataclass defaults rather than being invented here — with one
+    exception. The noise floor is set at *both* ends, to the same value, so
+    that it cannot matter which progress a future caller renders at: the hiss
+    a voice carries is the same wherever in its own arc it is asked for, and
+    it descends with the night because it is pinned to ``arc.level_db`` rather
+    than to a number in the dataclass. See ``NOISE_BELOW_LEVEL_DB``.
     """
+    hiss_db = arc.level_db + NOISE_BELOW_LEVEL_DB
     return replace(base,
                    enabled=True,
                    lowpass_end_hz=arc.brightness_hz,
-                   amp_end_db=arc.level_db)
+                   amp_end_db=arc.level_db,
+                   noise_start_db=hiss_db,
+                   noise_end_db=hiss_db)
 
 
 def plan_voices(ctx: NightContext, sr: int, from_frame: int,

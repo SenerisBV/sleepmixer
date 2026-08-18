@@ -94,13 +94,24 @@ def test_no_shipped_module_imports_the_night_package():
     # is swept at every scope.
     module_scope_only_for = {"cli.py"}
 
-    for module in sorted(sleepmix_root.glob("*.py")):
+    # ``rglob``, not ``glob``. A top-level glob swept only ``sleepmix/*.py``
+    # and left the whole of ``sleepmix/server/`` — twelve modules, including
+    # the ones a hosted version would most plausibly reach into the night
+    # package from — unchecked. The rule is about the package, not about the
+    # top level of it.
+    modules = sorted(m for m in sleepmix_root.rglob("*.py")
+                     if "night" not in m.relative_to(sleepmix_root).parts)
+    assert len(modules) > 20, "the sweep stopped finding modules"
+    assert any(m.parent.name == "server" for m in modules), \
+        "the sweep is not reaching sleepmix/server/"
+
+    for module in modules:
         violations = forbidden_imports(
             module, repo_root, forbidden,
             module_scope_only=module.name in module_scope_only_for)
         assert not violations, (
-            f"Module {module.name} imports the night package: {violations}, "
-            "violating the package layering rule."
+            f"Module {module.relative_to(repo_root)} imports the night "
+            f"package: {violations}, violating the package layering rule."
         )
 
 

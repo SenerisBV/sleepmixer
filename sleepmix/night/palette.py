@@ -32,11 +32,40 @@ _DETUNE_CENTS = 7.0
 _DRIFT_DEPTH = 0.35
 _DRIFT_MIN_HZ, _DRIFT_MAX_HZ = 0.013, 0.11
 
-_PEAK = 0.35  # leaves headroom for several concurrent voices to sum
+# How loud one voice is before the arc's level ceiling scales it.
+#
+# It has to leave room for every voice that can sound at once, and 0.35 did
+# not: the pre-clip sum of a block reached 1.0576 at seed 11 and 1.2712 at
+# seed 99, where 9 of the first 120 blocks clipped. Both clipping tests passed
+# anyway, because they asserted ``max <= 1.0`` against functions whose last
+# statement is ``np.clip(..., -1, 1)`` — an assertion that cannot fail.
+#
+# Lowering this rather than scaling by the number of concurrent voices is
+# deliberate. A per-block concurrency scale would make one voice's level
+# depend on its neighbours, so a cached voice could not be sliced at a
+# constant gain and the level would step wherever the count changed — and it
+# would put a second, unrelated level control in front of the arc's own
+# ceiling, which is meant to be the thing that decides how loud a night is.
+# A constant here is transparent to all of that: every voice moves together
+# and ``arc.level_db`` still means what it says.
+#
+# 0.20 measured across seeds 3, 7, 11, 42, 99, 123 and 777 over the first 120
+# blocks — the densest, loudest stretch of a night — puts the worst pre-clip
+# peak at 0.76.
+_PEAK = 0.20
 
 
-def _fade_envelope(n: int, sr: int) -> np.ndarray:
-    """A raised-cosine fade at both ends, halved if the voice is too short."""
+def fade_envelope(n: int, sr: int) -> np.ndarray:
+    """A raised-cosine fade at both ends, halved if the voice is too short.
+
+    Public because it is applied twice on the way to a block, in two different
+    modules and for the same reason. This module fades the raw material so a
+    generator cannot produce an attack; ``stream._rendered`` fades the *whole*
+    padded, decayed, reverbed buffer so that nothing any later stage adds —
+    the decay engine's noise floor in particular, which is mixed in after
+    everything else — can start or stop instantaneously either. One envelope,
+    so the two cannot drift apart.
+    """
     fade = min(int(FADE_S * sr), n // 2)
     env = np.ones(n, dtype=np.float32)
     if fade > 0:
@@ -48,18 +77,33 @@ def _fade_envelope(n: int, sr: int) -> np.ndarray:
 
 
 def _slow_drift(n: int, sr: int, rng: np.random.Generator) -> np.ndarray:
-    """A gentle 0..1 amplitude wobble, slow enough to read as breathing."""
+    """A gentle amplitude wobble, slow enough to read as breathing.
+
+    The range is ``[1 - _DRIFT_DEPTH, 1.0]`` — currently [0.65, 1.0] — not
+    0..1. It is a multiplier that never reaches zero on purpose: a drift that
+    touched silence would be a gap, and a gap is an event.
+    """
     rate = float(rng.uniform(_DRIFT_MIN_HZ, _DRIFT_MAX_HZ))
     phase = float(rng.uniform(0.0, 2 * np.pi))
-    t = np.arange(n, dtype=np.float32) / sr
+    t = np.arange(n, dtype=np.float64) / sr
     return (1.0 - _DRIFT_DEPTH
-            + _DRIFT_DEPTH * (0.5 + 0.5 * np.sin(2 * np.pi * rate * t + phase)))
+            + _DRIFT_DEPTH * (0.5 + 0.5 * np.sin(2 * np.pi * rate * t + phase))
+            ).astype(np.float32)
 
 
 def _drone(n: int, sr: int, pitch_hz: float,
            rng: np.random.Generator) -> np.ndarray:
-    """Additive partials, each detuned and drifting on its own clock."""
-    t = np.arange(n, dtype=np.float32) / sr
+    """Additive partials, each detuned and drifting on its own clock.
+
+    ``t`` is float64 and the sine is evaluated before anything is narrowed to
+    float32. A float32 time axis loses its last bits of resolution as the
+    sample index climbs, and the phase error that follows is not white — it
+    is a deterministic function of the argument, so it lands as a tonal
+    sideband rather than as hiss. Over a four-minute voice at 44.1 kHz that
+    was roughly 33 dB SNR with structure in it. float64 costs one temporary
+    array and removes the whole question.
+    """
+    t = np.arange(n, dtype=np.float64) / sr
     out = np.zeros(n, dtype=np.float32)
     for multiple, amplitude in _PARTIALS:
         cents = float(rng.uniform(-_DETUNE_CENTS, _DETUNE_CENTS))
@@ -67,7 +111,7 @@ def _drone(n: int, sr: int, pitch_hz: float,
         if freq >= sr / 2:
             continue
         phase = float(rng.uniform(0.0, 2 * np.pi))
-        tone = np.sin(2 * np.pi * freq * t + phase, dtype=np.float32)
+        tone = np.sin(2 * np.pi * freq * t + phase).astype(np.float32)
         out += tone * amplitude * _slow_drift(n, sr, rng)
     return out
 
@@ -116,6 +160,6 @@ def render_voice(voice: Voice, sr: int, seed: int) -> AudioBuffer:
     peak = float(np.abs(stereo).max())
     if peak > 0:
         stereo = stereo * (_PEAK / peak)
-    stereo *= _fade_envelope(n, sr)[:, None]
+    stereo *= fade_envelope(n, sr)[:, None]
 
     return AudioBuffer(stereo.astype(np.float32), sr)

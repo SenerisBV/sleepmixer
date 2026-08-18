@@ -1609,8 +1609,10 @@ of here.
 **A voice is rendered once, whole, and then sliced.** Blocks are seconds and
 voices are minutes, so every voice spans several blocks. Teaching the decay
 engine to render part of a placement would mean changing the contract at the
-heart of this codebase; rendering the voice complete and slicing it costs a few
-tens of megabytes and changes nothing. It also solves the reverb problem for
+heart of this codebase; rendering the voice complete and slicing it costs a
+bounded amount of memory (see ``_CACHE_BYTES`` — a single voice is tens of
+megabytes, not the whole cache) and changes nothing. It also solves the
+reverb problem for
 free: reverb is applied to the *whole* voice before it is cached, so the tail
 lives inside the cached buffer and survives being sliced. No block is ever
 reverbed, so no reverb tail is ever cut off at a seam.

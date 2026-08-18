@@ -15,7 +15,11 @@ that failed.
 """
 from __future__ import annotations
 
+import logging
 import os
+import queue
+import threading
+import time
 from typing import Callable
 
 import numpy as np
@@ -28,9 +32,24 @@ from .clock import arc_at
 from .speech import SpeechSource, over_the_air, through_a_wall
 from .stream import NightStream
 
+_log = logging.getLogger(__name__)
+
 # How loud the player's own emergency bed is, before the arc scales it. Quiet
 # enough to be a texture rather than an announcement that something is wrong.
 _FALLBACK_BED_DB = -38.0
+
+# How long the consumer waits for a rendered block before giving up on it and
+# playing its own bed instead. Short, because the thing it is racing is a
+# sound device with a buffer measured in tens of milliseconds — a wait long
+# enough to be worth having is already an underrun.
+_QUEUE_WAIT_S = 0.25
+
+# How long ``run`` lets the renderer fill the queue before the first block is
+# played. Nothing is on the air yet at that point, so this is start-up latency
+# rather than a gap — the one moment in a night when waiting for the renderer
+# costs nothing. Without it a night opens on the emergency bed every time,
+# because the first block cannot possibly be ready within ``_QUEUE_WAIT_S``.
+_PRIME_WAIT_S = 5.0
 
 # How much of a radio feed's between-transmission static survives the gate.
 _STATIC_GAIN = 0.22
@@ -54,14 +73,26 @@ def room_directory() -> str:
 
 
 class NightPlayer:
-    """Assemble the deterministic block, mix the live layer, hand it out."""
+    """Render ahead, mix the live layer at the output, hand it out.
+
+    Two threads, and the split between them is the same split the whole
+    design rests on. The producer renders music blocks — deterministic,
+    computable in advance, therefore worth computing in advance — into a
+    ``queue_depth``-deep queue. The consumer takes them, sums the live speech
+    layer on at the moment the block is handed to the device, and plays them.
+    Nothing live crosses into the producer, which is what keeps ``stream.py``
+    testable for block independence.
+    """
 
     def __init__(self, stream: NightStream, room: SpeechSource,
                  radio: SpeechSource, queue_depth: int = 3) -> None:
         self.stream = stream
         self.room = room
         self.radio = radio
-        self.queue_depth = queue_depth
+        self.queue_depth = max(int(queue_depth), 1)
+        # The render thread, while ``run`` is running. Held on the instance so
+        # a test can assert it does not outlive the call.
+        self._producer: threading.Thread | None = None
 
     # -- the live layer -------------------------------------------------
     def _speech(self, index: int, n_frames: int) -> np.ndarray:
@@ -92,12 +123,31 @@ class NightPlayer:
 
         return out
 
-    def mixed_block(self, index: int) -> AudioBuffer:
-        """One block of music with the live layer summed on top."""
-        music = self.stream.block(index)
+    def _mix(self, index: int, music: AudioBuffer) -> AudioBuffer:
+        """Sum the live layer onto an already-rendered block of music.
+
+        Kept separate from ``mixed_block`` because ``run`` renders on one
+        thread and mixes on another: the speech has to be read at the moment
+        the block is handed to the device, not at the moment it was rendered,
+        or it would be as stale as the queue is deep.
+        """
         speech = self._speech(index, music.n_frames)
         mixed = np.clip(music.data + speech, -1.0, 1.0)
         return AudioBuffer(mixed.astype(np.float32), music.sr)
+
+    def summed_mix(self, index: int) -> np.ndarray:
+        """Music plus speech, before either safety clip.
+
+        The counterpart of ``NightStream.summed`` and there for the same
+        reason: a headroom assertion made against ``mixed_block`` cannot fail,
+        because ``mixed_block`` clips.
+        """
+        music = self.stream.summed(index)
+        return music + self._speech(index, music.shape[0])
+
+    def mixed_block(self, index: int) -> AudioBuffer:
+        """One block of music with the live layer summed on top."""
+        return self._mix(index, self.stream.block(index))
 
     # -- degradation ----------------------------------------------------
     def fallback_block(self, index: int) -> AudioBuffer:
@@ -117,13 +167,59 @@ class NightPlayer:
         return AudioBuffer(np.clip(data, -1.0, 1.0), sr)
 
     # -- the loop -------------------------------------------------------
+    def _render_ahead(self, blocks: "queue.Queue", stop: threading.Event,
+                      max_blocks: int | None) -> None:
+        """The producer: render block after block into ``blocks``.
+
+        Runs on its own thread so that rendering and playing overlap. They
+        have to: a block containing a voice birth costs 0.68–1.09 s to render
+        at 44.1 kHz, a device buffer is 0.05–0.2 s, and early in the night a
+        voice is born every 20–70 s — so a loop that rendered block *i*, wrote
+        it, then rendered *i+1* underran once or twice a minute. What plays
+        during a long render is the block before it, already queued.
+
+        A block that fails to render is queued as ``None`` rather than
+        dropped, so the consumer knows to put its own bed in that slot instead
+        of silently shortening the night.
+        """
+        index = 0
+        while not stop.is_set() and (max_blocks is None or index < max_blocks):
+            try:
+                music = self.stream.block(index)
+            except Exception:
+                _log.warning("night: block %d failed to render", index,
+                             exc_info=True)
+                music = None
+
+            while not stop.is_set():
+                try:
+                    blocks.put((index, music), timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+            index += 1
+
     def run(self, max_blocks: int | None = None,
             sink: Callable[[AudioBuffer], None] | None = None) -> None:
-        """Produce blocks until ``max_blocks``, or forever.
+        """Play blocks until ``max_blocks``, or forever.
 
         ``sink`` receives each block. The CLI passes one that writes to the
         sound device; the tests pass one that appends to a list, which is what
         makes every degradation path above assertable without hardware.
+
+        **Rendering runs ahead of playback**, on the producer thread above,
+        into a ``queue_depth``-deep queue. This loop is the consumer: it takes
+        a block, mixes the live speech layer onto it *here* — the spec is
+        explicit that the live layer is summed at the output, and mixing it in
+        the producer would make it up to ``queue_depth`` blocks stale — and
+        hands it to the sink.
+
+        When the queue is empty the consumer does not wait for the renderer.
+        It plays ``fallback_block`` instead: pink noise at the arc's current
+        level, which needs no plan and so is available precisely when the
+        thing that would have supplied one is the thing that fell behind. That
+        is the design's own answer to "render worker falls behind", and it is
+        what the fallback bed exists for.
 
         A ``sink`` failure is treated the same as a renderer failure: a
         single one is absorbed and the loop moves on to the next block. Only
@@ -134,14 +230,39 @@ class NightPlayer:
         if sink is None:
             raise ValueError("run needs a sink to hand blocks to")
 
-        index = 0
+        stop = threading.Event()
+        blocks: queue.Queue = queue.Queue(maxsize=self.queue_depth)
+        producer = threading.Thread(
+            target=self._render_ahead, args=(blocks, stop, max_blocks),
+            name="sleepmix-night-render", daemon=True)
+        self._producer = producer
+        producer.start()
+
+        deadline = time.monotonic() + _PRIME_WAIT_S
+        while (blocks.empty() and producer.is_alive()
+               and time.monotonic() < deadline):
+            stop.wait(0.01)
+
+        delivered = 0
+        next_music_index = 0
         consecutive_sink_failures = 0
         try:
-            while max_blocks is None or index < max_blocks:
+            while max_blocks is None or delivered < max_blocks:
                 try:
-                    block = self.mixed_block(index)
-                except Exception:
+                    index, music = blocks.get(timeout=_QUEUE_WAIT_S)
+                except queue.Empty:
+                    index, music = next_music_index, None
+
+                if music is None:
                     block = self.fallback_block(index)
+                else:
+                    next_music_index = index + 1
+                    try:
+                        block = self._mix(index, music)
+                    except Exception:
+                        _log.warning("night: mixing block %d failed", index,
+                                     exc_info=True)
+                        block = self.fallback_block(index)
 
                 try:
                     sink(block)
@@ -152,8 +273,17 @@ class NightPlayer:
                 else:
                     consecutive_sink_failures = 0
 
-                index += 1
+                delivered += 1
         finally:
+            stop.set()
+            # Drain one slot so a producer parked on a full queue can notice
+            # the stop and leave, rather than being joined while blocked.
+            try:
+                blocks.get_nowait()
+            except queue.Empty:
+                pass
+            producer.join(timeout=5.0)
+            self._producer = None
             for source in (self.room, self.radio):
                 try:
                     source.close()

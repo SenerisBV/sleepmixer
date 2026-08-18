@@ -5,6 +5,9 @@ mixing, the degradation and the queue can be driven in a unit test; opening
 the real device is one line inside the CLI command, which is the only part
 nobody can assert.
 """
+import threading
+import time
+
 import numpy as np
 import pytest
 
@@ -67,11 +70,25 @@ def test_a_mixed_block_is_the_right_shape():
     assert block.n_channels == 2
 
 
+def _rms(buf) -> float:
+    return float(np.sqrt(np.mean(buf.data.astype(np.float64) ** 2)))
+
+
 def test_speech_actually_reaches_the_output():
+    """Compared by RMS energy, for the reason
+    ``test_a_first_source_failing_does_not_block_the_second`` spells out
+    below: the block-wide peak is not a reliable witness that the layer
+    arrived, because adding it can partially cancel the music at whichever
+    single sample happened to be the maximum.
+
+    That was always true; it only started mattering once the distance
+    treatments stopped normalising every block to a fixed peak. Under the old
+    automatic gain control the speech layer's peak was a constant regardless
+    of its input, which is precisely the defect that was removed."""
     quiet = _player().mixed_block(3)
     loud = _player(room=LoudSource(SR)).mixed_block(3)
     assert not np.array_equal(quiet.data, loud.data)
-    assert np.abs(loud.data).max() > np.abs(quiet.data).max()
+    assert _rms(loud) > _rms(quiet)
 
 
 def test_a_speech_source_that_raises_costs_only_its_own_voice():
@@ -121,7 +138,29 @@ def test_speech_gets_quieter_as_the_night_goes_on():
     assert late < early
 
 
-def test_a_mixed_block_never_clips():
+@pytest.mark.parametrize("seed", [3, 11, 99])
+def test_a_mixed_block_never_clips(seed):
+    """Measured on the sum, not on the clip's own output.
+
+    This used to assert ``np.abs(player.mixed_block(index).data).max() <=
+    1.0``, which cannot fail: ``mixed_block`` clips to that range as its last
+    act. ``summed_mix`` returns what arrives at the clip.
+
+    Both speech sources are at a level no real file would reach, which is the
+    right test for a headroom assertion: if a full-scale white-noise room and
+    a full-scale white-noise radio cannot push the sum over 1.0, nothing an
+    operator drops in the room folder will.
+    """
+    player = _player(room=LoudSource(SR, level=1.0),
+                     radio=LoudSource(SR, level=1.0),
+                     ctx=_context(seed=seed))
+    peak = max(float(np.abs(player.summed_mix(index)).max())
+               for index in range(0, 120, 3))
+    assert peak <= 1.0
+    assert peak < 0.9
+
+
+def test_a_mixed_block_still_leaves_the_clip_in_place():
     player = _player(room=LoudSource(SR, level=1.0),
                      radio=LoudSource(SR, level=1.0))
     for index in (0, 5, 200):
@@ -200,6 +239,98 @@ def test_run_closes_its_speech_sources():
     _player(room=room, radio=radio).run(max_blocks=1, sink=lambda _b: None)
     assert room.closed
     assert radio.closed
+
+
+# -- rendering ahead of playback -------------------------------------------
+#
+# ``run`` used to render block i, hand it to the sink, then render i+1. The
+# CLI's sink is a blocking ``sd.OutputStream.write``, so every render was
+# time the device spent waiting: a block containing a voice birth costs
+# 0.68-1.09 s at 44.1 kHz against a device buffer of 0.05-0.2 s, and voices
+# are born every 20-70 s early in the night. That is an underrun once or
+# twice a minute. ``queue_depth`` was stored and read by nothing.
+
+def test_a_slow_renderer_produces_fallback_blocks_rather_than_a_stall():
+    """The degradation the spec names: "the block queue drains into a bed the
+    *player* generates". It is also the only thing that ever makes
+    ``fallback_block`` reachable for the reason it exists."""
+    ctx = _context()
+    stream = NightStream(ctx, sr=SR)
+    real = stream.block
+
+    def slow(index):
+        time.sleep(1.0)
+        return real(index)
+
+    stream.block = slow  # type: ignore[method-assign]
+    player = NightPlayer(stream, SilentSource(SR), SilentSource(SR))
+
+    delivered = []
+    started = time.monotonic()
+    player.run(max_blocks=6, sink=delivered.append)
+    elapsed = time.monotonic() - started
+
+    assert len(delivered) == 6
+    # It did not wait for six slow renders in series.
+    assert elapsed < 6.0
+    # Some of what came out is the player's own bed rather than music.
+    beds = [b for b in delivered if np.abs(b.data).max() < 0.05]
+    assert beds, "a renderer this slow should have drained the queue"
+
+
+def test_the_render_thread_does_not_outlive_run():
+    player = _player()
+    player.run(max_blocks=2, sink=lambda _b: None)
+    assert player._producer is None
+    remaining = [t for t in threading.enumerate()
+                 if t.name == "sleepmix-night-render" and t.is_alive()]
+    assert not remaining
+
+
+def test_the_render_thread_stops_even_when_the_sink_dies():
+    """The consumer gives up after three consecutive sink failures. The
+    producer must not be left rendering a night nobody is listening to."""
+    def always_fails(_block):
+        raise RuntimeError("device disconnected")
+
+    player = _player()
+    player.run(max_blocks=None, sink=always_fails)
+    assert player._producer is None
+    remaining = [t for t in threading.enumerate()
+                 if t.name == "sleepmix-night-render" and t.is_alive()]
+    assert not remaining
+
+
+def test_the_queue_depth_is_actually_used():
+    """It was stored and read by nothing before the producer existed."""
+    depths = []
+    ctx = _context()
+    stream = NightStream(ctx, sr=SR)
+    player = NightPlayer(stream, SilentSource(SR), SilentSource(SR),
+                         queue_depth=2)
+    assert player.queue_depth == 2
+    # A depth of zero would be a queue that can never hold anything, so it is
+    # floored rather than taken literally.
+    assert NightPlayer(stream, SilentSource(SR), SilentSource(SR),
+                       queue_depth=0).queue_depth == 1
+
+
+def test_the_speech_layer_is_mixed_in_the_consumer_not_the_renderer():
+    """The spec is explicit that the live layer is summed at the output.
+    Mixing it in the producer would make it up to ``queue_depth`` blocks —
+    thirty seconds — stale."""
+    reads = []
+
+    class RecordingSource(LoudSource):
+        def read(self, n_frames):
+            reads.append(threading.current_thread().name)
+            return super().read(n_frames)
+
+    player = _player(room=RecordingSource(SR))
+    consumer = threading.current_thread().name
+    player.run(max_blocks=3, sink=lambda _b: None)
+    assert reads, "the speech source was never read"
+    assert all(name == consumer for name in reads), reads
 
 
 def test_the_room_directory_lives_under_the_data_dir(tmp_path, monkeypatch):
