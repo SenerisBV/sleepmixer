@@ -295,16 +295,18 @@ Apple Silicon, which is not something a design document can resolve; only a
 short technical spike can. Recorded here so the next person who reaches for
 it starts with the spike rather than a spec.
 
-### Defects in the plan's own reference code, twenty-two of them across seven tasks
+### Defects in the plan's own reference code, and the pattern in them
 
 The task briefs for this branch, like Phase 1's, shipped working verbatim code
-for most tasks. Twenty-two real defects were found in that code across the
-seven implementation tasks, by implementers and confirmed independently by
-reviewers — mutation-tested against reverted copies wherever the finding
-allowed it, not merely argued. The count is not the useful part; the pattern
-is, and it repeats the lesson Phase 1 already recorded once under its own
-false-safety-proof incident: a plan document is prose with the authority of
-code and none of the checking.
+for most tasks. Real defects were found in that code across all seven
+implementation tasks — somewhere in the high teens to the mid-twenties by
+count, depending on where the line is drawn between a defect in the reference
+code, a controller ruling made mid-branch, and a test that simply could not
+fail. That line is a judgement call, not something the execution ledger
+settles on its own, so no single number is asserted here. The count was never
+the useful part anyway; the pattern is, and it repeats the lesson Phase 1
+already recorded once under its own false-safety-proof incident: a plan
+document is prose with the authority of code and none of the checking.
 
 **Some were tests asserting values that were impossible under constants
 defined in the very same file.** Task 1's fold test expected a folded value of

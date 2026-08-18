@@ -449,14 +449,24 @@ AST-walks the module and forbids `numpy`, `scipy`, `soundfile`, `pedalboard`,
 `sleepmix.audio`, `sleepmix.effects`, and every sibling that does decode audio
 (`night.pitch`, `night.prepare`, `night.palette`, `night.stream`). That is
 what lets `plan.py` import it at all: `plan.py`'s own AST guard
-(`test_plan_module_imports_no_audio`) forbids the same list, and a
-`SourceProfile`-shaped dependency that pulled in even one of those would have
-made the planner un-importable without violating the rule that keeps an
-eight-hour night plannable in microseconds. `pitch_distance` — the function
-`schedule_sources` uses to pick which source takes the stage next — is
-arithmetic over `pitch_set` tuples for exactly this reason: comparing two
-songs' tonality at plan time costs nothing because nothing about either song's
-audio is ever opened to answer it.
+(`test_plan_module_imports_no_audio`) forbids an overlapping list — not
+byte-for-byte the same set, since each guard also names a few audio modules
+specific to its own side (`plan.py`'s adds `sleepmix.disintegration` and
+`sleepmix.soundbed`; `sources.py`'s guard has no reason to, since it doesn't
+sit next to that code) — but sufficient to catch the same class of
+dependency: both forbid `sleepmix.night.pitch` and `sleepmix.night.prepare`,
+the two siblings that actually decode or separate audio, so a
+`SourceProfile`-shaped dependency pulling in either would fail `plan.py`'s own
+guard exactly as it fails `sources.py`'s, without violating the rule that
+keeps an eight-hour night plannable in microseconds. (`plan.py`'s guard did
+not originally name those two — a documentation review looking for a "forbids
+the same list" claim to check found the gap, which none of the six task
+reviews on this branch had, because checking a claim about a guard means
+reading the guard.) `pitch_distance` — the function `schedule_sources` uses
+to pick which source takes the stage next — is arithmetic over `pitch_set`
+tuples for exactly this reason: comparing two songs' tonality at plan time
+costs nothing because nothing about either song's audio is ever opened to
+answer it.
 
 **Sources take turns rather than sounding together, and the handover is
 covered by the same mechanism that produces an ordinary outliving ghost —
@@ -506,12 +516,19 @@ reason:
 
 - **The stride.** Every voice's `key` (`f"night:voice:{index}"`) — and so
   every voice's own RNG-drawn material and decay noise — comes from `index`
-  alone. If `index` advanced by two only on steps that actually paired a
-  source with a ghost, a night with no sources would still see its own voice
-  indices skip unpredictably depending on how the sources folder happened to
-  look, rekeying every voice after the first one that differed. The stride is
-  decided once, from `bool(ctx.sources)`, before the walk starts: one with no
-  sources, two with any.
+  alone. It has to be decided once, from `bool(ctx.sources)`, before the walk
+  starts: one with no sources, two with any. This is not a hypothetical
+  concern — an early version of this branch got it wrong in the other
+  direction, advancing `index` by two **unconditionally**, on every step,
+  regardless of `ctx.sources`. On a night with no sources at all — the one
+  case that is supposed to degrade to Phase 1 exactly — that rekeyed every
+  voice **uniformly**: indices ran 0, 2, 4, ... instead of 0, 1, 2, ..., so
+  every voice after the first drew from a different point in the RNG stream
+  even though the code path taken was otherwise identical to Phase 1's own
+  walk. The effect was not unpredictable — every voice moved by the same
+  fixed amount — but it was wrong, and wrong in a way no test caught until
+  someone measured the actual rendered audio against a pre-branch baseline
+  and found different noise sitting behind a code path that had not changed.
 - **Whether the four pair-only draws happen at all.** Even gating them
   correctly on `ctx.sources` being non-empty is not enough if the gate is
   re-evaluated per step rather than fixed for the walk, because the four
