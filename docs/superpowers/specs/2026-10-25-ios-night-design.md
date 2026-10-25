@@ -86,8 +86,9 @@ as for me, like endel, which it is." Don't add one.
   night is about their tracks dissolving. The Mac keeps it.
 - **Wearables and the microphone.** See goal 2. The microphone also has its
   own unresolved feedback problem, recorded in `docs/project-state.md`.
-- **App Store distribution.** It's a personal tool. See "Open questions" on
-  how it gets onto the phone.
+- **App Store distribution.** It's a personal tool, installed via Xcode or
+  TestFlight on the operator's paid developer account (see "Decisions from
+  the builder check").
 
 ## Anti-goals: it fails if…
 
@@ -274,6 +275,34 @@ busier.**
 | **Awake** (sustained movement) | "Fall back asleep" mode: births nearly stop, the bed rises to a steady cover, the brightness ceiling drops to near the night's floor, and whatever is already sounding is allowed to finish. It holds for a while after movement settles, then lets the night resume. | Lying awake at 3 AM is when the stream is most useful. The sound should be the least interesting thing in the room. |
 | **Stirring near the wake time** | The morning lift (see above). | Surface gently instead of being yanked up by the alarm. |
 
+**The morning lift, made precise (Claude's call, settled after the builder
+check).** The lift is a **mix-stage change only**: the brightness ceiling and
+bed level relax upward. It **never adds voices.** Births stay under the arc's
+density, so movement still never makes the stream busier, even in the
+morning. The lift is bounded by the arc itself: at most, the ceilings return
+to their value **one hour into the night**, not to the bedtime ceiling (0 dB,
+6 kHz), which would be nearly no bound at all. `clock.py`'s "ceilings that
+descend" rule then holds in the sense that matters: the lift only ever
+revisits a level the night already passed through. Inside the lift window,
+**the lift overrides "awake"**. Someone moving 20 minutes before their alarm
+is surfacing, not lying awake at 3 AM, and dragging them back down then is
+the wrong job. The swept-steering test asserts the lift's bound across the
+whole window.
+
+**Other steering rules settled after the builder check (Claude's calls):**
+- Restlessness never suppresses a voice that covers a handover
+  (`HANDOVER_COVER_S`). A ghost's hand-off is exactly the continuity that
+  keeps the night from having seams.
+- A gated birth is decided by the trace value at that voice's *birth* block,
+  so re-planning the same window in a later block (the planner re-walks from
+  voice 0) gives the same answer.
+- `source_id` must stay stable when a file moves from `Inbox` to
+  `Originals`. It's derived from content, not path, for kits.
+- The phone keeps a local copy of every kit it has seen, so iCloud offloading
+  a file can never leave a night without its material.
+- Location for weather and sunrise comes from the phone, asked for once,
+  with the existing neutral fallback if it's refused.
+
 Every parameter moves **slowly**: changes are smoothed over minutes, not
 seconds, and the "awake" mode eases in and out. A sudden change in response to
 a sudden movement is itself a sudden sound.
@@ -408,18 +437,51 @@ lists:
 
 ## Order of work (suggested)
 
-1. **Spike: motion overnight.** A throwaway iOS app that plays audio in the
+1. **Spike: motion overnight**, run alongside step 2 (see "Decisions from
+   the builder check"). A throwaway iOS app that plays audio in the
    background and logs the accelerometer all night, with the phone on the
    mattress and the speaker playing. It answers whether background motion
    reads survive a whole night, how much speaker vibration leaks through,
-   and the battery cost. If it fails, the rest of the plan changes, so it
-   comes first.
+   how much a second sleeper registers, and (for the record) the battery
+   cost.
 2. **Python: steering, kit export, watcher, night log replay**, with tests.
 3. **Swift: the port**, plan parity first, then audio.
 4. **The app: collection, Start, steering, morning, log.**
 5. **Sleep on it.** It isn't done until the operator has slept a few nights
    with it and the placeholders have been heard.
 
-## Open questions for the operator
+## Decisions from the builder check (the operator's answers, 2026-10-25)
 
-*(Filled in after the builder check.)*
+- **Distribution: a paid Apple Developer account.** The operator has one or
+  will get one. So the app installs once and stays installed (no 7-day
+  expiry), and it can use the **iCloud capability with its own container**.
+  `Sleepmix/` is that container's Documents folder, visible in Finder and
+  Files as an iCloud Drive folder. Install is via Xcode or TestFlight to the
+  operator's own phone. No App Store.
+- **Steering is a layer, not a prerequisite.** If the motion spike fails, the
+  operator still wants the app without steering. It's tracks dissolving and
+  a different night every time, an Endel replacement either way. So **the
+  spike runs alongside the rest, not in front of it.** Kit export, the
+  watcher and the Swift port don't wait on it. Steering is built so that
+  "no steering" is a first-class state (the neutral trace), and the app is
+  complete and useful in that state.
+- **The bed is sometimes shared.** The phone can't tell whose movement it's
+  feeling. So: (a) a per-night **"Don't steer tonight"** switch on the
+  collection screen, remembered like the selection, which plays the night
+  with the neutral trace; (b) the motion spike also measures how much a
+  second sleeper's movement registers from the operator's side of the bed;
+  (c) the night's own baseline normalisation is per night anyway, so a
+  shared night doesn't poison the next solo one.
+- **The phone is a recent iPhone, plugged in overnight.** Battery isn't a
+  design constraint, and the spike doesn't need to pass a battery budget,
+  only record it. Memory still matters: an app in the background gets far
+  less than a Mac process, and the current renderer holds whole voices
+  (about 53 MB on average, up to 87 MB, in a 256 MB cache, with a brief peak
+  during decay of many times a voice's size). The builder should measure the
+  port's peak against the iOS background limit early, during the Swift port,
+  and restructure to chunked voices only if measurement says it's needed.
+
+The suggested order of work becomes: **(1)** Python kit export and watcher,
+plus the motion spike alongside; **(2)** Swift port and app without steering,
+which is the first milestone: a usable app; **(3)** Python steering, then its
+port; **(4)** sleep on it.
