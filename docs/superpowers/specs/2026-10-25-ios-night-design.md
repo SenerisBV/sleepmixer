@@ -1,6 +1,6 @@
 # Plan 6: the night in your pocket — an iPhone app, steered by how you sleep
 
-**Status:** design drafted 2026-10-25, awaiting the operator's approval. Not
+**Status:** design approved by the operator 2026-10-26. Not
 yet planned.
 
 Plans 5.1 and 5.3 (`2026-08-18-night-stream-design.md`,
@@ -408,6 +408,34 @@ golden values in the Python tests.
 - **The phone runs out of kits partway through, or a loop fails to decode**:
   that voice is silent, and the synthesized voices carry on. The same
   degradation as the Mac's.
+
+## Later: a bundled library (the operator's idea, deferred on purpose)
+
+On approving this design, the operator said the friction of loading songs is
+the part they're "not thrilled about". Endel ships its own library of sounds
+for its collages, and this app could do the same by **coming preloaded with
+kits**, so a first night needs nothing dropped into any folder. They called it
+"not an immediate blocker — we can build as-is and see if we want to add that
+later." So it's out of this plan's scope, and it's written down here so
+nobody forgets it.
+
+What this design already gives that idea for free, so it costs little later:
+
+- **An empty collection is already a complete night.** With no sources, the
+  planner falls back to Phase 1's synthesized drones and noise bands, which
+  were listened to and work. The app should treat zero kits as a normal
+  state, not an error, and that is the floor any library builds on.
+- **A bundled kit is just a kit.** The kit format (section 2) is
+  self-contained with relative paths, so a library is a set of kit folders in
+  the app bundle, read by the same code as iCloud kits and marked read-only
+  in the collection. They'd be prepared once on the Mac by the same Python
+  preparer.
+- **What it would need that this plan doesn't decide:** where the recordings
+  come from (field recordings, public-domain or CC0 material, or the
+  operator's own), and their licensing. The "Music you didn't make" section
+  of the README already limits renders of others' music to private
+  listening, and anything shipped inside the app has to be material that's
+  clear to ship.
 
 ## Placeholders (to be tuned by ear, recorded in project-state when built)
 
