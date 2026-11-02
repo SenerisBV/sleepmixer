@@ -1995,6 +1995,45 @@ for the rule is the one the Python engine learned from its excerpt tools: a
 tuning tool that builds a *slightly different* engine from the app's is a tool
 that tunes the wrong thing.
 
+### Tone dials, power-preserving proportion, and the warmth scene (Plan 7b)
+
+Plan 7b changed what two of the scenes are made of without changing the
+engine's rules: it is still exact-seekable, factory-built and Foundation-pure
+in `NightPlan`. See `docs/project-state.md` ("Plan 7b") for the values.
+
+- **Tone dials.** `WarpDepth` gained `ring`, `softness` and `vibrato`, each
+  0...1. They are warp values like the other four, so they obey the same rule:
+  a note reads them once, at its birth, and keeps them. The chimes turn them
+  into a decay time constant (ring), a raised-cosine attack length (softness)
+  and an amplitude pulse (vibrato), all in seconds and Hz so nothing depends on
+  the sample rate. Scenes without notes ignore them. They are level-neutral by
+  construction (the note's gain carries `sqrt(1.4/τ)` and `1/(1 - d/2)`),
+  because the spec says a dial must not make a scene louder, and measured at
+  +0.02 dB each.
+- **Power-preserving proportion.** `Proportion.powerPreservingGains` keeps the
+  original shape (favoured element +6p dB, the rest -12p dB) and rescales it so
+  `Σ (base·g)²` equals `Σ base²`. "Different proportions" now reweights a
+  note's spectrum without changing its loudness. The chimes and the warmth use
+  it; the waves still use the plain `gainsDB` path and so still get louder with
+  proportion. The chimes also apply a felt-mallet rolloff to the base
+  amplitudes first, so favouring a high partial cannot make a high note bright.
+- **The warmth scene is additive on purpose.** The spec wants the low chords
+  "lowpassed around 380 Hz". The obvious build is a saw into a lowpass filter,
+  and that is what the waves do for their own filters. But a stateful filter
+  carries history from one sample to the next, so a seek into the middle of a
+  chord would start with the wrong filter state and differ from continuous
+  playback until it settled; an exact seek would be lost, and the chord can
+  last tens of seconds. Instead each voice is a sum of sine harmonics weighted
+  by the filter's magnitude response, `1/sqrt(1 + (f/380)^8)`, which is an
+  analytic function of frequency alone, and each voice's phase is a closed form
+  of the absolute frame (including the slow pitch drift, whose integral is
+  closed-form). Every sample is a pure function of the absolute frame, so a
+  seek is bit-identical to a continuous render, which is the seekability
+  property this engine rests on. The price is that the filter's phase response
+  and any transient behaviour are not reproduced (there are none to reproduce:
+  voices start at phase 0 under a swell), and the harmonic loop costs more than
+  one biquad per voice. The cutoff is in Hz, so it holds at 48 kHz.
+
 ### What this is not
 
 There is no real-time rendering yet. The chain is rendered whole, in 4096-frame

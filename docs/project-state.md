@@ -19,8 +19,10 @@ so it can grow into it.
 - **Design:** `docs/superpowers/specs/2026-11-02-am-night-design.md`,
   approved 2026-11-02, on branch `feat/am-night`. **Plan 7a (two scenes through
   the channel, a Mac audition tool) is built and tested; the operator has not
-  listened yet.** Everything after 7a (more scenes, the planner, the voice
-  layer, the app) is not planned or built.
+  listened yet.** Plan 7b (soft-mallet chimes, three tone dials, a low-warmth
+  scene, after the operator's first listen) is built too; the new set awaits
+  them (section "Plan 7b"). Everything after that (more scenes, the planner, the
+  voice layer, the app) is not planned or built.
 - **Superseded, never built:** Plan 6 (`2026-10-25-ios-night-design.md`)
   except the sections Plan 7 keeps by name (steering by movement, the
   morning lift, audio-session rules, the night log, the builder-check
@@ -33,8 +35,8 @@ so it can grow into it.
   gates never shift the RNG, excerpt tools build the engine exactly as the
   app does).
 - **Placeholders:** Plan 7 lists its own (section "Placeholders"). Plan 7a's
-  are copied here, by name and value, in the section below; later plans add
-  theirs.
+  and 7b's are copied here, by name and value, in their sections; later plans
+  add theirs.
 
 Everything below the Plan 7a section describes the Python engine and the web
 mixer as built through Plan 5, Phase 3.
@@ -202,7 +204,12 @@ fade rate 0.05 Hz, squash 0.5. The clamps are: low 40...1000 Hz, high
 corner), hiss and crackle -96...-20 dB, depth 0...1, rate 0.005...1 Hz, squash
 0...1. `.early` is the only preset; the later-night presets don't exist yet.
 
-**Chimes** (`NightDSP/Scenes/ChimesScene.swift`):
+**Chimes: superseded by Plan 7b (kept as history).** The bell recipe
+described in this paragraph was removed in 7b; see "Plan 7b" for what the
+chimes are now. Only the grid values (cell, offset, density, pitch set, root
+range, lookback) carried over.
+
+**Chimes (the 7a bells)** (`NightDSP/Scenes/ChimesScene.swift`):
 *(brief)* cells 2.2 s; a strike exists when `unit < 0.6/(1+2·slowness)` and
 sits 0...1.6 s into its cell; slowness is read once at birth; the pitch is a
 two-octave major-pentatonic degree `[0,2,4,7,9,12,14,16,19,21]` over a
@@ -461,6 +468,281 @@ with `swift run -c release nightctl audition <scene> ... --play`). Plan 7a is
 done when the operator has listened and said what to change; the placeholders
 above are the list of what they can ask to change.
 
+
+## Plan 7b: soft mallets and low warmth
+
+**Status (2026-11-02): built and tested; the new listening set is waiting for
+the operator.** Plan 7a's first listening round told us the chimes were a
+risk, and Plan 7b is the answer to it. The story (the operator's verdicts on
+7a, the three throwaway rounds, the station-chime quote "like chimes they do at
+train stations before an announcement", the felted-mallet reference "there's no
+initial metallic ting when the note starts … but not staccato", and what was
+measured from that reference) is in the spec, section **"What listening taught:
+soft mallets, not bells (2026-11-02)"**, and is not repeated here. The short
+version of the consequence: the bell recipe is gone, the chimes are now soft
+bars, the warm low end the operator loves is its own scene, and three new
+dials let them make a note longer, softer or wavering.
+
+**The milestone is not done when the tests pass; it is done when they have
+listened.** Nobody here has played any of this, and nothing below describes how
+it sounds. All the numbers are measurements and invented values.
+
+**What shipped** (branch `feat/soft-mallet-chimes`, plan
+`docs/superpowers/plans/2026-11-02-am-night-7b-soft-mallets-and-low-warmth.md`):
+
+- **Three tone dials** on `WarpDepth`: `ring`, `softness`, `vibrato`, each
+  clamped to 0...1, with `nightctl` flags `--ring`, `--softness`, `--vibrato`
+  (default 0; out-of-range input is rejected with a "must be" message before
+  anything is written). They are frozen per note at its birth, like the other
+  warp values; scenes without notes ignore them.
+- **Chimes rebuilt as soft-mallet bars** (`ChimesScene`): a fundamental with a
+  faint ×4 and a fainter ×10, each overtone dying faster, no mallet noise, a
+  raised-cosine soft start. Same grid, density, pitch set and seekability as
+  before; exact seeks still hold, now including into a long ring.
+- **Power-preserving proportion** (`Proportion.powerPreservingGains`) for the
+  chimes and the warmth: the favoured element still gets +6p dB and the others
+  -12p dB, then the lot is rescaled so the note's power is unchanged. The
+  waves do not use it (see "What 7b did not touch").
+- **A new scene, `LowWarmthScene`** (`nightctl audition warmth`): slow low
+  chords, each note a slightly detuned pair, lowpassed around 380 Hz, swelling
+  in over seconds. Scene name `warmth`, `SceneKind.warmth`, one arm in
+  `NightFactory`.
+- **The listening set**: `swift/listening/render.sh` now renders ten files
+  (the four waves, four soft chimes and two warmth). WAVs and
+  `measurements.txt` are git-ignored; the script is the record.
+
+**Test count: 104 tests, all passing** with `cd swift && swift test -c release`
+(NightPlan 9, NightDSP 90 in 7 suites, NightCLI 5; parameterised tests count
+once per function). Plan 7a ended at 80. No known-issue markers remain in the
+suite, by ruling: a known issue is a test that cannot fail.
+
+### The measurement table
+
+Produced by `swift/listening/render.sh`: seed 1, 60 s, 44.1 kHz, levels after
+the master guard. "sleepy" is `--ring 1 --softness 1`; "deep" is `--ring 1
+--softness 1 --vibrato 1 --distance 0.6 --slowness 0.5`; "nochannel" is plain
+with `--no-channel`. The waves rows are bit-for-bit the 7a numbers (the waves
+were not touched), repeated so the table is the whole set.
+
+| File | RMS (dB) | Peak (dBFS) | Centroid (Hz) |
+|---|---|---|---|
+| `chimes-soft-plain.wav` | -27.5 | -12.9 | 904 |
+| `chimes-soft-sleepy.wav` | -26.5 | -15.2 | 638 |
+| `chimes-soft-deep.wav` | -37.0 | -21.3 | 1040 |
+| `chimes-soft-nochannel.wav` | -21.1 | -7.0 | 493 |
+| `warmth-plain.wav` | -30.5 | -17.1 | 253 |
+| `warmth-nochannel.wav` | -24.4 | -10.1 | 165 |
+| `waves-plain.wav` | -36.8 | -20.4 | 977 |
+| `waves-mid.wav` | -37.4 | -20.1 | 939 |
+| `waves-far.wav` | -36.6 | -17.8 | 1033 |
+| `waves-nochannel.wav` | -32.5 | -14.9 | 339 |
+
+Measurements, not verdicts. Two things the table does show: the warmth peaks
+about 3 dB lower than the chimes without the channel (-10.1 against -7.0 at
+seed 1; the long-run figures are -10.5 against -6), which is a decision
+recorded below, and its centroid is low (165 Hz without the channel). The
+channel again lifts the centroid on both new scenes (493 to 904 Hz on the
+chimes, 165 to 253 Hz on the warmth), for the reason already given in the 7a
+table: its band removes body and adds hiss.
+
+### Every new placeholder, by name and value
+
+**Every number below is invented or interpreted and none has been heard.**
+*(brief)* marks a value from the plan or the spec; the rest were chosen by an
+implementer or the controller. File paths are under `swift/Sources/`.
+
+**The dials** (`NightDSP/Scenes/ChimesScene.swift`): *ring* is the fundamental's
+decay time constant, 1.4 s at 0 to 4.2 s at 1, linear *(brief)*. 1.4 s is the
+spike's "close to the reference" and 2.8 s was "sleepier"; **4.2 s is a
+placeholder ceiling**. *Softness* is the raised-cosine attack, 0.035 s at 0 to
+0.12 s at 1, linear *(brief)*; the spike measured 35 and 80 ms, **0.12 s is a
+placeholder ceiling**. *Vibrato* is an amplitude pulse at 4.5 Hz, depth
+`0.18 × vibrato` *(brief)*: the envelope is `1 - d·(0.5 - 0.5·cos θ)`, so it
+dips from full level by up to `d`, never above it. Its phase at birth is drawn
+per note (stream 6) so notes don't pulse in step. The level is multiplied by
+`sqrt(1.4/τ)` (so a longer ring does not make the scene louder: measured +0.02
+dB at ring 1) and by `1/(1 - d/2)` (so vibrato does not either: +0.02 dB). The
+brief's rule is ±1 dB.
+
+**The bar** (`ChimesScene`): partial ratios `[1, 4, 10]`, base amplitudes
+`[1, -24 dB, -36 dB]` *(brief, the spec's sentence)*. The partial at ×k decays
+with time constant `τ/sqrt(k)`, so the ×4 dies in half the fundamental's time
+and the ×10 in about 0.32 of it (invented: the spec says only "dying faster").
+A note ends after `min(7τ, 58 s)` (7 constants is -61 dB; 58 s keeps it inside
+the 60 s lookback) and fades with a raised cosine to true zero over its last
+`min(4 s, 25% of its life)`. These are the 7a element-cap rules carried over.
+Partials at or above 0.45 of the sample rate are dropped. Root log-uniform
+over 196...392 Hz, the two-octave pentatonic set, a 3-semitone drop at slowness
+1, cell 2.2 s, strike present when `unit < 0.6/(1+2·slowness)`, 0...1.6 s into
+its cell, lookback 60 s: all unchanged from 7a. Random streams: 0 root, 1
+existence, 2 offset, 3 degree, 4 favoured partial, 6 vibrato phase; **stream 5
+(the bells' mallet noise) is retired, not reused.**
+
+**The felt-mallet rolloff** (invented by ruling, see below): each partial's
+base amplitude is multiplied by `1/sqrt(1 + (f/2000)^4)` at its actual
+frequency (a 4th-order magnitude, corner **2000 Hz**), *before* proportion's
+power is redistributed. The levels this leaves, relative to the fundamental
+(static, before the decay bias):
+
+| Fundamental | ×4 | ×10 |
+|---|---|---|
+| 164.8 Hz (lowest note) | -24.05 dB | -37.65 dB |
+| 196 Hz | -24.10 dB | -38.84 dB |
+| 440 Hz (A4) | -26.03 dB | -49.87 dB |
+| 1318.5 Hz (highest note) | -40.18 dB | -68.01 dB |
+
+**Chimes master gain 0.32**, chosen so a plain passage peaks near -6 dBFS (the
+median 600 s peak over 20 seeds is -6.1 dBFS, range -6.6 to -5.5; the first
+60 s median is -6.7). The analytic peak bound at this gain is 0.8685, maximised
+over ring {0, 0.5, 1}, softness 0, slowness 0, proportion 1, vibrato at its
+crest and the fundamental over 164.8...1318.5 Hz, including birth offsets and
+every note that can overlap. Blocks of 256 absolute frames.
+
+**Low warmth** (`NightDSP/Scenes/LowWarmthScene.swift`): *(brief)* chords on a
+12 s grid; each swells in over 3 s with a raised cosine and out over 3 s, so
+consecutive chords overlap for 6 s (a chord sounds from `12i - 3` to
+`12(j+1) + 3`); slowness lets a chord hold for more cells (a new chord is born
+in a cell with probability `1/(1+slowness)`; cell 0 always); lowpass **380 Hz**,
+a 4-pole Butterworth magnitude `1/sqrt(1 + (f/380)^8)`; a pair per note at
+**±5 cents**, each voice drifting by up to **±4 cents** through
+cosine-interpolated knots every **10 s**. *Invented:* the root is one of MIDI
+29...36 (F1 to C2, about 43.7 to 65.4 Hz) per seed; the chord is one of the
+diatonic triads I, vi, IV, V, always in root position, voiced root, fifth, then
+the third an octave up (three notes); each voice is an additive band-limited
+saw (amplitude `1/k` on harmonic k, times the lowpass), harmonics kept while
+below 0.45 of the sample rate and skipped once under -60 dB (an amplitude of
+1e-3 against an unfiltered fundamental of 1); every voice starts at phase 0 at
+its chord's birth; harmonic weights are fixed at birth from the detuned
+frequency (the drift moves the pitch, not the weighting); the drift's frequency
+ratio is linearised (error under 0.001 cent). Streams: 40 root, 41 chord, 42
+birth, 43 drift, 44 favoured note. Proportion's power is preserved over each
+note's RMS, so a favoured low root is not louder than a favoured high third.
+**Master gain 0.03**: the bound sums every partial at its crest across two
+overlapping chords (14.86 for the worst chord, 29.72 for two), and 0.03 gives
+0.8916 (-1.0 dBFS). That bound is conservative by about 3x (9.5 dB): the
+measured 600 s peak is -10.5 dBFS and the RMS about -24 dBFS.
+
+### What was removed
+
+The bell recipe and its constants are gone from `ChimesScene`: the strike
+(bandpassed noise, attack 0.02 s, decay 0.08 s, band centre 2x the fundamental
+capped at 2500 Hz, Q 1.2, level 0.3, length 0.98 s), the body partials at
+`[1, 2, 2.76, 4.07]` with decays `[6, 3, 2, 1.2]·(1+2s)` and amps `[1, 0.5,
+0.35, 0.2]`, the bloom (attack 1.5 s, decay `12·(1+s)` s, amps `[0.35, 0.25]`),
+the beating pair (±0.35 Hz, decay 8 s, attack 0.3 s, amps `[0.2, 0.2]`), the
+bells' master gain 0.1 and mallet stream 5, and the slowness stretch on the
+decays (slowness now thins and lowers the notes only; it no longer lengthens
+them, because ring is the dial for that). **The chimes paragraph in "Every
+placeholder, by component" under Plan 7a is therefore history, not a list of
+what is in the code**; it is marked as such there. Nothing else in 7a's
+placeholder list changed.
+
+**The 7a chimes measurements no longer describe the current chimes.** The
+chimes rows of the 7a table and the sentences built on them (the "far" chimes'
+centroid, the fragmentation-1 centroid, "the channel takes about 5 dB off the
+chimes' RMS", the chimes' proportion and distance level figures in "Before the
+planner moves anything", the chimes peak figure and the chimes element-cap
+ruling) were measured on bells that no longer exist. Where they are quoted
+above they stand as a record of the first listening set, not as facts about the
+code. The waves rows stand.
+
+### The rulings and why
+
+- **A felt-mallet rolloff on the partials (the departure to flag).** Making
+  the ×4 favoured by proportion at +6 dB on the top note put 11.1% of the
+  energy above 2 kHz (the test wanted under 1%), because that partial sits at
+  5.3 kHz and power-preserving rescaling scales all three partials equally, so
+  it cannot help. A ×4 at 5 kHz and -6 dB is exactly the thin, tinny alert the
+  operator named, so the controller ruled that a felt mallet should not excite
+  high partials, and applied the rolloff above to the base amplitudes before
+  proportion. With it, the top note's ×4-favoured energy above 2 kHz is
+  0.30%. **Cost: the ×10 overtone is about -44 dB in the mid-range and about -50 dB at
+  A4, against the spec's "about -36 dB"** (it is -37.7 dB at the lowest note and
+  -68 dB at the highest, see the table). The reference recording showed its
+  strongest overtone at -20 to -27 dB, which the ×4 still meets at A4
+  (-26 dB), so the bars are a touch purer than the approved spike in the upper
+  range and proportion has less effect on high notes. **This is a deliberate
+  departure from the spec's sentence, to be flagged for the operator's next
+  listen: if they miss the glint, raise `malletCornerHz` (2000 Hz).**
+- **Softness's rise threshold is 0.55, not 0.6.** A raised cosine's own 10 to
+  90% rise is 0.590 of its length, so the plan's `rise >= 0.6·attack` could
+  not pass; the test asks for 0.55 (measured 0.581, a thin margin). No cost.
+- **No known-issue markers may stay in the suite.** Three had been recorded
+  while a briefed threshold could not be met; after the rolloff and the 0.55
+  threshold none remain.
+- **The corrected, stricter peak bound and master gain 0.32.** The plan's
+  formula for the chimes' bound was not conservative; the implementer's version
+  includes birth offsets and maximises over the fundamental. No cost: it is
+  stricter than briefed.
+- **Warmth keeps the loose peak bound.** The briefed bound is about 3x looser
+  than any real peak, so warmth peaks near -10.5 dBFS where the plain chimes
+  peak near -6. Kept because the bound is truly conservative and balancing
+  levels across scenes is the planner's job (already on 7a's list). **Cost:
+  warmth is quieter than the chimes until the planner mixes them**; a tighter
+  bound (one chord at its crest, the other at its RMS) would allow about 2x the
+  gain.
+- **Chord repeats stay (about 25%).** Each cell draws from all four triads, so
+  about a quarter of chords repeat the one before. A repeat overlaps itself as
+  a slow beating swell bounded by the peak bound, not a sudden change. Kept as
+  briefed and **left as a listening item**; cost if wrong: an occasional
+  static-sounding transition, fixed by a recursive no-repeat draw.
+- **Work in place on the branch.** `feat/soft-mallet-chimes` was made for the
+  plan and the tree was clean; no worktree. No cost.
+
+### Known limitations and deferred items
+
+- **The chimes' peak bound holds for constant dials only.** It evaluates
+  every overlapping note at one ring value. The review found that a fast drop in
+  ring could reach about 1.13x the bound (the mechanism was not worked out
+  further). Nothing varies the dials over time yet; the master guard sits above
+  it regardless. The code comment should say "constant dials" (a deferred
+  edit), and the planner must respect it.
+- **Warmth is quieter than the chimes** (about -10.5 against -6 dBFS peak). A
+  level decision for the planner, as above.
+- **About 25% of warmth chords repeat** the previous chord. A listening item.
+- **The waves still use non-power-preserving proportion.** The 7a finding (I1
+  in "Before the planner moves anything": proportion 1 raises the waves by
+  about +4 dB peak and +2.3 dB RMS) stands for them. 7b fixed it only for the
+  chimes and the warmth.
+- **The AM channel's settings were tuned against the old bells.** The `.early`
+  preset (and the channel's level choices in 7a) were chosen with the bell
+  chimes as the source and have not been re-listened to with soft chimes or the
+  warmth. They await the operator's next listen; the numbers are unchanged.
+- **The warmth's chord ignores warp today** (`chord(...warp:)` takes it and
+  does nothing with it; no dial moves the pitch). Documented in code.
+- **Test hygiene, deferred:** `partialsAreAPureBar` measures at 110 Hz, below
+  the lowest playable note (164.8 Hz); move it to the lowest fundamental or add
+  an A4 case that pins the rolloff. A note's life (`min(7τ, 58)`) and its fade
+  are untested at scene level, and the vibrato phase source is untested.
+  `softnessSetsTheAttack`'s margin is thin (0.581 against 0.55).
+  `toneDialsClamp`'s setter checks one bound per field. `swellIsSmooth`
+  evaluates every span per frame. `cutoffIsInHz` compares exactly, which would
+  break if the 0.45·sr ceiling ever bound at 44.1 kHz.
+- **For iOS:** each chime voice makes three small heap allocations per block,
+  (a controller-noted item); the same class of work as the 7a list of real-time
+  hazards, still to do before the app. The warmth's allocations were not
+  audited.
+- **Still true from 7a, and not touched:** no real-time engine, no planner, no
+  time-varying warp in the tool, no later-night channel presets.
+
+### What 7b did not touch
+
+The waves, `WavesScene`, `Distance`, `Fragmenter`, the reverb and the channel
+are byte-for-byte as they were (the waves renders match 7a's to the printed
+digit). The channel's chain position, the single factory and `NightPlan`'s
+Foundation-only rule are unchanged.
+
+### The listening judgement is outstanding
+
+Ten files are in `swift/listening/` (`render.sh` regenerates them). Things to
+listen for, in the order they would show: whether the new chimes lose the
+station-chime alert at the top of the range; whether the sleepy and deep
+versions are what "longer, softer, wavering" means to the operator; whether the
+×10 departure above costs them the glint; whether the warmth is the warm low end
+they meant, and whether its repeated chords and its quiet level bother them;
+and whether the channel still suits either. To vary one by ear:
+`swift run -c release nightctl audition chimes --ring 1 --softness 1 --vibrato 0.5 --play`
+(or `warmth`; all three dials are `0...1`).
 
 ## How the Python engine got here
 
