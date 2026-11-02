@@ -1,6 +1,6 @@
 # Plan 8: Esoterica — a collection of found recordings that prime the mind for dreams
 
-**Status:** draft, 2026-11-02, builder check done and answered. Awaiting the operator's approval.
+**Status:** design approved by the operator 2026-11-03 ("Everything else is good", with the no-intros rule added). Not yet planned.
 
 **Amends** `2026-11-02-am-night-design.md` (Plan 7), section "Voices". That
 section's voice layer, which plays spoken word from pasted links (podcast
@@ -138,6 +138,12 @@ serious and essential, approached with play but never with irony.
 - **It's frightening.** The "is this person OK?" flicker is allowed and
   wanted. Horror, violence, menace, distress, self-harm, and anything that
   could wake someone are not.
+- **It introduces itself.** On approval the operator said: "we don't need
+  intros or table-setting, just go into it." No recording opens with a title,
+  a welcome, a framing narrator, or scene-setting ("this recording was found
+  in…"). Every recording starts *in medias res*, mid-thought or even
+  mid-sentence, and its first passage is written that way. The source-character
+  treatment is sound only, and nothing about it is ever spoken.
 - **It concludes.** No recording wraps up, summarises or signs off. The last
   passage trails off mid-thought.
 - **It impersonates a real person.** No real person's voice is cloned, and no
