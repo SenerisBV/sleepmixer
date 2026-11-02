@@ -1,6 +1,6 @@
 # Plan 7: the AM night — scenes that become their own memory, and a voice to fall asleep to
 
-**Status:** draft, 2026-11-02. Awaiting the operator's approval.
+**Status:** design approved by the operator 2026-11-02 ("Yes this all sounds great"). Not yet planned.
 
 **Supersedes** most of `2026-10-25-ios-night-design.md` (Plan 6) and all of
 `../plans/2026-10-26-ios-night-6a-kits-and-inbox.md` (Plan 6a). What carries
@@ -392,6 +392,27 @@ holds across every combination of steering inputs.
   domain isn't EU public domain, so items whose status is murky are left out.
   (For a personal tool installed from Xcode this is low-stakes, but the list
   should still be clean.)
+- **Classic audiobooks lead the starter list** (the operator's suggestion,
+  after approval: "public domain audiobooks, perhaps of classics, might be
+  good for starter seeding"). Rules for choosing them (*Claude's calls*):
+  - **Author died more than 70 years ago**, so the text is public domain in
+    the Netherlands as well as the US. Translations count separately: use
+    old translations (for example George Long's 1862 *Meditations*), not
+    modern ones.
+  - **LibriVox recordings only**, which LibriVox dedicates to the public
+    domain.
+  - **Solo readers, not group recordings.** LibriVox's collaborative
+    recordings change reader every chapter, and a new voice with a new level
+    and accent is exactly the kind of jolt the night is built to avoid.
+    Prefer well-regarded solo readers.
+  - **Gentle and low-stakes.** Digressive, pastoral, reflective or comic
+    books suit sleep. Thrillers, horror and cliffhangers don't. Suggested
+    seeds (for the builder to verify and complete): *The Wind in the
+    Willows*, *Walden*, *Three Men in a Boat*, *The Natural History of
+    Selborne*, *The Voyage of the Beagle*, *Moby-Dick* (long and
+    wonderfully digressive), *Pride and Prejudice*, *The Secret Garden*,
+    *Anne of Green Gables*, *Meditations* (Long translation). Leave out
+    *Dracula*, Poe and anything else written to keep you awake.
 - **Alan Watts**, whom the operator named, is still under copyright and so
   isn't in the starter list. His official podcast is a public feed, so he's
   the obvious first link the operator adds.

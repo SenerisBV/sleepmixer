@@ -1,7 +1,9 @@
 # Plan 6: the night in your pocket — an iPhone app, steered by how you sleep
 
-**Status:** design approved by the operator 2026-10-26. Not
-yet planned.
+**Status:** design approved by the operator 2026-10-26. **Superseded
+2026-11-02** by `2026-11-02-am-night-design.md` (Plan 7), which keeps this
+document's steering, morning, audio-session, night-log and builder-check
+sections by name and drops the rest. Never built.
 
 Plans 5.1 and 5.3 (`2026-08-18-night-stream-design.md`,
 `2026-08-18-night-ghost-design.md`) built a night-long stream on the Mac: an

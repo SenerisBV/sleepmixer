@@ -1,5 +1,42 @@
 # Project state
 
+## Where the project is heading (2026-11-02): Plan 7, the AM night
+
+**Read this first.** On 2026-11-02 the operator redirected the project. The
+night is no longer made from their songs. It's made from a built-in library
+of **generated scenes with an AM-radio character** (rich round chimes,
+pixellated waves, sleeping on a train, wind through a long vent, carolers,
+someone upstairs practicing), which **warp across the night into their own
+descendants**: further away, slower, in pieces, out of proportion, "like
+dreams replay experience incompletely and with different proportions, and
+likewise, a warm memory the further you get from it." The operator's own
+contribution is a **spoken-word voice from a pasted link** (podcast feeds,
+audiobooks, speeches) that starts clear and drifts to a murmur. Their
+"number 1 sleep request", a late-night call-in show with a soothing overnight
+DJ, is deferred until they've thought about how; the voice layer is built
+so it can grow into it.
+
+- **Design:** `docs/superpowers/specs/2026-11-02-am-night-design.md`,
+  approved 2026-11-02, on branch `feat/am-night`. Not yet planned or built.
+- **Superseded, never built:** Plan 6 (`2026-10-25-ios-night-design.md`)
+  except the sections Plan 7 keeps by name (steering by movement, the
+  morning lift, audio-session rules, the night log, the builder-check
+  decisions), and Plan 6a (kits and the drop folder) in full.
+- **How it's built:** one Swift package (`NightEngine`) shared by a Mac
+  tuning tool and the iPhone app. The Python engine below is **not ported**;
+  it stays in the repo, working and untouched, as the reference for the
+  rules that carry forward (nothing that goes wrong makes a sound, ceilings
+  only descend, no transients, a planner with no audio imports, steering
+  gates never shift the RNG, excerpt tools build the engine exactly as the
+  app does).
+- **Placeholders:** Plan 7 lists its own (section "Placeholders"). They'll be
+  copied here, by name, as each one lands in code.
+
+Everything below this section describes the Python engine and the web
+mixer as built through Plan 5, Phase 3.
+
+## How the Python engine got here
+
 Status as of the end of the `feat/arrangement` branch (Plan 4a of the
 arrangement design, all 7 tasks complete), on top of `feat/finishing-touches`
 (Plan 3g), `feat/legibility` (Plan 3f), and the `feat/presets` branch (Plan 3d

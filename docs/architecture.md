@@ -7,6 +7,13 @@ that over HTTP, and — as of Plan 3a, with a mixer added by Plan 3b — the
 frontend that talks to that server. See `docs/project-state.md` for what each
 plan actually shipped.
 
+**Coming next, not built yet:** Plan 7
+(`docs/superpowers/specs/2026-11-02-am-night-design.md`) moves the night
+into a new Swift package shared by a Mac tuning tool and an iPhone app. It
+doesn't port this codebase; it restates the night's invariants (pure
+planner, descending ceilings, no transients, silent failure) for the Swift
+engine. This document will gain a section for it as it's built.
+
 ## The load-bearing property: decay is a pure function of progress
 
 Everything interactive in this codebase rests on one fact about
