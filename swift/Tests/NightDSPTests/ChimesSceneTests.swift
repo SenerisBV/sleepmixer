@@ -357,6 +357,8 @@ private func tingRatio(_ note: [Float], sr: Double, skip: [Double] = [], guardHz
             withKnownIssue("×4 favoured at proportion 1 puts ~11 % of the top note above 2 kHz") {
                 #expect(ratio < 0.01, "favoured \(favoured): \(ratio * 100)% above 2 kHz")
             }
+            // Still guarded against getting worse: measured 11.1 %.
+            #expect(ratio < 0.15, "favoured \(favoured): \(ratio * 100)% above 2 kHz (measured 11.1 %)")
         } else {
             #expect(ratio < 0.01, "favoured \(favoured): \(ratio * 100)% above 2 kHz")
         }
