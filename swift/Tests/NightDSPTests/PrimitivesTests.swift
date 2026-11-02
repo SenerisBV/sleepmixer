@@ -65,6 +65,60 @@ private func filtered(_ f: Biquad, _ x: [Float]) -> [Float] {
         #expect(rel > -75 && rel < -45, "tail relative \(rel) dB")
     }
 
+    private func impulseResponse(sr: Double, decay: Double, seconds: Double) -> [Float] {
+        var r = Reverb(sampleRate: sr, seed: 7)
+        r.decaySeconds = decay
+        let n = Int(seconds * sr)
+        return (0..<n).map { r.process($0 == 0 ? 1 : 0) }
+    }
+
+    @Test func reverbDecayChangesTail() {
+        let sr = 44100.0
+        let short = impulseResponse(sr: sr, decay: 1, seconds: 2.2)
+        let long = impulseResponse(sr: sr, decay: 3, seconds: 2.2)
+        let a = rms(short[Int(1.9 * sr)..<Int(2.1 * sr)])
+        let b = rms(long[Int(1.9 * sr)..<Int(2.1 * sr)])
+        #expect(db(b / a) > 20, "3 s tail only \(db(b / a)) dB above 1 s tail")
+    }
+
+    @Test(arguments: [44100.0, 48000.0, 96000.0])
+    func reverbDelaysScaleWithSampleRate(sr: Double) {
+        let ir = impulseResponse(sr: sr, decay: 2, seconds: 0.2)
+        let first = ir.firstIndex { abs($0) > 1e-6 } ?? -1
+        let t = Double(first) / sr
+        #expect(t > 0.027 && t < 0.032, "first echo at \(t) s at \(sr) Hz")
+    }
+
+    @Test(arguments: [44100.0, 48000.0])
+    func bandRatiosMapFrequencies(sr: Double) {
+        let low = sine(1000, seconds: 2, sr: sr)
+        let high = sine(6000, seconds: 2, sr: sr)
+        #expect(Analysis.bandEnergyRatio(high, sampleRate: sr, above: 3000) > 0.99)
+        #expect(Analysis.bandEnergyRatio(high, sampleRate: sr, below: 3000) < 0.01)
+        #expect(Analysis.bandEnergyRatio(low, sampleRate: sr, above: 3000) < 0.01)
+        #expect(Analysis.bandEnergyRatio(low, sampleRate: sr, below: 3000) > 0.99)
+        #expect(abs(Analysis.centroidHz(high, sampleRate: sr) - 6000) < 60)
+        // Tones close to the split catch a wrong sample-rate mapping.
+        #expect(Analysis.bandEnergyRatio(sine(3150, seconds: 2, sr: sr), sampleRate: sr, above: 3000) > 0.99)
+        #expect(Analysis.bandEnergyRatio(sine(2850, seconds: 2, sr: sr), sampleRate: sr, below: 3000) > 0.99)
+        // 1 kHz at amplitude 2 plus 6 kHz at amplitude 1: power 2 vs 0.5, so 0.2 above.
+        let mix = zip(low, high).map { 2 * $0 + $1 }
+        let r = Analysis.bandEnergyRatio(mix, sampleRate: sr, above: 3000)
+        #expect(abs(r - 0.2) < 0.02, "mix ratio \(r)")
+        // Length not a multiple of the 4096 window.
+        let odd = Array(mix[0..<(Int(sr) + 1234)])
+        let ro = Analysis.bandEnergyRatio(odd, sampleRate: sr, above: 3000)
+        #expect(abs(ro - 0.2) < 0.02, "odd-length ratio \(ro)")
+    }
+
+    @Test func shortBuffersReturnZero() {
+        let s = sine(1000, seconds: 0.05, sr: 44100)  // 2205 samples < 4096
+        #expect(s.count < 4096)
+        #expect(Analysis.centroidHz(s, sampleRate: 44100) == 0)
+        #expect(Analysis.bandEnergyRatio(s, sampleRate: 44100, above: 500) == 0)
+        #expect(Analysis.bandEnergyRatio(s, sampleRate: 44100, below: 500) == 0)
+    }
+
     @Test func attackDecayIsSoft() {
         #expect(Envelope.attackDecay(t: 0, attack: 0.02, decay: 1) == 0)
         #expect(abs(Envelope.attackDecay(t: 0.01, attack: 0.02, decay: 1) - 0.5) < 0.01)

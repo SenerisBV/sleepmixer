@@ -1,5 +1,8 @@
 import Foundation
 
+/// Spectral measurements. Buffers shorter than one 4096-sample window yield no spectra:
+/// `centroidHz` and both `bandEnergyRatio` variants return 0 for them. Trailing samples that
+/// do not fill a window are ignored.
 public enum Analysis {
     public static func rmsDB(_ x: ArraySlice<Float>) -> Double {
         guard !x.isEmpty else { return -240 }
