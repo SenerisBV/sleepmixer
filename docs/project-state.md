@@ -79,7 +79,7 @@ judgement is outstanding" below).
 - **The listening set**: `swift/listening/render.sh` regenerates eight 60-second
   WAVs (seed 1) and `measurements.txt`. The WAVs and the measurements file are
   git-ignored; the script is the record.
-- **Docs**: `swift/README.md`, the section "The Swift engine (Plan 7a)" in
+- **Docs**: `swift/README.md`, the section "The Swift engine (Plans 7a and 7b)" in
   `docs/architecture.md`, and this section.
 
 **Test count: 80 tests, all passing** with `cd swift && swift test -c release`

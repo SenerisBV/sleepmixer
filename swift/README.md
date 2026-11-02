@@ -8,7 +8,7 @@ three tone dials (ring, softness, vibrato) for the chimes. This is Plans 7a and
 tool for auditioning them. There is no app yet.
 
 Design and state: `docs/superpowers/specs/2026-11-02-am-night-design.md`,
-`docs/architecture.md` ("The Swift engine (Plan 7a)") and
+`docs/architecture.md` ("The Swift engine (Plans 7a and 7b)") and
 `docs/project-state.md` ("Plan 7a" and "Plan 7b", with every placeholder by
 name and value). The operator has listened to the 7a set only; the 7b set is
 waiting for them, and all constants are placeholders.
