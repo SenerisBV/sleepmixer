@@ -22,7 +22,9 @@
 - **One factory** (spec: "the app and the Mac tool construct the night through the same single factory function, and the tool may only *override* named fields on top of it"). `nightctl` builds sound only via `NightFactory.audition`.
 - All randomness comes from `NightRandom` (spec: "one simple, specified generator in Swift").
 - Every invented number is a **placeholder** and is recorded in `docs/project-state.md` in Task 8 (user CLAUDE.md rule).
-- Run tests from `swift/`: `swift test`. These are pure unit tests; there is no database.
+- Run tests from `swift/` with **`swift test -c release`**. Per-sample DSP in debug is 10–50× slower, and the suite renders minutes of audio. These are pure unit tests; there is no database.
+- **No agent has ears** (`docs/project-state.md`). Implementers write listening samples and report measurements; they never describe how something sounds and never play audio. All listening is the operator's, in Task 8's hand-off.
+- **Seeking is the factory's job.** Components start cold at whatever `startSecond` they're given. To render from `T`, `NightFactory` starts every component at `max(0, T − 6)` and discards the lead-in (6 s ≥ the longest stateful tail: 4.5 s reverb plus filter settling). Component-level seek tests use the test helper `seekLeadIn` (Task 2), which does the same.
 
 ## Review Focus
 
@@ -85,7 +87,7 @@ swift/
   - `public enum SceneKind: String, CaseIterable, Sendable { case chimes, waves }`
   - In `NightDSP/SoundSource.swift`: `public protocol SoundSource { mutating func render(into out: inout [Float], count: Int) }` (fills `out[0..<count]`, `out.count >= count`) and `public protocol Processor { mutating func process(_ buffer: inout [Float], count: Int) }`.
 
-- [ ] **Step 1: Write the package manifest.** Targets: `NightPlan` (no deps), `NightDSP` (deps: `NightPlan`), `NightCLI` (deps: `NightDSP`, `ArgumentParser`), executable `nightctl` (deps: `NightCLI`); test targets `NightPlanTests`, `NightDSPTests`, `NightCLITests`. Package dependency `https://github.com/apple/swift-argument-parser` `from: "1.5.0"`. Add the `.gitignore` lines.
+- [ ] **Step 1: Write the package manifest** with only the targets that have sources yet: `NightPlan` (no deps), `NightDSP` (deps: `NightPlan`), and test target `NightPlanTests`. (SwiftPM refuses a target with no sources; Task 2 adds `NightDSPTests`, and Task 7 adds `NightCLI`, `nightctl`, `NightCLITests` and the `swift-argument-parser` dependency.) Add the `.gitignore` lines.
 
 - [ ] **Step 2: Write the failing tests** in `NightPlanTests.swift`:
 
@@ -100,7 +102,7 @@ swift/
     #expect(abs(u.reduce(0, +) / 10_000 - 0.5) < 0.02)
 }
 @Test func hashGoldenValue() {   // pins the algorithm so Swift on every device agrees
-    #expect(NightRandom.hash(0, 0, 0) == <value printed by the implementation once, then frozen>)
+    #expect(NightRandom.hash(0, 0, 0) == 0xE220A8397B1DCDAF)   // SplitMix64's canonical first output for seed 0
 }
 @Test func warpClampsEveryField() {
     let w = WarpDepth(distance: 1.5, slowness: -0.2, fragmentation: .nan, proportion: 0.4)
@@ -115,7 +117,7 @@ swift/
 
 `ImportGuardTests.swift`: read every `.swift` file under `Sources/NightPlan` (path found relative to `#filePath`) and assert none contains a line matching `^import (?!Foundation$)`. Read every file under `Sources/NightDSP` and assert no `import AVFoundation|UIKit|AppKit|SwiftUI`.
 
-- [ ] **Step 3: Run** `cd swift && swift test --filter NightPlanTests`. Expected: FAIL (types not defined).
+- [ ] **Step 3: Run** `cd swift && swift test -c release --filter NightPlanTests`. Expected: FAIL (types not defined).
 
 - [ ] **Step 4: Implement the `NightPlan` files.** `hash` is SplitMix64 over a combined key, exactly:
 
@@ -127,9 +129,9 @@ z = (z ^ (z >> 27)) &* 0x94D049BB133111EB
 return z ^ (z >> 31)
 ```
 
-`unit` = `Double(hash >> 11) * 0x1p-53`; `signed` = `unit * 2 - 1`. Print `hash(0,0,0)` once and freeze it in `hashGoldenValue`. Clamping lives in `didSet` plus `init`. For `ChannelSettings`, enforce the octave by raising `highCornerHz`.
+`unit` = `Double(hash >> 11) * 0x1p-53`; `signed` = `unit * 2 - 1`. With stream 0 and index 0 this reduces to SplitMix64's first output for seed 0, which is what `hashGoldenValue` pins. Clamping lives in `didSet` plus `init`. For `ChannelSettings`, enforce the octave by raising `highCornerHz`.
 
-- [ ] **Step 5: Run** `swift test`. Expected: all PASS, and `swift build` builds every target.
+- [ ] **Step 5: Run** `swift test -c release`. Expected: all PASS, and `swift build` builds every target.
 
 - [ ] **Step 6: Commit**
 
@@ -144,6 +146,7 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
 
 **Files:**
 - Create: `swift/Sources/NightDSP/Primitives/{Biquad,Reverb,Envelope,WAVWriter,Analysis}.swift`, `swift/Tests/NightDSPTests/{PrimitivesTests,Measure}.swift`
+- Modify: `swift/Package.swift` (add test target `NightDSPTests`, deps `NightDSP`)
 
 **Interfaces:**
 - Produces:
@@ -151,8 +154,8 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
   - `public struct Reverb { public init(sampleRate: Double, seed: UInt64); public var decaySeconds: Double; public mutating func process(_ x: Float) -> Float /* wet only */ }` (4 parallel combs + 2 allpasses, delay lengths in *seconds* scaled to the sample rate, comb feedback set from `decaySeconds`)
   - `public enum Envelope { public static func raisedCosine(_ t: Double) -> Double /* 0→1 over t∈[0,1], clamped */; public static func attackDecay(t: Double, attack: Double, decay: Double) -> Double /* 0 before 0, raised-cosine rise over attack, exp(-(t-attack)/decay) after */ }`
   - `public enum WAVWriter { public static func write(_ samples: [Float], sampleRate: Int, to url: URL) throws }` (IEEE float32, mono, `WAVE_FORMAT_IEEE_FLOAT` = 3)
-  - `public enum Analysis { public static func rmsDB(_ x: ArraySlice<Float>) -> Double; public static func peakDB(_ x: [Float]) -> Double; public static func centroidHz(_ x: [Float], sampleRate: Double) -> Double }` in `NightDSP/Primitives/Analysis.swift` (public because `nightctl` prints these; centroid = mean over 4096-sample windows of a naive or Accelerate-free DFT, hop 4096, at most 64 windows spread across the buffer)
-  - Test-only, in `Measure.swift`: `func rms(_ x: ArraySlice<Float>) -> Double` (linear), `func sine(_ hz: Double, seconds: Double, sr: Double) -> [Float]`, `func noise(seconds: Double, sr: Double, seed: UInt64) -> [Float]` (from `NightRandom.signed`), `func highBandRatio(_ x: [Float], above hz: Double, sr: Double) -> Double` (energy after a 4th-order highpass ÷ total energy), `func lowBandRatio(_ x: [Float], below hz: Double, sr: Double) -> Double`, and `func writeIfListening(_ x: [Float], name: String, sr: Double)`, which writes `name.wav` with `WAVWriter` into `$NIGHT_LISTEN_DIR` only when that environment variable is set, and otherwise does nothing.
+  - `public enum Analysis { public static func rmsDB(_ x: ArraySlice<Float>) -> Double; public static func peakDB(_ x: [Float]) -> Double; public static func centroidHz(_ x: [Float], sampleRate: Double) -> Double; public static func bandEnergyRatio(_ x: [Float], sampleRate: Double, above hz: Double) -> Double; public static func bandEnergyRatio(_ x: [Float], sampleRate: Double, below hz: Double) -> Double }` in `NightDSP/Primitives/Analysis.swift` (public because `nightctl` prints these; centroid = mean over 4096-sample windows of a naive or Accelerate-free DFT, hop 4096, at most 64 windows spread across the buffer)
+  - Test-only, in `Measure.swift`: `func rms(_ x: ArraySlice<Float>) -> Double` (linear), `func sine(_ hz: Double, seconds: Double, sr: Double) -> [Float]`, `func noise(seconds: Double, sr: Double, seed: UInt64) -> [Float]` (from `NightRandom.signed`), a test helper `func seekLeadIn<S>(_ make: (Double) -> S, from: Double, seconds: Double, sr: Double) -> [Float]` that builds the component at `max(0, from − 6)`, renders, and drops the lead-in (for processors, a variant that takes the input signal), and `func writeIfListening(_ x: [Float], name: String, sr: Double)`, which writes `name.wav` with `WAVWriter` into `$NIGHT_LISTEN_DIR` only when that environment variable is set, and otherwise does nothing.
 
 - [ ] **Step 1: Write the failing tests** in `PrimitivesTests.swift`:
   - `lowpassAttenuatesAboveCutoff`: a 1 kHz lowpass at 44100 passes a 200 Hz sine within 1 dB and attenuates a 5 kHz sine by at least 20 dB. Repeat at 48000.
@@ -162,9 +165,9 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
   - `analysisAgrees`: `Analysis.centroidHz` of a 1 kHz sine is 1000 ± 30 Hz; `rmsDB` of a full-scale sine is −3.01 ± 0.05.
   - `wavRoundTrip`: write 1000 samples, read the file back with `Data`; bytes 0–3 `RIFF`, 8–11 `WAVE`, format tag 3 at offset 20, channels 1, sample rate field equals 48000, and the float payload equals the input.
 
-- [ ] **Step 2: Run** `swift test --filter PrimitivesTests`. Expected: FAIL.
+- [ ] **Step 2: Run** `swift test -c release --filter PrimitivesTests`. Expected: FAIL.
 - [ ] **Step 3: Implement the five primitives** with the signatures above.
-- [ ] **Step 4: Run** `swift test`. Expected: all PASS.
+- [ ] **Step 4: Run** `swift test -c release`. Expected: all PASS.
 - [ ] **Step 5: Commit** `git commit -m "feat(swift): filters, reverb, envelopes and a WAV writer"`
 
 ---
@@ -191,23 +194,23 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
   - **bloom:** the fundamental and an octave below, with a 1.5 s attack and a 12 s decay × `(1 + slowness)`.
   - **beating:** two partials at the fundamental ± 0.35 Hz, with an 8 s decay.
 - **Proportion:** a favoured element is drawn per strike (`unit(seed, 4, i)`). Its gain is `+6 × proportion` dB, and every other element's is `−12 × proportion` dB.
-- **Seekability:** every oscillator phase is `2π f (t − birth)`, computed in `Double` from the absolute frame. Rendering from `startSecond` sums every strike born up to 60 s earlier (the longest tail at maximum slowness, 36 s, plus margin). The sum order is fixed (by cell index), so a seek is **bit-identical** to a continuous render.
+- **Seekability:** every oscillator phase is `2π f (t − birth)`, computed in `Double` from the absolute frame. The strike's mallet filter is **per strike, with its state zeroed at birth and run from the strike's own birth frame**, never a filter shared across strikes, so it's a pure function of the frame too. Rendering from `startSecond` re-renders every strike born up to 60 s earlier from its birth (the longest tail at maximum slowness, 36 s, plus margin). The sum order is fixed (by cell index), so a seek is **bit-identical** to a continuous render.
 - **Level:** scale so that a dense passage peaks around −6 dBFS before any processing.
 
 - [ ] **Step 1: Write the failing tests** (Swift Testing, `sr = 44100` unless stated):
   - `sameSeedSameSound`: two 20 s renders with seed 7 are equal. Seeds 7 and 8 differ.
   - `seekIsExact`: render 0–40 s continuously, then `startSecond: 25` for 15 s. The slices are equal (`==`, not approximate).
-  - `hourEightIsHealthy`: a 20 s render at `startSecond: 28_800` is finite, its RMS is within 6 dB of the RMS at 0 s for the same seed (averaged over seeds 1…5), and its peak is ≤ 1.
+  - `hourEightIsHealthy`: a 60 s render at `startSecond: 28_800` is finite, and its RMS averaged over seeds 1…5 is within 6 dB of the same average at 0 s, and its peak is ≤ 1.
   - `slownessThinsAndLowers`: over 120 s × seeds 1…5, `slowness: 1` has at most 60% of the strike count of `slowness: 0` (count via a test-visible `static func strikeTimes(seed:sampleRate:warp:from:to:) -> [Double]`), and a lower spectral centroid.
   - `proportionReweights`: with `proportion: 1`, the per-strike element gains (from a test-visible `static func elementGains(seed:index:warp:) -> [Double]`) contain exactly one +6 dB element and the rest at −12 dB.
   - `strikeAttackIsSoft`: `ChimesScene.strikeAttack >= 0.02`, and the scene uses `Envelope.attackDecay` with it (whose softness Task 2 already tests).
   - `listeningSample`: renders 60 s at plain warp and passes it to `writeIfListening(_, name: "chimes-plain", sr:)`. It always passes.
-  - `nothingAbove6k`: `highBandRatio(render, above: 6000) < 0.05` (so the round bell isn't brittle even before the channel).
+  - `nothingAbove6k`: `Analysis.bandEnergyRatio(render, sampleRate: sr, above: 6000) < 0.05` (so the round bell isn't brittle even before the channel).
 
-- [ ] **Step 2: Run** `swift test --filter ChimesSceneTests`. Expected: FAIL.
+- [ ] **Step 2: Run** `swift test -c release --filter ChimesSceneTests`. Expected: FAIL.
 - [ ] **Step 3: Implement `ChimesScene`** to the decisions above.
-- [ ] **Step 4: Run** `swift test`. Expected: all PASS.
-- [ ] **Step 5: Listen once.** Run `NIGHT_LISTEN_DIR=<scratchpad> swift test --filter listeningSample` and play `chimes-plain.wav`. This is a sanity check that it sounds like a bell and not a beep, and that it has no clicks. It goes in the scratchpad, never the repo. Note the result in the commit message.
+- [ ] **Step 4: Run** `swift test -c release`. Expected: all PASS.
+- [ ] **Step 5: Write a listening sample.** Run `NIGHT_LISTEN_DIR=<scratchpad> swift test -c release --filter listeningSample`. Report the file path and its RMS, peak and centroid (via `Analysis`) in the task report. Don't play it and don't describe its sound: the operator listens in Task 8.
 - [ ] **Step 6: Commit** `git commit -m "feat(swift): rich round chimes, seekable on a fixed grid"`
 
 ---
@@ -219,7 +222,7 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
 
 **Interfaces:**
 - Consumes: `Scene`, `NightRandom`, `Biquad`, `Envelope`, `Curve<WarpDepth>`.
-- Produces: `public struct WavesScene: Scene` with `elements == ["swell", "break", "wash"]` and `public static let prerollSeconds: Double = 4`.
+- Produces: `public struct WavesScene: Scene` with `elements == ["swell", "break", "wash"]`, and `public func envelope(at second: Double) -> Double` (the summed wave envelope, test-visible, used by `noGatedCrunch`).
 
 **How it's made:**
 - **Waves are born on a fixed 6 s grid** (placeholder). Wave `i` exists when `unit(seed, 11, i) < 0.85 / (1 + slowness)`. Its length is `7 + unit(seed, 12, i) × 5` s × `(1 + slowness)`, frozen at birth. Waves overlap and sum.
@@ -230,20 +233,20 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
   - **wash:** high-mid hiss, highpassed at 1500 Hz, an exponential tail over the last 50%.
   - Proportion works like the chimes: one element +6 × p dB, the others −12 × p dB, drawn per wave.
 - **"Pixellated"** (spec: "rendered at low resolution (bit depth and sample rate stepped down) so it reads as *remembered* surf"). The summed wave signal is normalised to its slow envelope, sample-and-held at `5512 Hz × (1 − 0.4 × slowness)`, quantised to 7 bits, re-multiplied by the envelope (so quiet passages don't turn into gated crunch), then lowpassed at 4 kHz. All placeholders.
-- **Seekability:** the filters carry state, so a render from `startSecond` internally starts `prerollSeconds` earlier and discards the pre-roll. The result is *approximately* equal to a continuous render, not exactly.
+- **Seekability:** the filters carry state, so a seek is *approximately* equal to a continuous render, not exactly. The scene starts cold. The lead-in is the factory's job (Global Constraints), and the test uses `seekLeadIn`.
 
 - [ ] **Step 1: Write the failing tests:**
   - `sameSeedSameSound`, as for the chimes.
-  - `seekIsClose`: continuous 0–40 s against a seek to 25 s for 15 s. The difference's RMS is at least 40 dB below the signal's RMS.
+  - `seekIsClose`: continuous 0–40 s against `seekLeadIn` to 25 s for 15 s. The difference's RMS is at least 40 dB below the signal's RMS.
   - `hourEightIsHealthy`, as for the chimes.
   - `slownessLengthensWaves`: over 300 s × seeds 1…5, the mean wave length (from a test-visible `static func waveSpans(seed:warp:from:to:) -> [ClosedRange<Double>]`) at `slowness: 1` is ≥ 1.8× the length at 0.
-  - `pixellationIsAudible`: with the same seed, `highBandRatio(above: 2800)` of the render differs measurably from a render with pixellation disabled through a test-visible `var pixellate = true`. This guards against the quantiser silently doing nothing.
+  - `pixellationIsAudible`: with the same seed, `Analysis.bandEnergyRatio(above: 2800)` of the render differs measurably from a render with pixellation disabled through a test-visible `var pixellate = true`. This guards against the quantiser silently doing nothing.
   - `listeningSample`: as for the chimes, named `waves-plain`.
   - `noGatedCrunch`: in passages where the wave envelope is below −40 dBFS, the render's RMS is also below −34 dBFS (quantisation noise doesn't escape the envelope).
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement `WavesScene`.**
-- [ ] **Step 4: Run** `swift test`. Expected: all PASS.
-- [ ] **Step 5: Listen once**, the same way as Task 3. Check whether it reads as surf, low-fi but not harsh. Note the result in the commit message.
+- [ ] **Step 4: Run** `swift test -c release`. Expected: all PASS.
+- [ ] **Step 5: Write a listening sample**, the same way as Task 3. Report it; don't judge it.
 - [ ] **Step 6: Commit** `git commit -m "feat(swift): pixellated waves"`
 
 ---
@@ -270,7 +273,7 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
   - `fragmentSeekIsExact`: the gains from `startSecond: 100` equal the continuous gains from 100 s.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement both processors.**
-- [ ] **Step 4: Run** `swift test`. Expected: all PASS.
+- [ ] **Step 4: Run** `swift test -c release`. Expected: all PASS.
 - [ ] **Step 5: Commit** `git commit -m "feat(swift): distance and fragmentation"`
 
 ---
@@ -299,15 +302,15 @@ git commit -m "feat(swift): NightEngine package and the pure NightPlan module"
 All values not given in `ChannelSettings` are placeholders.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `bandIsNarrow`: white hashed noise through the channel with `.early` puts less than 3% of its energy above 6 kHz and less than 5% below 120 Hz. At 48000 the same holds, and the centroid is within 10% of the 44100 centroid.
+  - `bandIsNarrow`: white hashed noise through the channel with `.early` puts less than 3% of its energy above 6 kHz and less than 5% below 120 Hz, both measured with `Analysis.bandEnergyRatio` (true DFT band energy, not a filter whose skirt would count in-band energy). At 48000 the same holds, and the centroid is within 10% of the 44100 centroid.
   - `silenceInHissOut`: silence in gives an output RMS between −60 and −40 dBFS (hiss at −48 plus crackle), and its peak is below −30 dBFS. The crackle stays texture.
   - `noClicksFromCrackle`: silence in, 60 s. Split the output into 5 ms windows. No window's RMS exceeds the median window RMS by more than 15 dB.
   - `fadingMoves`: a steady 1 kHz sine with `fadeDepth: 1, fadeRateHz: 0.2` over 120 s. Its 1 s RMS values span at least 6 dB. With `fadeDepth: 0`, they span less than 1 dB.
   - `squashWarmsWithoutClipping`: a 0 dBFS sine at maximum `squash` gives a peak ≤ 1.0 and a finite output.
-  - `seekIsClose`: continuous against seeking at 30 s, with a 4 s pre-roll inside the channel. The difference is at least 40 dB below the signal.
+  - `seekIsClose`: continuous against `seekLeadIn` at 30 s, with the same input signal. The difference is at least 40 dB below the signal.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement `AMChannel`.**
-- [ ] **Step 4: Run** `swift test`. Expected: all PASS.
+- [ ] **Step 4: Run** `swift test -c release`. Expected: all PASS.
 - [ ] **Step 5: Commit** `git commit -m "feat(swift): the AM channel"`
 
 ---
@@ -315,7 +318,8 @@ All values not given in `ChannelSettings` are placeholders.
 ### Task 7: `NightFactory` and `nightctl`
 
 **Files:**
-- Create: `swift/Sources/NightDSP/NightFactory.swift`, `swift/Sources/NightCLI/NightCtl.swift`, `swift/Sources/nightctl/main.swift`, `swift/Tests/NightDSPTests/NightFactoryTests.swift`, `swift/Tests/NightCLITests/NightCtlTests.swift`
+- Create: `swift/Sources/NightDSP/NightFactory.swift`, `swift/Sources/NightCLI/NightCtl.swift` (including `extension SceneKind: ExpressibleByArgument`, which can't live in `NightPlan`), `swift/Sources/nightctl/main.swift`, `swift/Tests/NightDSPTests/NightFactoryTests.swift`, `swift/Tests/NightCLITests/NightCtlTests.swift`
+- Modify: `swift/Package.swift` (add dependency `https://github.com/apple/swift-argument-parser` `from: "1.5.0"`, targets `NightCLI` (deps `NightDSP`, `ArgumentParser`), executable `nightctl` (deps `NightCLI`), test target `NightCLITests`)
 
 **Interfaces:**
 - Consumes: everything above.
@@ -334,6 +338,7 @@ All values not given in `ChannelSettings` are placeholders.
     - The master guard is a soft limiter with a ceiling of −1 dBFS: unity below −6 dBFS and a tanh knee above.
     - Each component gets its own seed: `NightRandom.hash(seed, componentIndex, 0)`.
     - The warp and settings are wrapped as `Curve.constant`.
+    - Seeking: every component starts at `max(0, startSecond − 6)`, and the lead-in is discarded (Global Constraints).
     - This is **the** single factory (Global Constraints).
   - `NightCLI`: `public struct NightCtl: ParsableCommand` with subcommands:
     - **`scenes`** prints one `SceneKind.rawValue` per line.
@@ -349,7 +354,7 @@ All values not given in `ChannelSettings` are placeholders.
   - `nightctl/main.swift`: `NightCtl.main()`.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `NightFactoryTests.everyCornerIsSafe`: for each scene, and every combination of each warp field ∈ {0, 1} with `channel` ∈ {true, false} and `squash: 1, hissLevelDB: -20`, a 10 s render is finite with a peak ≤ 0.95 (the −1 dBFS ceiling is about 0.891, plus tolerance).
+  - `NightFactoryTests.everyCornerIsSafe`: for each scene, and every combination of each warp field ∈ {0, 1} with `channel` ∈ {true, false} and `squash: 1, hissLevelDB: -20`, a 3 s render is finite with a peak ≤ 0.95 (the −1 dBFS ceiling is about 0.891, plus tolerance).
   - `NightFactoryTests.factoryIsDeterministic`: the same request renders the same array.
   - `NightFactoryTests.channelOffIsBrighter`: the centroid of `channel: false` is greater than the centroid of `channel: true`, for the waves.
   - `NightCtlTests.parsesARequest`: `NightCtl.Audition.parse(["chimes","--seconds","30","--distance","0.5","--no-channel","--seed","9"]).request()` equals `AuditionRequest(scene: .chimes, seconds: 30, seed: 9, warp: WarpDepth(distance: 0.5), channel: false)`.
@@ -357,7 +362,7 @@ All values not given in `ChannelSettings` are placeholders.
   - `NightCtlTests.badInputWritesNothing`: running the command via `NightCtl.parseAsRoot(["audition","chimes","--distance","2","--out",tmp])` throws, and no file exists at `tmp`.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement `NightFactory` and `NightCLI`.**
-- [ ] **Step 4: Run** `swift test`. Expected: all PASS.
+- [ ] **Step 4: Run** `swift test -c release`. Expected: all PASS.
 - [ ] **Step 5: Run the tool end to end**: `cd swift && swift run nightctl audition waves --seconds 20 --distance 0.6 --out "$TMPDIR/w.wav"`. Expected: exit 0 and the file exists, about 3.5 MB (20 s × 44100 × 4 bytes).
 - [ ] **Step 6: Commit** `git commit -m "feat(swift): one factory, and nightctl to audition a scene"`
 
@@ -381,6 +386,6 @@ All values not given in `ChannelSettings` are placeholders.
   - **`swift/README.md`:** how to build, test, audition, and the target layout rule (`NightPlan` is pure).
   - **`docs/architecture.md`:** a section "The Swift engine (Plan 7a)" covering the target split and why, seekability (the fixed grid, the hashed noise, the exact versus pre-roll seek), the chain order, and the single factory.
   - **`docs/project-state.md`:** what 7a shipped, test count, the measurement table, and **every placeholder by name and value**. That includes the chime grid and probabilities, partial ratios and decays, the strike attack, the waves grid and lengths, the pixellation rate and bits, the distance mapping, the fragment cell and fade, every channel constant, the master ceiling, and the 2 s glides. It also records that the listening judgement is outstanding.
-- [ ] **Step 4: Run** `cd swift && swift test`. Expected: all PASS. Record the count.
+- [ ] **Step 4: Run** `cd swift && swift test -c release`. Expected: all PASS. Record the count.
 - [ ] **Step 5: Commit** `git commit -m "docs: Plan 7a — the Swift engine, a listening set, and its placeholders"`
 - [ ] **Step 6: Hand the listening set to the operator.** List the eight files and the one command to regenerate or vary them (`swift run nightctl audition <scene> … --play`). The milestone is done when they've listened, not when the tests pass.
