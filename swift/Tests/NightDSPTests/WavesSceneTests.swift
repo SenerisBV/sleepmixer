@@ -76,6 +76,31 @@ private func render(
         #expect(latePeak <= 1)
     }
 
+    /// Peak safety as a bound, not a sample of seeds: the worst summed envelope any night can
+    /// reach, times the L1 norm of the output lowpass, stays at or under 0.9 (-1 dB margin).
+    @Test(arguments: [44100.0, 48000.0]) func peakIsBounded(sr: Double) {
+        var lp = WavesScene.outputFilter(sampleRate: sr)
+        var l1 = 0.0
+        for k in 0..<16_384 { l1 += abs(Double(lp.process(k == 0 ? 1 : 0))) }
+        let worst = WavesScene.worstEnvelope()
+        #expect(l1 > 1)
+        #expect(worst * l1 <= 0.9)
+    }
+
+    /// The bound really bounds: no sampled envelope at any warp corner exceeds it.
+    @Test func worstEnvelopeBoundsRealNights() {
+        let worst = WavesScene.worstEnvelope()
+        var seen = 0.0
+        for seed in UInt64(1)...20 {
+            for warp in [WarpDepth.plain, WarpDepth(slowness: 1, proportion: 1), WarpDepth(slowness: 0.5, proportion: 1)] {
+                let scene = WavesScene(seed: seed, sampleRate: sr, warp: .constant(warp), startSecond: 0)
+                for k in 0..<6000 { seen = max(seen, scene.envelope(at: Double(k) * 0.05)) }
+            }
+        }
+        #expect(seen > 0.5 * worst)
+        #expect(seen <= worst)
+    }
+
     @Test func slownessLengthensWaves() {
         func meanLength(_ w: WarpDepth) -> Double {
             var total = 0.0, count = 0

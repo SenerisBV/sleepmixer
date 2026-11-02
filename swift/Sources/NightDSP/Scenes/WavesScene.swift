@@ -5,9 +5,12 @@ import NightPlan
 /// break and a high hiss of the wash, then rendered at low resolution (sample rate and bit
 /// depth stepped down) so it reads as *remembered* surf.
 ///
-/// Waves are born on a fixed grid. Each wave freezes the warp at its birth and runs its own
-/// three filters from that birth, fed noise keyed by absolute frame, so every wave's signal is
-/// a pure function of the absolute frame. The sample-and-hold is keyed to absolute frames too.
+/// Waves are born on a fixed grid. Every wave filters the *same* noise stream (keyed by
+/// absolute frame); waves are told apart only by their envelopes and the timing of their bands,
+/// and where they overlap their signals sum coherently, not as independent noise. Each wave
+/// freezes the warp at its birth and runs its own three filters from that birth, which keeps
+/// its signal a pure function of the absolute frame (exact seeks, not independence). The
+/// sample-and-hold is keyed to absolute frames too.
 /// The one piece of state that crosses waves is the 4 kHz output lowpass, so a seek is close
 /// to a continuous render rather than exact; the factory's 6 s lead-in settles it.
 public struct WavesScene: Scene {
@@ -44,7 +47,12 @@ public struct WavesScene: Scene {
     static let washFade = 0.10             // and fades to true zero over the last 10%
     static let elementLevels = [1.0, 0.6, 0.35]  // swell, break, wash, before proportion
     static let noiseRMS = 0.25             // each filtered noise is scaled to this RMS
-    static let masterGain = 0.2            // slowness 1 + proportion 1 peaks near -2 dBFS (worst of 20 seeds)
+    /// Derived from the peak bound, not from sampled seeds. With masterGain 1, `worstEnvelope()`
+    /// is 6.147 (every slot at its worst length, favoured element and proportion at once); the
+    /// 4 kHz output lowpass has an impulse-response L1 norm of 1.104 at 44.1 kHz (1.101 at 48k).
+    /// Bound = 6.147 × 1.104 × masterGain ≤ 0.9 (−1 dB margin) needs masterGain ≤ 0.1326;
+    /// 0.13 gives 0.882 (−1.09 dBFS). `peakIsBounded` re-checks this.
+    static let masterGain = 0.13
     static let warpBlockFrames = 256       // the hold rate reads the warp once per absolute block
     static let impulseFrames = 16_384      // to measure each band's noise gain
     static var maxLength: Double { (baseLength + lengthRange) * 2 }
@@ -119,6 +127,40 @@ public struct WavesScene: Scene {
         return sum
     }
 
+    // MARK: - Peak bound
+
+    /// An upper bound on the summed envelope over every possible night: for each grid slot,
+    /// the largest envelope any wave there could have at that age (any length in
+    /// [7, 24] s, any favoured element, proportion 0 or 1 — the gain sum is convex in p, so
+    /// its maximum is at an end), summed over the slots that can overlap. Sampled on a fine
+    /// grid of ages and lengths. With pixellation the pre-lowpass output satisfies |y| ≤ env,
+    /// so the output peak is at most this × the L1 norm of `outputFilter`.
+    static func worstEnvelope(ageStep: Double = 0.02, lengthStep: Double = 0.05) -> Double {
+        let lengths = Array(stride(from: baseLength, through: maxLength, by: lengthStep)) + [maxLength]
+        var gainSets: [[Double]] = [[1, 1, 1]]
+        for favoured in 0..<3 {
+            gainSets.append((0..<3).map { pow(10, ($0 == favoured ? Proportion.favouredDB : Proportion.recededDB) / 20) })
+        }
+        let ages = Int((maxLength / ageStep).rounded(.up)) + 1
+        let worstAt: [Double] = (0..<ages).map { k in
+            let age = Double(k) * ageStep
+            var m = 0.0
+            for length in lengths where age < length {
+                let sh = (0..<3).map { shape($0, t: age, length: length) }
+                for g in gainSets {
+                    m = max(m, (0..<3).reduce(0) { $0 + elementLevels[$1] * g[$1] * sh[$1] })
+                }
+            }
+            return m * masterGain
+        }
+        let period = Int((gridSeconds / ageStep).rounded())
+        var worst = 0.0
+        for offset in 0..<period {
+            worst = max(worst, stride(from: offset, to: ages, by: period).reduce(0) { $0 + worstAt[$1] })
+        }
+        return worst
+    }
+
     // MARK: - Voices
 
     private struct Wave {
@@ -154,7 +196,7 @@ public struct WavesScene: Scene {
         position = Self.frame(start, sampleRate)
         // Every wave born up to the longest length before the start may still be sounding.
         nextIndex = max(0, Int(((start - Self.maxLength) / Self.gridSeconds).rounded(.down)))
-        output = Biquad.lowpass(cutoff: Self.outputCutoff, sampleRate: sampleRate)
+        output = Self.outputFilter(sampleRate: sampleRate)
         // Scale each band so uniform ±1 noise through it comes out at `noiseRMS`.
         bandGains = Self.filters(sampleRate).map { proto in
             var f = proto
@@ -165,6 +207,10 @@ public struct WavesScene: Scene {
             }
             return Self.noiseRMS / ((energy / 3).squareRoot())
         }
+    }
+
+    static func outputFilter(sampleRate: Double) -> Biquad {
+        .lowpass(cutoff: outputCutoff, sampleRate: sampleRate)
     }
 
     private static func filters(_ sr: Double) -> [Biquad] {
