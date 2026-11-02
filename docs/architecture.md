@@ -1875,7 +1875,7 @@ the debug build as current — turning the guard into a rubber stamp.
 The Swift package at `swift/` (`NightEngine`) is the second engine in this
 repository, and it does not share code with the Python one. It renders
 generated scenes through an AM-radio channel and bends them away from
-themselves along four dimensions. Plan 7a builds (and 7b extends, see the last subsection below) only the part that can be
+themselves along four dimensions. Plan 7a builds (and 7b extends, see the Plan 7b subsection below) only the part that can be
 tuned by ear: two scenes, the warp, the channel, and a command-line tool to
 hear them. See `docs/project-state.md` ("Plan 7a") for what shipped, every
 invented number, and what hasn't been heard.

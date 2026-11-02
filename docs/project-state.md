@@ -128,7 +128,7 @@ instead of further away. The waves' centroid also rises with the channel
 (939 to 1033 Hz), but their with-channel RMS does not fall, so the
 "floor outgrows the content" explanation is not established for them.
 Nobody has listened to either,
-and these are centroids, not a judgement of how it sounds). Whether any of it is a warm
+and these are centroids, not a judgement of how it sounds. Whether any of it is a warm
 memory of a train, or merely a quiet hum, is not something a number can say.
 Two things the table does show plainly: the channel takes about 5 dB off the
 bell chimes' (superseded by Plan 7b) RMS and 6 dB off the peak at plain warp, and it moves waves' centroid
@@ -153,6 +153,27 @@ one the moment a planner moves the controls.
   controls must not make the night louder. The fix belongs to the planner:
   power-preserving proportion, reverb-compensated distance, or a per-source
   level stage under the ratchet.
+  **Plan 7b update (final review).** Distance is still not level-neutral for
+  the new scenes, and the warmth is the worst case. Measured over 120 s with
+  `--no-channel`, `--distance 1` against plain (the warmth seed 3 figures
+  were re-measured and reproduce): warmth seed 3 rises +3.8 dB RMS (-23.6 to
+  -19.8) and +5.7 dB peak (-10.5 to -4.8 dBFS, past the master guard's -6 dBFS
+  knee); warmth seed 1 falls -4.8 dB RMS; chimes seed 3 falls -1.4 dB RMS but
+  peaks +2.3 dB (-6.1 to -3.8 dBFS). The likely cause is Distance's per-seed
+  reverb resonating with the warmth's sustained low partials (44 to 130 Hz),
+  with reverb decay up to 4.5 s at distance 1 (not isolated further). **The
+  planner needs a distance level-compensation stage**, and it has to be
+  per-seed-aware or measured, since the sign of the change differs between
+  seeds. What 7b did fix for the new scenes: slowness 1 lowers the chimes by
+  4 to 5 dB RMS and leaves the warmth about unchanged; proportion 1 is neutral
+  (within 0.1 dB) for both, because it is power-preserving. The waves keep the
+  old I1 behaviour above.
+- **Ring ramp rate (Plan 7b).** A step in ring from 1 to 0 gives about +1.4 dB
+  in theory, peaking about 1 s after the step. Measured over 40 seeds,
+  windows at 300 to 305 s average about +0.9 dB with peaks up to +1.7 dB.
+  Ramping ring over a few tau (tau is up to 4.2 s) removes it. The spec's
+  direction (ring lengthening into the night) gives a dip, not a rise, so this
+  matters only for a planner that shortens ring.
 - **I2, per-source seeds.** `NightFactory` derives component seeds as
   `hash(seed, i, 0)`. In a mix of several sources, every source's channel would
   get identical hiss and crackle, and every Fragmenter would drop out in the
@@ -708,6 +729,16 @@ code. The waves rows stand.
   a slow beating swell bounded by the peak bound, not a sudden change. Kept as
   briefed and **left as a listening item**; cost if wrong: an occasional
   static-sounding transition, fixed by a recursive no-repeat draw.
+- **The warmth's handover bump (final review; a second listening item).**
+  Every chord change sums two envelopes at 1, because the previous chord's
+  swell-out starts as the next one's swell-in ends. Measured on seed 1 with 1 s
+  RMS: steady about -24.5 dB; -22.3 to -21.2 dB at 24, 36, 48 and 60 s (+2 to
+  3 dB); and -18.9 dB at 12 s (+5.6 dB, a repeated chord adding coherently).
+  So the warmth breathes about 3 dB every 12 s, and up to about 6 dB on
+  repeats. It is not sudden (the ramps are 3 s). Candidate fixes, only if the
+  operator hears pumping: an equal-power handover (end each chord at `12*next`
+  so the swell-out overlaps the next swell-in) and/or a no-repeat chord draw.
+  Both are deferred until the operator has listened.
 - **Work in place on the branch.** `feat/soft-mallet-chimes` was made for the
   plan and the tree was clean; no worktree. No cost.
 
@@ -715,10 +746,15 @@ code. The waves rows stand.
 
 - **The chimes' peak bound holds for constant dials only.** It evaluates
   every overlapping note at one ring value. The review found that a fast drop in
-  ring could reach about 1.13x the bound (the mechanism was not worked out
-  further). Nothing varies the dials over time yet; the master guard sits above
-  it regardless. The code comment should say "constant dials" (a deferred
-  edit), and the planner must respect it.
+  ring can reach 1.30x the bound, which is 1.13 absolute, above full scale
+  before the master guard. Mechanism: the newest note at ring 0 sits on older
+  notes, each at the tau that maximises `sqrt(1.4/tau)*e^(-age/tau)`, which is
+  ring 1 for every cell except the nearest. The worst-case sum is 2.378,
+  against 1.823 for constant dials. In practice a 40-seed step test peaked at
+  0.546, so it is a bound, not something likely to be heard, but it is the
+  first case where the master guard would actively engage. Nothing varies the
+  dials over time yet. The `peakBound()` comment now says "valid for constant
+  dials only", and the planner must respect it.
 - **Warmth is quieter than the chimes** (about -10.5 against -6 dBFS peak). A
   level decision for the planner, as above.
 - **About 25% of warmth chords repeat** the previous chord. A listening item.

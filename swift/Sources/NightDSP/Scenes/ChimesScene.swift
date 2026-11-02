@@ -146,7 +146,8 @@ public struct ChimesScene: Scene {
     /// `master · sqrt(1.4/τ) · max_{f0, favoured} Σ malletAmps·g / (1 - d/2)` (f0 over the scene's
     /// range on a fine log grid, endpoints included); every cell is taken as occupied,
     /// and the k-th earlier note as at least `k·2.2 - 1.6` s older (birth offsets span 0…1.6 s),
-    /// decayed by `exp(-age/τ)`.
+    /// decayed by `exp(-age/τ)`. Valid for constant dials only: a ring that drops fast can reach
+    /// 1.30× this bound (1.13 absolute); see "Known limitations" in docs/project-state.md.
     public static func peakBound() -> Double {
         let crest = 1 / (1 - vibratoDepth(1) / 2)
         let steps = 1024
