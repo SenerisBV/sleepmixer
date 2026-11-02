@@ -34,3 +34,7 @@ swift/listening/measurements.txt
 .env
 .env.*
 !.env.example
+
+# Esoterica: voiced audio, manifests and audition excerpts (scripts are committed)
+esoterica/library/
+esoterica/audition/
