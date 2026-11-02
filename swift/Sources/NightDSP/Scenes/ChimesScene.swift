@@ -48,8 +48,12 @@ public struct ChimesScene: Scene {
     static let favouredStream: UInt64 = 4
     // Stream 5 was the bells' mallet noise; it is retired, not reused.
     static let vibratoPhaseStream: UInt64 = 6
+    /// The felt mallet barely excites high partials: each partial's base amplitude is multiplied
+    /// by `1 / sqrt(1 + (f / malletCornerHz)^4)` (a 4th-order magnitude rolloff at its actual
+    /// frequency), before proportion redistributes power among what the mallet excites.
+    static let malletCornerHz = 2000.0
     static let blockFrames = 256          // recurrences restart on this absolute-frame grid
-    static let masterGain = 0.32          // a plain passage peaks near -6 dBFS (median of 600 s over 20 seeds: -6.0)
+    static let masterGain = 0.32          // a plain passage peaks near -6 dBFS (median of 600 s over 20 seeds: -6.1)
 
     // MARK: - Dials
 
@@ -65,6 +69,9 @@ public struct ChimesScene: Scene {
 
     /// The vibrato's depth: the pulse dips by up to this fraction of the note's level.
     public static func vibratoDepth(_ v: Double) -> Double { vibratoMaxDepth * v }
+
+    /// The lowest fundamental the scene can play: the bottom of the root range, slowed by 3 semitones.
+    static let lowestFundamental = rootRange.lowerBound * pow(2, -slowDropSemitones / 12)
 
     /// The highest fundamental the scene can play: the top of the root range at the top degree.
     static let highestFundamental = rootRange.upperBound * pow(2, pentatonic.last! / 12)
@@ -98,15 +105,29 @@ public struct ChimesScene: Scene {
         }
     }
 
-    /// Linear per-partial gains, in `elements` order, applied on top of `baseAmps` for the note in
-    /// cell `index`. These are the gains the renderer uses.
-    static func elementGains(seed: UInt64, index: UInt64, warp: Curve<WarpDepth>) -> [Double] {
-        gains(seed: seed, cell: Int(index), proportion: warp(birthSecond(seed: seed, cell: Int(index))).proportion)
+    /// The felt mallet's rolloff at frequency `hz`.
+    static func malletRolloff(_ hz: Double) -> Double {
+        1 / (1 + pow(hz / malletCornerHz, 4)).squareRoot()
     }
 
-    private static func gains(seed: UInt64, cell: Int, proportion: Double) -> [Double] {
+    /// What the mallet excites on a note with fundamental `f0`: `baseAmps` times the rolloff at
+    /// each partial's frequency. Proportion's power is preserved over these.
+    static func malletAmps(f0: Double) -> [Double] {
+        zip(baseAmps, ratios).map { $0 * malletRolloff(f0 * $1) }
+    }
+
+    /// Linear per-partial gains, in `elements` order, applied on top of `malletAmps` for the note
+    /// in cell `index`. These are the gains the renderer uses.
+    static func elementGains(seed: UInt64, index: UInt64, warp: Curve<WarpDepth>) -> [Double] {
+        let cell = Int(index)
+        let w = warp(birthSecond(seed: seed, cell: cell))
+        return gains(seed: seed, cell: cell, amps: malletAmps(f0: fundamental(seed: seed, cell: cell, warp: w)),
+                     proportion: w.proportion)
+    }
+
+    private static func gains(seed: UInt64, cell: Int, amps: [Double], proportion: Double) -> [Double] {
         Proportion.powerPreservingGains(seed: seed, stream: favouredStream, index: UInt64(cell),
-                                        baseAmps: baseAmps, proportion: proportion)
+                                        baseAmps: amps, proportion: proportion)
     }
 
     /// The note's fundamental for the warp it froze at birth: the seed's root, the cell's
@@ -122,14 +143,20 @@ public struct ChimesScene: Scene {
 
     /// The analytic worst-case peak, maximised over ring ∈ {0, 0.5, 1} at softness 0, slowness 0
     /// and proportion 1, with vibrato at its crest. One note can reach at most
-    /// `master · sqrt(1.4/τ) · max_favoured Σ base·g / (1 - d/2)`; every cell is taken as occupied,
+    /// `master · sqrt(1.4/τ) · max_{f0, favoured} Σ malletAmps·g / (1 - d/2)` (f0 over the scene's
+    /// range on a fine log grid, endpoints included); every cell is taken as occupied,
     /// and the k-th earlier note as at least `k·2.2 - 1.6` s older (birth offsets span 0…1.6 s),
     /// decayed by `exp(-age/τ)`.
     public static func peakBound() -> Double {
         let crest = 1 / (1 - vibratoDepth(1) / 2)
-        let loudest = (0..<baseAmps.count).map { f in
-            zip(baseAmps, Proportion.powerPreservingGains(favoured: f, baseAmps: baseAmps, proportion: 1))
-                .map { $0 * $1 }.reduce(0, +)
+        let steps = 1024
+        let loudest = (0...steps).flatMap { i -> [Double] in
+            let f0 = lowestFundamental * pow(highestFundamental / lowestFundamental, Double(i) / Double(steps))
+            let amps = malletAmps(f0: f0)
+            return (0..<amps.count).map { fav in
+                zip(amps, Proportion.powerPreservingGains(favoured: fav, baseAmps: amps, proportion: 1))
+                    .map { $0 * $1 }.reduce(0, +)
+            }
         }.max()!
         return [0.0, 0.5, 1.0].map { ring in
             let tau = ringSeconds(ring)
@@ -161,7 +188,8 @@ public struct ChimesScene: Scene {
         var vibOmega: Double, vibCos: Double, vibSin: Double, vibPhase: Double
         var lifeFrames: Int, fadeFrames: Int
 
-        init(birth: Int, f0: Double, warp: WarpDepth, gains: [Double], phase: Double, sr: Double) {
+        /// `amps` are the final per-partial amplitudes: `malletAmps(f0)` times the proportion gains.
+        init(birth: Int, f0: Double, warp: WarpDepth, amps: [Double], phase: Double, sr: Double) {
             let tau = ChimesScene.ringSeconds(warp.ring)
             self.birth = birth
             partials = []
@@ -170,7 +198,7 @@ public struct ChimesScene: Scene {
                 guard hz > 0, hz < 0.45 * sr else { continue }
                 let omega = 2 * Double.pi * hz / sr
                 let tauFrames = sr * tau / ChimesScene.ratios[k].squareRoot()
-                partials.append(Partial(amp: ChimesScene.baseAmps[k] * gains[k], omega: omega,
+                partials.append(Partial(amp: amps[k], omega: omega,
                                         cosW: cos(omega), sinW: sin(omega),
                                         tauFrames: tauFrames, step: exp(-1 / tauFrames)))
             }
@@ -235,8 +263,9 @@ public struct ChimesScene: Scene {
     /// One isolated note born at frame 0, through the same voice code as the scene: vibrato phase
     /// 0, and at `warp.proportion` the element `favoured` is the one that swells.
     static func renderNote(f: Double, warp: WarpDepth, seconds: Double, sampleRate: Double, favoured: Int = 0) -> [Float] {
-        let g = Proportion.powerPreservingGains(favoured: favoured, baseAmps: baseAmps, proportion: warp.proportion)
-        let voice = Voice(birth: 0, f0: f, warp: warp, gains: g, phase: 0, sr: sampleRate)
+        let m = malletAmps(f0: f)
+        let g = Proportion.powerPreservingGains(favoured: favoured, baseAmps: m, proportion: warp.proportion)
+        let voice = Voice(birth: 0, f0: f, warp: warp, amps: zip(m, g).map { $0 * $1 }, phase: 0, sr: sampleRate)
         let n = Int(seconds * sampleRate)
         var out = [Float](repeating: 0, count: n)
         var block = [Double](repeating: 0, count: blockFrames)
@@ -272,10 +301,13 @@ public struct ChimesScene: Scene {
 
     private func makeVoice(cell: Int) -> Voice? {
         guard let s = Self.strike(seed: seed, cell: cell, warp: warp) else { return nil }
+        let f0 = Self.fundamental(seed: seed, cell: cell, warp: s.warp)
+        let m = Self.malletAmps(f0: f0)
+        let g = Self.gains(seed: seed, cell: cell, amps: m, proportion: s.warp.proportion)
         return Voice(birth: Self.frame(s.birth, sr),
-                     f0: Self.fundamental(seed: seed, cell: cell, warp: s.warp),
+                     f0: f0,
                      warp: s.warp,
-                     gains: Self.gains(seed: seed, cell: cell, proportion: s.warp.proportion),
+                     amps: zip(m, g).map { $0 * $1 },
                      phase: 2 * Double.pi * NightRandom.unit(seed, Self.vibratoPhaseStream, UInt64(cell)),
                      sr: sr)
     }

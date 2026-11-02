@@ -179,8 +179,9 @@ private func tingRatio(_ note: [Float], sr: Double, skip: [Double] = [], guardHz
     // MARK: - The bar
 
     @Test func partialsAreAPureBar() {
-        // Ring 1, so the overtones' faster decay biases the 50–350 ms reading by under 1 dB.
-        let f = 440.0
+        // Ring 1, so the overtones' faster decay biases the 50–350 ms reading by under 1 dB; 110 Hz,
+        // so the felt-mallet rolloff (corner 2 kHz) costs ×10 only 0.38 dB and ×4 0.005 dB.
+        let f = 110.0
         let note = ChimesScene.renderNote(f: f, warp: WarpDepth(ring: 1), seconds: 1, sampleRate: sr)
         let a = Int(0.05 * sr), b = Int(0.35 * sr), n = b - a
         let x: [Double] = (0..<n).map { (i: Int) -> Double in
@@ -205,6 +206,32 @@ private func tingRatio(_ note: [Float], sr: Double, skip: [Double] = [], guardHz
             let bell = peak(near: r * f, bins: 1)
             #expect(bell.db - fund.db < -50, "×\(r) at \(bell.db - fund.db) dB")
         }
+    }
+
+    /// "Each overtone dying faster than the fundamental": between a window at 50–350 ms and one a
+    /// second later, ×4 and ×10 fall relative to the fundamental by about (√k − 1)/τ nepers per
+    /// second (6.2 and 13.4 dB at ring 0). Added beyond the brief: once the mallet rolloff came
+    /// in, nothing else caught overtones that decay with the fundamental.
+    @Test func overtonesDieFaster() {
+        let f = 110.0
+        let note = ChimesScene.renderNote(f: f, warp: .plain, seconds: 2, sampleRate: sr)
+        func levels(from start: Double) -> (four: Double, ten: Double) {
+            let a = Int(start * sr), n = Int(0.3 * sr)
+            let x: [Double] = (0..<n).map { (i: Int) -> Double in
+                let w = 0.5 - 0.5 * cos(2 * Double.pi * Double(i) / Double(n - 1))
+                return Double(note[a + i]) * w
+            }
+            let p = powerSpectrum(x, minSize: 65536)
+            let binHz = sr / Double(2 * (p.count - 1))
+            func db(_ hz: Double) -> Double {
+                let c = Int((hz / binHz).rounded())
+                return 10 * log10(max((c - 2...c + 2).map { p[$0] }.max()!, 1e-300))
+            }
+            return (db(4 * f) - db(f), db(10 * f) - db(f))
+        }
+        let early = levels(from: 0.05), late = levels(from: 1.05)
+        #expect(early.four - late.four > 4, "×4 fell \(early.four - late.four) dB relative")
+        #expect(early.ten - late.ten > 10, "×10 fell \(early.ten - late.ten) dB relative")
     }
 
     @Test(arguments: [44100.0, 48000.0])
@@ -235,12 +262,8 @@ private func tingRatio(_ note: [Float], sr: Double, skip: [Double] = [], guardHz
             let t10 = try #require(crossing(e, level: 0.1 * top, rising: true))
             let t90 = try #require(crossing(e, level: 0.9 * top, rising: true))
             let rise = t90 - t10
-            // A raised cosine alone rises 10→90 % in acos(-0.8)/π - acos(0.8)/π = 0.590 of its
-            // length, and the ring's decay shortens that further, so the briefed 0.6 cannot hold.
-            withKnownIssue("briefed ≥ 0.6·attack is above a raised cosine's own 0.590·attack") {
-                #expect(rise >= 0.6 * a, "softness \(softness): rise \(rise) s vs attack \(a) s")
-            }
-            #expect(rise >= 0.5 * a, "softness \(softness): rise \(rise) s vs attack \(a) s")
+            // A raised cosine rises 10→90 % in acos(-0.8)/π - acos(0.8)/π = 0.590 of its length.
+            #expect(rise >= 0.55 * a, "softness \(softness): rise \(rise) s vs attack \(a) s")
         }
     }
 
@@ -322,6 +345,8 @@ private func tingRatio(_ note: [Float], sr: Double, skip: [Double] = [], guardHz
 
     @Test func proportionPreservesPower() {
         let base = ChimesScene.baseAmps
+        #expect(ChimesScene.malletAmps(f0: 0) == base)
+        #expect(abs(ChimesScene.malletRolloff(2000) - 1 / 2.0.squareRoot()) < 1e-12)
         let target = base.map { $0 * $0 }.reduce(0, +)
         for seed in UInt64(1)...3 {
             for i in UInt64(0)..<40 {
@@ -338,30 +363,21 @@ private func tingRatio(_ note: [Float], sr: Double, skip: [Double] = [], guardHz
                     }
                 }
                 let full = Curve.constant(WarpDepth(proportion: 1))
+                let mallet = ChimesScene.malletAmps(f0: ChimesScene.fundamental(seed: seed, cell: Int(i), warp: .plain))
                 #expect(ChimesScene.elementGains(seed: seed, index: i, warp: full)
-                    == Proportion.powerPreservingGains(seed: seed, stream: 4, index: i, baseAmps: base, proportion: 1))
+                    == Proportion.powerPreservingGains(seed: seed, stream: 4, index: i, baseAmps: mallet, proportion: 1))
                 #expect(ChimesScene.elementGains(seed: seed, index: i, warp: .constant(.plain)) == [1, 1, 1])
             }
         }
     }
 
     /// Review Focus 1: the top note of the range at full proportion, each element favoured in turn.
-    @Test(arguments: [0, 1, 2])
-    func highNotesStayRound(favoured: Int) {
+    @Test(arguments: [44100.0, 48000.0], [0, 1, 2])
+    func highNotesStayRound(sampleRate: Double, favoured: Int) {
         let note = ChimesScene.renderNote(f: ChimesScene.highestFundamental, warp: WarpDepth(proportion: 1),
-                                          seconds: 6, sampleRate: sr, favoured: favoured)
-        let ratio = Analysis.bandEnergyRatio(note, sampleRate: sr, above: 2000)
-        if favoured == 1 {
-            // Favouring ×4 lifts it from -24 dB to -6 dB under the fundamental; at 5.27 kHz that is
-            // about 11 % of the note's energy by construction. Reported, not tuned.
-            withKnownIssue("×4 favoured at proportion 1 puts ~11 % of the top note above 2 kHz") {
-                #expect(ratio < 0.01, "favoured \(favoured): \(ratio * 100)% above 2 kHz")
-            }
-            // Still guarded against getting worse: measured 11.1 %.
-            #expect(ratio < 0.15, "favoured \(favoured): \(ratio * 100)% above 2 kHz (measured 11.1 %)")
-        } else {
-            #expect(ratio < 0.01, "favoured \(favoured): \(ratio * 100)% above 2 kHz")
-        }
+                                          seconds: 6, sampleRate: sampleRate, favoured: favoured)
+        let ratio = Analysis.bandEnergyRatio(note, sampleRate: sampleRate, above: 2000)
+        #expect(ratio < 0.01, "\(sampleRate) Hz, favoured \(favoured): \(ratio * 100)% above 2 kHz")
     }
 
     // MARK: - Peak
