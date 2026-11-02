@@ -2,7 +2,8 @@ import Foundation
 import NightPlan
 
 /// The AM channel every source is heard through: hiss and crackle, night fading, a narrow band,
-/// then squash and warmth.
+/// then squash and warmth. Warmth is `tanh(drive*x)/drive`: unity gain for quiet signals, so squash
+/// rounds peaks but never raises the level (the spec's ratchet: overall level only goes down).
 ///
 /// Settings are read every 512 frames (on the absolute-frame grid) and glided with a one-pole
 /// smoother over 2 s; gains and rates move per sample between block values, filter coefficients
@@ -182,8 +183,11 @@ public struct AMChannel: Processor {
             let over = 10 * log10(meanSquare + 1e-30) - Self.thresholdDB
             let gain = over > 0 ? pow(10, -over * (1 - 1 / ratio) / 20) : 1
             let drive = 1 + 2 * squash
-            let warm = tanh(drive * v * gain) / tanh(drive)
-            // Safety: tanh(drive*x)/tanh(drive) exceeds 1 only for |x| > 1, before the detector catches up.
+            // Warmth has unity gain when quiet (tanh(d*x)/d ~ x), so squash only ever rounds peaks and
+            // never raises the level: the spec's ratchet says overall level only goes down across the
+            // night, and a planner raising squash must not make the night louder.
+            let warm = tanh(drive * v * gain) / drive
+            // Safety floor: |tanh(d*x)/d| < 1/d <= 1 already; kept against future edits.
             buffer[i] = Float(min(max(warm, -1), 1))
             frame += 1
         }

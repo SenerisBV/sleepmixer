@@ -146,6 +146,29 @@ private func windowDBs(_ x: [Float], seconds: Double, sr: Double) -> [Double] {
         #expect(last > 5, "the rate rose: phase \(last)")   // ~0.05 + ~8 after the glide
     }
 
+    /// Unity small-signal gain at every squash: a −40 dBFS 1 kHz sine (inside the band, below the
+    /// compressor threshold) comes out at its input level. Squash must never be a loudness knob.
+    @Test(arguments: [0.0, 0.5, 1.0])
+    func warmthHasUnityGainWhenQuiet(squash: Double) {
+        let sr = 44100.0
+        let s = with { $0.hissLevelDB = -96; $0.crackleLevelDB = -96; $0.fadeDepth = 0; $0.squash = squash }
+        let input = sine(1000, seconds: 4, sr: sr).map { $0 * 0.01 }
+        let y = through(input, s, sr: sr)
+        let db = Analysis.rmsDB(y[Int(1 * sr)...]) - Analysis.rmsDB(input[Int(1 * sr)...])
+        #expect(abs(db) <= 0.5, "squash \(squash): \(db) dB")
+    }
+
+    /// The crackle ceiling holds end to end: with only crackle (hiss off, no fade), no output sample
+    /// is above crackleLevelDB + 1 dB, at any squash.
+    @Test(arguments: [0.0, 0.5, 1.0])
+    func crackleCapHoldsThroughTheChain(squash: Double) {
+        let sr = 44100.0
+        let s = with { $0.hissLevelDB = -96; $0.crackleLevelDB = -30; $0.fadeDepth = 0; $0.squash = squash }
+        let y = through([Float](repeating: 0, count: Int(60 * sr)), s, sr: sr)
+        let peak = Analysis.peakDB(y)
+        #expect(peak <= s.crackleLevelDB + 1, "squash \(squash): peak \(peak) dBFS")
+    }
+
     @Test func squashWarmsWithoutClipping() {
         let sr = 44100.0
         let y = through(sine(1000, seconds: 10, sr: sr), with { $0.squash = 1 }, sr: sr)
