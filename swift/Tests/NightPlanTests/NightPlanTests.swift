@@ -22,3 +22,10 @@ import Testing
     #expect(c.highCornerHz >= c.lowCornerHz * 2)
 }
 @Test func constantCurve() { #expect(Curve.constant(3.0)(28_800) == 3.0) }
+@Test func octaveRaisesHigh() {
+    var c = ChannelSettings.early
+    c.highCornerHz = 800; c.lowCornerHz = 500
+    #expect(c.highCornerHz == 1000)
+    c.lowCornerHz = 1000
+    #expect(c.highCornerHz >= 2000)
+}
