@@ -1,5 +1,10 @@
 # Plan 6a: kits and the drop folder — Implementation Plan
 
+> **Superseded 2026-11-02, never executed.** The AM-night design
+> (`../specs/2026-11-02-am-night-design.md`, Plan 7) drops songs as the
+> night's material, so there are no kits and no drop folder. Kept for the
+> record only. Do not implement.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Dropping an audio file into `Sleepmix/Inbox` in iCloud Drive turns it, with no further action, into a self-contained **kit** in `Sleepmix/Kits/` that the iPhone app (Plan 6b) will read.

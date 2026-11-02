@@ -378,6 +378,13 @@ than one that doesn't try. Ctrl-C still stops it sooner. `--seconds N` exists
 so you can hear what it sounds like without staying up for it, and overrides
 the night's own length.
 
+## The Swift engine (in progress)
+
+`swift/` holds a separate Swift package, the start of the AM night: generated
+scenes heard through an AM-radio channel, with a Mac command-line tool
+(`nightctl`) to audition them. It is not part of the Python pipeline above and
+isn't an app yet. See [`swift/README.md`](swift/README.md).
+
 ## Notes & caveats
 
 - **Binaural beats need headphones** (each ear gets a different carrier; the

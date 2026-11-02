@@ -1,5 +1,469 @@
 # Project state
 
+## Where the project is heading (2026-11-02): Plan 7, the AM night
+
+**Read this first.** On 2026-11-02 the operator redirected the project. The
+night is no longer made from their songs. It's made from a built-in library
+of **generated scenes with an AM-radio character** (rich round chimes,
+pixellated waves, sleeping on a train, wind through a long vent, carolers,
+someone upstairs practicing), which **warp across the night into their own
+descendants**: further away, slower, in pieces, out of proportion, "like
+dreams replay experience incompletely and with different proportions, and
+likewise, a warm memory the further you get from it." The operator's own
+contribution is a **spoken-word voice from a pasted link** (podcast feeds,
+audiobooks, speeches) that starts clear and drifts to a murmur. Their
+"number 1 sleep request", a late-night call-in show with a soothing overnight
+DJ, is deferred until they've thought about how; the voice layer is built
+so it can grow into it.
+
+- **Design:** `docs/superpowers/specs/2026-11-02-am-night-design.md`,
+  approved 2026-11-02, on branch `feat/am-night`. **Plan 7a (two scenes through
+  the channel, a Mac audition tool) is built and tested; the operator has not
+  listened yet.** Everything after 7a (more scenes, the planner, the voice
+  layer, the app) is not planned or built.
+- **Superseded, never built:** Plan 6 (`2026-10-25-ios-night-design.md`)
+  except the sections Plan 7 keeps by name (steering by movement, the
+  morning lift, audio-session rules, the night log, the builder-check
+  decisions), and Plan 6a (kits and the drop folder) in full.
+- **How it's built:** one Swift package (`NightEngine`) shared by a Mac
+  tuning tool and the iPhone app. The Python engine below is **not ported**;
+  it stays in the repo, working and untouched, as the reference for the
+  rules that carry forward (nothing that goes wrong makes a sound, ceilings
+  only descend, no transients, a planner with no audio imports, steering
+  gates never shift the RNG, excerpt tools build the engine exactly as the
+  app does).
+- **Placeholders:** Plan 7 lists its own (section "Placeholders"). Plan 7a's
+  are copied here, by name and value, in the section below; later plans add
+  theirs.
+
+Everything below the Plan 7a section describes the Python engine and the web
+mixer as built through Plan 5, Phase 3.
+
+## Plan 7a: two scenes through the channel
+
+**Status (2026-11-02): built and tested; not yet listened to.** Plan 7a is the
+first slice of Plan 7: prove the sound before building anything around it. It
+is a Swift package at `swift/` that renders two generated scenes (rich round
+chimes and pixellated waves) through the AM channel, warps them along the four
+dimensions (distance, slowness, fragmentation, proportion), and lets the
+operator audition any combination from a Mac command line. There is no app, no
+planner, no voice layer, no night log, and no engine that runs in real time yet.
+The slice exists so the operator can hear whether the character is right before
+the machinery that schedules it gets built, and **the milestone is not done
+when the tests pass; it is done when they have listened** (see "The listening
+judgement is outstanding" below).
+
+**What shipped** (branch `feat/am-night`, plan
+`docs/superpowers/plans/2026-11-02-am-night-7a-two-scenes-through-the-channel.md`):
+
+- **`NightPlan`**: pure Swift, imports only Foundation. `NightRandom` (SplitMix64
+  over a `(seed, stream, index)` key; the one specified generator),
+  `WarpDepth` (four values in 0...1), `ChannelSettings` (clamped; `.early` is
+  the one preset), `Curve` (a value as a function of the night's second),
+  `SceneKind`. A test fails the build if any file in it imports anything but
+  Foundation, and another does the same for `NightDSP` against platform
+  frameworks.
+- **`NightDSP`**: Biquad, a small Schroeder `Reverb`, `Envelope`, a float32 mono
+  `WAVWriter`, and `Analysis` (FFT-based centroid, band ratios, RMS, peak) as
+  primitives; `ChimesScene` and `WavesScene`; `Fragmenter` and `Distance`; the
+  `AMChannel`; and `NightFactory`, the single place the chain is assembled.
+- **`NightCLI` and `nightctl`**: `nightctl scenes` and `nightctl audition
+  <scene> ...` (options: `--seconds --at --seed --distance --slowness
+  --fragmentation --proportion --no-channel --sample-rate --out --play`).
+  Validation rejects out-of-range input with a message and exit 64 before any
+  render or write.
+- **The listening set**: `swift/listening/render.sh` regenerates eight 60-second
+  WAVs (seed 1) and `measurements.txt`. The WAVs and the measurements file are
+  git-ignored; the script is the record.
+- **Docs**: `swift/README.md`, the section "The Swift engine (Plan 7a)" in
+  `docs/architecture.md`, and this section.
+
+**Test count: 80 tests, all passing** with `cd swift && swift test -c release`
+(NightPlan 8, NightDSP 68 in 6 suites, NightCLI 4; parameterised tests count
+once per function, not per case). Release mode matters: per-sample DSP in debug
+is 10 to 50 times slower and the suite renders minutes of audio. These are pure
+unit tests; there is no database, so the standing test-database rule has
+nothing to apply to here.
+
+### The measurement table
+
+Produced by `swift/listening/render.sh`: seed 1, 60 s, 44.1 kHz. "plain" is
+warp 0 through the channel; "mid" is `--distance 0.5 --slowness 0.5`; "far" is
+`--distance 1 --slowness 1 --fragmentation 0.6 --proportion 0.8`; "no channel"
+is plain with `--no-channel`. Levels are after the master guard.
+
+| File | RMS (dB) | Peak (dBFS) | Centroid (Hz) |
+|---|---|---|---|
+| `chimes-plain.wav` | -26.3 | -14.0 | 656 |
+| `chimes-mid.wav` | -32.7 | -16.1 | 692 |
+| `chimes-far.wav` | -30.4 | -17.3 | 924 |
+| `chimes-nochannel.wav` | -21.1 | -7.6 | 507 |
+| `waves-plain.wav` | -36.8 | -20.4 | 977 |
+| `waves-mid.wav` | -37.4 | -20.1 | 939 |
+| `waves-far.wav` | -36.6 | -17.8 | 1033 |
+| `waves-nochannel.wav` | -32.5 | -14.9 | 339 |
+
+These are measurements, not verdicts. They say the files are finite, bounded,
+and different from each other in the directions the design intended on some
+axes and not on others (the "far" chimes have a higher centroid than the plain
+ones, which looks like the reverse of what "further away" suggests. It was
+checked by rendering the same far warp with `--no-channel` (seed 1, 60 s):
+chimes go from a centroid of 507 Hz plain to 438 Hz far (363 Hz with distance
+1 alone), and waves from 339 Hz plain to 162 Hz far (165 Hz with distance 1
+alone). So distance does darken the content, as designed; the brighter
+reading *with* the channel (chimes 656 to 924 Hz) is consistent with the
+channel's fixed noise floor: its hiss and crackle stay put while the content
+falls (chimes RMS drops from -26.3 to -30.4 dB), so the floor's share of the
+spectrum grows. The stronger evidence is at fragmentation 1: the chimes'
+centroid is 1854 Hz with the channel against 586 Hz without, and the waves'
+is 1891 Hz against 310 Hz, because the noise floor fills the silent cells.
+That matters for the planner: as content recedes, the channel's noise has to
+come down with it, or the far end of the night gets hissier and brighter
+instead of further away. The waves' centroid also rises with the channel
+(939 to 1033 Hz), but their with-channel RMS does not fall, so the
+"floor outgrows the content" explanation is not established for them.
+Nobody has listened to either,
+and these are centroids, not a judgement of how it sounds). Whether any of it is a warm
+memory of a train, or merely a quiet hum, is not something a number can say.
+Two things the table does show plainly: the channel takes about 5 dB off the
+chimes' RMS and 6 dB off the peak at plain warp, and it moves waves' centroid
+from 339 Hz to 977 Hz (the channel removes the body below 180 Hz and adds hiss
+and saturation harmonics, so "the channel makes it brighter" is the truth even
+though "the channel makes it narrower" is also the truth).
+
+### Before the planner moves anything
+
+Preconditions found by the final whole-branch review of Plan 7a. None is a
+bug in the shipped audition tool (it holds the warp constant); each becomes
+one the moment a planner moves the controls.
+
+- **I1, the warp is not level-neutral.** Measured over 120 s and 3 seeds:
+  proportion 1 raises waves by +4 dB peak and +2.3 dB RMS, and chimes by +2 dB
+  peak; slowness 1 raises waves by up to +3.5 dB peak; distance 1 raises chimes
+  seed 3 without the channel from -19.5 to -17.0 dB RMS and from -5.0 to -3.5
+  dBFS peak; the combined far warp raises waves without the channel from -15.9
+  to -8.3 dBFS peak. Causes: the proportion rule (+6 dB favoured, -12 dB
+  receded) does not preserve power; slower waves overlap more; and reverb
+  build-up exceeds the direct-sound loss. The spec's ratchet says the free
+  controls must not make the night louder. The fix belongs to the planner:
+  power-preserving proportion, reverb-compensated distance, or a per-source
+  level stage under the ratchet.
+- **I2, per-source seeds.** `NightFactory` derives component seeds as
+  `hash(seed, i, 0)`. In a mix of several sources, every source's channel would
+  get identical hiss and crackle, and every Fragmenter would drop out in the
+  same cells. Use `hash(seed, component, sourceIndex)`.
+- **I3, the crackle clamp.** `ChannelSettings` allows crackle up to -20 dBFS
+  whatever the hiss level, and crackle continues through the fragmenter's
+  silent cells. Make it structural, like the octave rule: crackle <= hiss - 6 dB.
+- **M5, constant-settings assumptions.** On a seek, Distance and AMChannel
+  start their glides at the target, which the 6 s lead-in settles to about e^-3
+  of the lag under a moving curve. The waves' hold grid re-latches once per
+  256-frame block when the rate changes. There is no test with a moving curve
+  for the scenes or Distance; the first planner test should seek into a moving
+  warp.
+- **M6, Distance's lowpass is unconnected to the channel's high corner.** At
+  distance 0 it sits at 8000 Hz, and the spec requires distance's lowpass never
+  to exceed the brightness ceiling.
+- **M7, the factory renders offline only.** The app needs a streaming
+  `NightGraph.render(into:)` with the same chain and guard, which `audition`
+  should wrap, to keep the one-factory rule.
+- **Cleanups for the planner milestone:** make `Distance.cornerHz` internal,
+  and sanitise `startSecond` in Distance and Fragmenter like the scenes do.
+- **Test note (final review):** `everyCornerIsSafe` cannot fail without the
+  master guard at present: unguarded 30 s renders from second 600 peak at 0.54
+  at most, below the guard's knee. It is a backstop contract (peak <= ceiling),
+  not evidence the guard is exercised; the guard's own unit tests cover that.
+
+
+### Every placeholder, by component
+
+**Every number below is invented or interpreted and none has been heard.**
+Values marked *(brief)* came from the plan; the rest were chosen by an
+implementer to make the brief's sentence into code, and are named in the code
+under a labelled constants block (`// MARK: - Invented values` or `// Invented`).
+All of it is a placeholder in the user's sense: record it, don't forget it,
+expect to retune it by ear. File paths are under `swift/Sources/`.
+
+**The master guard and factory** (`NightDSP/NightFactory.swift`):
+lead-in 6 s (a seek starts every component 6 s early and discards that much;
+it is at least the 4.5 s reverb tail plus filter settling); render block 4096
+frames; guard knee -6 dBFS (0.5011872); guard ceiling -1 dBFS (0.8912509),
+`k + (c-k)·tanh((|x|-k)/(c-k))` above the knee, unity below, continuous in
+value and slope, NaN to 0; component seeds are `hash(seed, 0..3, 0)` for scene,
+fragmenter, distance, channel; the tool's defaults are 60 s, seed 1, 44100 Hz;
+`nightctl` accepts a sample rate of 8000 to 192000 and a length up to 3600 s.
+The warp and the channel settings are `Curve.constant`: the tool has no way
+yet to vary them over time. The channel preset is `.early`.
+
+**Channel preset `.early`** (`NightPlan/ChannelSettings.swift`): low corner
+180 Hz, high corner 4500 Hz, hiss -48 dB, crackle -54 dB, fade depth 0.25,
+fade rate 0.05 Hz, squash 0.5. The clamps are: low 40...1000 Hz, high
+800...8000 Hz (always at least an octave above low, by raising the high
+corner), hiss and crackle -96...-20 dB, depth 0...1, rate 0.005...1 Hz, squash
+0...1. `.early` is the only preset; the later-night presets don't exist yet.
+
+**Chimes** (`NightDSP/Scenes/ChimesScene.swift`):
+*(brief)* cells 2.2 s; a strike exists when `unit < 0.6/(1+2·slowness)` and
+sits 0...1.6 s into its cell; slowness is read once at birth; the pitch is a
+two-octave major-pentatonic degree `[0,2,4,7,9,12,14,16,19,21]` over a
+per-seed root, lowered by 3 semitones at slowness 1; the strike is bandpassed
+noise with attack 0.02 s and decay 0.08 s; body partials at ratios
+`[1, 2, 2.76, 4.07]` with decays `[6, 3, 2, 1.2]·(1+2s)` seconds and amps
+`[1, 0.5, 0.35, 0.2]`; bloom with attack 1.5 s and decay `12·(1+s)` s;
+beating pair at ±0.35 Hz with decay 8 s; the favoured element in a strike gets
++6·p dB and the others -12·p dB; lookback 60 s. *Invented:* root log-uniform
+over 196...392 Hz; mallet band centre 2× the strike's fundamental, capped at
+2500 Hz, Q 1.2; strike level 0.3; mallet noise length 0.02 + 12·0.08 = 0.98 s;
+body attack 0.02 s; bloom amps `[0.35, 0.25]` (fundamental and an octave
+below); beat attack 0.3 s, beat amps `[0.2, 0.2]`; an element ends 7 decay
+constants after its attack (-61 dB); **a hard cap of 58 s on any element's
+life, with a raised-cosine fade to true zero over its last `min(4 s, 25% of its
+life)`**; recurrences restart every 256 frames on an absolute grid; **master
+gain 0.1**; random streams 0 (root), 1 (existence), 2 (offset), 3 (degree),
+4 (favoured element), 5 (mallet noise).
+
+**Waves** (`NightDSP/Scenes/WavesScene.swift`, `Scenes/Proportion.swift`):
+*(brief)* a wave is born every 6 s and exists when `unit < 0.85/(1+slowness)`;
+its length is `(7 + 5·unit)·(1+slowness)` s; one shared noise stream; swell
+lowpass 400 Hz, break bandpass 800...2500 Hz, wash highpass 1500 Hz; swell
+rises over the first 45%, break peaks at 55%, wash fills the last 50%;
+pixellation holds at `5512·(1 - 0.4·slowness)` Hz and quantises to 7 bits, then
+a 4 kHz lowpass; streams 11 (existence), 12 (length), 13 (noise). *Invented:*
+favoured-element stream 14; break rises from 30% and is gone by 85%; swell
+falls with a raised cosine from 45% to 100%; wash attack 5%, decay time
+constant 15%, closing fade over the last 10% of the wave's length; element
+levels `[1.0, 0.6, 0.35]` (swell, break, wash) before proportion; each filtered
+band scaled to RMS 0.25 so the normalised signal sits about 4σ inside ±1; the
+break band's Q is its geometric centre (about 1414 Hz) over its 1700 Hz
+bandwidth; mid-tread 127-level quantiser; the hold rate is read once per
+256-frame absolute block; noise-gain impulse of 16384 frames; lookback 24 s
+(derived: (7+5)·2); **master gain 0.13**, derived rather than guessed:
+the analytic worst-case envelope (6.147 at gain 1) times the output lowpass's
+L1 norm (about 1.104) times gain must stay at or under 0.9, giving 0.1326 and
+a proven bound of 0.882 (-1.09 dBFS), with the bound's tightness itself tested.
+The favoured/receded values (+6 dB / -12 dB) live in `Proportion.swift` and are
+shared by both scenes.
+
+**Distance** (`NightDSP/Warp/Distance.swift`): *(brief)* the depth is read
+every 512 frames and glided with a one-pole smoother whose time constant is 2 s;
+lowpass corner `8000·(400/8000)^d` Hz; direct gain `1 - 0.8d`; reverb send
+`0.15 + 0.7d`; reverb decay `1.2 + 3.3d` s. *Invented:* the lowpass Q 0.7071;
+the reverb is fed the post-filter signal and added to the filtered direct; the
+reverb seed is `seed ^ 0xD157`; per-sample linear interpolation between block
+values, which lags the smoother by one block.
+
+**Reverb** (`NightDSP/Primitives/Reverb.swift`; a Schroeder reverb with no
+ambition): comb delays `[29.7, 37.1, 41.1, 43.7]` ms and allpass delays
+`[5.0, 1.7]` ms (in seconds, so they scale with the sample rate), each comb
+jittered ±5% by the seed (stream `0x5265`); RT60-derived feedback; comb damping
+`0.7·out + 0.3·previous`; comb mix 0.25; allpass gain 0.5; default decay 2 s
+before Distance overrides it. These are the arbitrary values of a first
+reverb, not a considered room.
+
+**Fragmenter** (`NightDSP/Warp/Fragmenter.swift`): *(brief)* cells of 3 s; a
+cell is present when `unit(stream 21) >= 0.7·fragmentation`, so fragmentation 1
+drops 70% of cells; 0.4 s raised-cosine crossfade centred on each boundary.
+*Invented:* the cell before the first is treated as cell 0.
+
+**AM channel** (`NightDSP/Channel/AMChannel.swift`): *(brief)* settings read
+every 512 frames and glided with the same 2 s one-pole as Distance; hiss
+lowpassed at 6 kHz; crackle 40 grains a second, 3 to 8 ms each, level drawn
+from crackle-6...crackle dB; fading noise on streams 31 (broadband) and 32
+(selective); selective cut up to -9 dB, centre swept 600...2500 Hz; compressor
+detector attack 50 ms, release 400 ms, threshold -24 dBFS, ratio `1 + 3·squash`;
+band as a 2nd-order Butterworth highpass and a 4th-order lowpass (Qs 0.7071,
+0.5412, 1.3066). *Invented:* hiss stream 33, grain streams 34 (offset), 35
+(length), 36 (level), 37 (noise); the hiss level is the RMS of the lowpassed
+hiss at injection, normalised through the 2nd-order Butterworth's equivalent
+noise bandwidth (factor 1.1107); one grain per fixed 1/40 s slot at a jittered
+offset, a full Hann envelope, noise inside the grain; the selective peaking
+filter's Q 1.0 and its log-mapped centre (the same stream also sets its
+depth); the fade is a raised-cosine interpolation between knots at integer
+phase, with the phase integrated from `rate/sr` per frame; the compressor is a
+hard-knee mean-square detector; **warmth is `tanh(drive·x)/drive` with
+`drive = 1 + 2·squash`** (unity gain for quiet signals); a final clamp at ±1.
+Corners glide in Hz, levels in dB.
+
+**Test-only values** worth knowing about because they set what "passes" means
+(all in `swift/Tests`): pixellation must change the energy above 2800 Hz by
+more than 10%; a cold waves seek must land within -55 dB; the factory's seek
+test requires -30 dB residual (measured about -149 dB, so the bar is very loose);
+the distance test requires 20 dB less energy above 2 kHz at depth 1 (measured
+37 dB); the channel's silent output must sit between -60 and -40 dB RMS
+(measured -51 dB); crackle must stay at or under its level plus 1 dB end to
+end (measured about 1.6 dB under); the corner-safety test uses a 0.95 tolerance.
+
+### The rulings and why
+
+These are the places the build went beyond or against the plan, with the
+reasoning, because the reasoning is what is useful when the operator disagrees
+with the result.
+
+- **Warmth at unity small-signal gain.** The plan's `tanh(drive·x)/tanh(drive)`
+  turned out to add 2.4 to 9.5 dB to quiet signals, which would have made
+  `squash` a hidden loudness knob and quietly broken the spec's ratchet (the
+  night's level only ever descends). The spec outranks the plan's formula.
+  The cost: the channel is about 6 dB quieter than first built, and the ceiling
+  for loud material is `1/drive` (a full-scale source reaches -9.5 dBFS at
+  squash 1).
+- **The crackle cap is tested end to end.** "Never pops" is a spec
+  anti-goal, and the test the plan asked for could not fail against the defect
+  it named (grains sit 10 dB under the hiss). A second test now feeds silence,
+  silences the hiss and checks the output's peak against the crackle level.
+- **The waves are peak-safe by bound, not by sampled seeds.** Sampling 20 seeds
+  found a worst case within 2 dB of full scale; a bound derived from the shapes
+  proved the true worst case was closer. Master gain went from 0.2 to 0.13.
+- **Waves share one noise stream** (the plan's design). Overlapping waves are
+  therefore the same noise under different envelopes, statistically equal to
+  independent noise at the summed power but not independently distinct. The
+  fix, a stream per wave, is deferred until someone listens and says
+  overlapping waves sound like one wave twice.
+- **The chimes' 58 s element cap.** The plan said the longest tail was 36 s; the
+  bloom at full slowness decays over 24 s and is still at -21 dB at 60 s. The
+  implementer capped life at 58 s with a 4 s fade so that seeks stay exact
+  and nothing is cut. The slowest blooms lose their last whisper.
+- **Chimes may peak near -2.6 dBFS before the channel at full proportion.**
+  The master guard owns peak safety, and a corner test checks the whole chain.
+- **A discriminating pitch-drop test for the slow chimes.** The plan's test
+  passed with the pitch drop removed (the density and decay changes alone moved
+  the centroid). A test-visible `fundamental` function now pins 2^(-3/12).
+- **A discriminating octave test for `ChannelSettings`**: the plan's fixture
+  could not fail without the octave rule.
+- **`channelOffIsBrighter` was replaced by `channelOffKeepsTheLowEnd`.** The
+  plan's premise (a channel-free signal is brighter) was false, since the
+  channel removes the low end and adds hiss and harmonics, which raises the
+  centroid. The spec's intent is "narrow: no deep bass, no sparkle", and the top
+  half of that is already guarded in the channel's own tests.
+- **Work in place on `feat/am-night`, no worktree.** The tree was clean and the
+  branch had been made for this.
+
+### Known limitations and deferred items
+
+**For the iPhone (real-time safety). None of these matter for the Mac tool, all
+of them matter before anything runs on an audio thread:**
+
+- **Chimes allocate a whole mallet per strike**: about 43,000 samples at voice
+  creation, and about 1.2 million after a seek. It needs to be lazy or
+  preallocated.
+- **Waves keep N copies of three filters** (one set per live wave) and
+  allocate at each wave's birth. A cold seek fast-forwards about ten million
+  biquad steps. The three filters over the one shared noise stream could be
+  global, which would also make the shared-noise question moot.
+- **Per-sample `pow`, `log10`, `tanh` and hashing** in the AM channel (about
+  two `pow`, one `log10`, two `tanh` and several hashes per sample) and in
+  `Fragmenter.gain` (a warp lookup and a hash per sample). Grain parameters
+  could be cached per slot, the fade knots per integer phase, the fragment gain
+  per cell, `tanh(drive)` per block. Sixty seconds renders in a fraction of a
+  second on this Mac, so this is a deferred cost and not a measured problem.
+- **`Distance.cornerHz(at:)` replays the smoother from the start** (cost
+  proportional to the seconds), which is fine for the cap logic it was built
+  for but not something to call per sample.
+
+**Level and loudness:**
+
+- **The two scenes are not level-matched.** Plain waves peak about -15 dBFS
+  and plain chimes about -6 dBFS before the channel (the table's no-channel
+  rows show -14.9 and -7.6 over a 60 s sample). Whoever plans the night will
+  need to balance them, or the planner will need a per-scene gain.
+- **Squash is still coupled to loud-material level.** Raising squash
+  lowers loud sources (down to -9.5 dBFS at squash 1 for a full-scale
+  source). It never raises anything, so the ratchet's direction holds, but it
+  is not a pure character control.
+- **Plain waves are very bass-heavy before the channel**: a spectral centroid of
+  339 Hz with seed 1 over 60 s (the `waves-nochannel.wav` row above). An
+  earlier figure of about 114 Hz was an implementer's probe during the factory
+  task (also waves, channel off; seeds and length not recorded, probably the
+  10 s renders of `channelOffKeepsTheLowEnd`), so it is a different
+  measurement of the same thing; centroids of a bass-dominated signal move a
+  lot with the sample. The channel is doing a
+  great deal of the work of making them audible as waves.
+
+**For listening:**
+
+- **Hiss and crackle fade with the signal** because they enter before the
+  fade stage. Real AM noise rises as the signal fades. Probably wrong; nobody
+  has heard it.
+- **Crackle grains are quasi-periodic**: exactly one per 25 ms slot at a
+  jittered offset, so exactly 40.0 per second, not a Poisson rain. Might be
+  audible as a faint ticking pulse.
+- **One stream drives both the selective fade's depth and its centre.**
+  The deepest cuts always sit near 2500 Hz and shallow ones near 600 Hz.
+  Decoupling them needs a third stream.
+- **Waves share one noise stream** (see the rulings).
+- **The pixellated waves have less energy above 2800 Hz than clean ones**
+  (0.0167 against 0.0226 of the energy), because the sample-and-hold's droop
+  outweighs the aliased images. "Pixellated" may not mean "gritty" the way
+  the operator imagines.
+- **Exactness of seeks, precisely, per component:**
+  - *Chimes:* exact from a cold start (`seekIsExact`, `seekIsExactLateAndChunked`
+    compare with `==`).
+  - *Waves:* approximate cold, because the 4 kHz output lowpass is stateful
+    and crosses waves (a cold seek measures about -63 dB relative,
+    `coldSeekIsNearlyExact`). With the factory's 6 s lead-in it comes out
+    bit-exact in every case tested (`seekWithLeadInIsExact`, `==`).
+  - *Fragmenter:* exact (a pure function of the absolute frame).
+  - *Distance:* approximate cold (filter, reverb tail and glide have state),
+    settled by the lead-in. It has no seek test of its own; the factory's
+    whole-chain test covers it.
+  - *AM channel:* approximate cold (filters, compressor, glide), settled by the
+    lead-in (`seekIsClose` measured -177 dB), and only for a *constant* fade
+    rate: a varying rate before the seek point leaves the fade phase different.
+  - *Whole chain through the factory:* about -149 dB residual against a longer
+    render, for both scenes (`seekingMatchesALongerRender`).
+
+**Test and tooling debts (minor):**
+
+- Smaller ones left in place: a stray `print` in `distanceDarkensTheRoomToo`;
+  `distanceZeroIsNearlyTransparent` is named as if it were transparent but
+  allows +-2 dB; the master guard's slope tolerance is a loose 1e-2;
+  `badInputWritesNothing` can't detect late validation (it never calls `run()`);
+  `wavRoundTrip` doesn't check the RIFF and data sizes, bit depth, byte rate or
+  block align; the processor variant of `seekLeadIn` is untested and has no
+  bounds precondition; the reverb first-echo test window is tied to the current
+  minimum delay; `NightPlanTests` has an unnecessary `@testable import`; the
+  `elementGains` doc says "strike in cell" without checking that one is
+  present; the chimes call `Envelope` per sample during the attack.
+
+- The hash's golden value pins only `(0,0,0)`; there are no clamp tests for
+  `ChannelSettings` levels, fade values, or `WarpDepth`'s setters.
+- Several of the plan's tests cannot fail against the defect they name
+  (`noClicksFromCrackle`, `bandIsNarrow`'s low-end check, `strikeAttackIsSoft`,
+  `hourEightIsHealthy`, `everyCornerIsSafe` survives removing the master
+  guard, `squashWarmsWithoutClipping` peaks at 0.33 against a bound of 1.0).
+  Each has a stronger added test beside it; the weak ones are kept and not
+  trusted.
+- `silenceInHissOut`'s peak margin was thin (0.95 dB) and became 7.3 dB after
+  the warmth change.
+- No seek test with a time-varying warp curve; the peak bound for waves covers
+  only the pixellated path (the `pixellate = false` path is test-only).
+- `fragmentGainIsSmooth` materialises about 210 MB of Doubles;
+  `NightFactory.audition` traps on non-finite seconds or sample rate from direct
+  API callers (the CLI validates first); `writeIfListening` swallows write
+  errors; `--at -3` reports "Missing value" rather than the validation message
+  (ArgumentParser reads `-3` as an option); the seek residual bar of -30 dB
+  could be tightened to about -90; `frame(_:_:)` is duplicated between the two
+  scenes; one `print("SEEK ...")` is left in `NightFactoryTests`; the
+  compressor detector switches its coefficient on instantaneous x², so it is
+  peak-biased; the Hann table and FFT twiddles are rebuilt per call.
+
+### The listening judgement is outstanding
+
+**No agent has ears.** Everything above is measurement and structure: the
+files are finite, bounded, deterministic, seekable, and the right shape on the
+axes that can be measured. Nobody has played them. The implementers were told
+not to describe how anything sounds and did not. Whether the chimes are *rich
+and round*, whether the waves sound like waves rather than a bad radio, whether
+the far version is a warm memory or just quiet, whether the channel reads as AM
+radio or as a damaged file: all of that is the operator's call, and so is the
+sleep science behind what the night should do. The eight files are in
+`swift/listening/` (regenerate them with `swift/listening/render.sh`; vary one
+with `swift run -c release nightctl audition <scene> ... --play`). Plan 7a is
+done when the operator has listened and said what to change; the placeholders
+above are the list of what they can ask to change.
+
+
+## How the Python engine got here
+
 Status as of the end of the `feat/arrangement` branch (Plan 4a of the
 arrangement design, all 7 tasks complete), on top of `feat/finishing-touches`
 (Plan 3g), `feat/legibility` (Plan 3f), and the `feat/presets` branch (Plan 3d

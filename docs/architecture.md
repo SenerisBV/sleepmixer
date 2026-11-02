@@ -7,6 +7,17 @@ that over HTTP, and — as of Plan 3a, with a mixer added by Plan 3b — the
 frontend that talks to that server. See `docs/project-state.md` for what each
 plan actually shipped.
 
+**The Swift engine is in progress.** Plan 7
+(`docs/superpowers/specs/2026-11-02-am-night-design.md`) moves the night
+into a new Swift package at `swift/`, shared by a Mac tuning tool and (later)
+an iPhone app. It doesn't port this codebase; it restates the night's
+invariants (pure planner, descending ceilings, no transients, silent failure)
+for the Swift engine. Its first slice, Plan 7a (two scenes through the AM
+channel, auditioned from a Mac command line), is built: see "The Swift engine
+(Plan 7a)" at the end of this document. The planner, the voice layer, the
+remaining scenes and the app are not built yet. Everything between here and
+that last section describes the Python engine.
+
 ## The load-bearing property: decay is a pure function of progress
 
 Everything interactive in this codebase rests on one fact about
@@ -1858,3 +1869,139 @@ prerequisites, because mtime-driven rebuilding was actively wrong here: a
 `--debug` bundle written by `make ui-dev` is *newer* than every source, so the
 following `make ui` would have skipped the compile and re-recorded the hash of
 the debug build as current — turning the guard into a rubber stamp.
+
+## The Swift engine (Plan 7a)
+
+The Swift package at `swift/` (`NightEngine`) is the second engine in this
+repository, and it does not share code with the Python one. It renders
+generated scenes through an AM-radio channel and bends them away from
+themselves along four dimensions. Plan 7a builds only the part that can be
+tuned by ear: two scenes, the warp, the channel, and a command-line tool to
+hear them. See `docs/project-state.md` ("Plan 7a") for what shipped, every
+invented number, and what hasn't been heard.
+
+### The target split, and why
+
+There are three libraries-and-a-tool: `NightPlan`, `NightDSP`, and
+`NightCLI` (plus the one-line executable `nightctl` on top of it).
+
+- **`NightPlan` imports only Foundation and depends on no other target.** It
+  holds what the future planner and the audio code must agree on: the
+  deterministic generator (`NightRandom`), the warp values (`WarpDepth`), the
+  channel settings (`ChannelSettings`, with its clamps), `Curve` (a value as a
+  function of the night's second) and `SceneKind`. The spec says the planner
+  "lives in its own module with no dependency on the DSP module," and that is
+  the same rule the Python engine keeps (the planner has no audio imports):
+  it is what lets a planner be tested, replayed and reasoned about without
+  rendering anything. A test (`ImportGuardTests`) fails if a file in
+  `NightPlan` imports anything but Foundation, so the rule isn't kept by
+  memory.
+- **`NightDSP` depends on `NightPlan`, and imports Foundation but no platform
+  framework** (no AVFoundation, UIKit or AppKit), which a second test
+  enforces. It is therefore the same code on the Mac and the phone. Whatever
+  talks to an audio device lives in a later target.
+- **`NightCLI` and `nightctl`** are the Mac tool. The command-line parsing
+  and validation are a library so they can be tested; the executable is
+  `main.swift` and nothing else.
+
+Sample format is mono `Float`, and the sample rate is passed in everywhere
+(44100 by default). Nothing assumes 44100: filter corners and timings are in Hz
+and seconds, and the tests run both 44.1 and 48 kHz, because iPhone hardware
+often runs at 48 kHz.
+
+### Seekability: any second of the night, without rendering the ones before it
+
+This is this engine's version of the load-bearing property the Python engine
+rests on ("decay is a pure function of progress"). The night is eight hours; the
+operator must be able to start it at hour five, and a tool must be able to
+audition second 28,800 without rendering 28,800 seconds. Three mechanisms make
+that true.
+
+- **A fixed grid.** Each scene's events sit on a grid that is a function of
+  the seed alone: chime cells of 2.2 s, wave slots of 6 s. Whether a strike or
+  a wave *exists* in a cell, and where in the cell it begins, is a hash of
+  `(seed, stream, cell)`. The question "what is happening at second T" is
+  therefore answered by looking back a bounded distance (60 s for chimes, 24 s
+  for waves) at the cells that could still be sounding, not by simulating
+  forward. Each strike or wave reads the warp once, at its birth, and keeps
+  it: a chime struck while the night was plain stays plain as the night bends,
+  which is also what makes a time-varying warp seekable.
+- **Hashed noise.** Noise is never drawn from a stateful generator. The sample
+  at absolute frame `n` is `NightRandom.signed(seed, stream, n)`, a pure
+  function of position, so any stretch of noise can be regenerated in
+  isolation, in any order and in any chunking, and the result is bit-identical.
+  This is why the generator is one specified algorithm (SplitMix64) rather than
+  whatever the platform provides: the same seed must make the same night on
+  every device. Times that become phases are computed from integer frame
+  differences in `Double`, never from a `Float` clock, so hour eight is not
+  noisier than minute one.
+- **Exact versus pre-roll seeks.** Where a component has no memory beyond its
+  lookback (the chimes' voices, the fragmenter's gates, the channel's hiss and
+  crackle), a seek is exact: it matches continuous playback bit for bit.
+  The waves are the in-between case: their per-wave filters restart from each
+  wave's birth, but a 4 kHz output lowpass is stateful across waves, so a cold
+  waves seek is close and not exact; after the factory's lead-in it is
+  bit-exact in every case tested. Where
+  it has memory (a filter's state, the reverb tail, the compressor's detector,
+  the one-pole glides), a cold start differs from continuous playback until the
+  state converges. Those components are *started early and the lead-in is
+  discarded*: the factory starts everything at `max(0, T - 6)`, where 6 s covers
+  the longest tail (4.5 s of reverb) plus filter settling, and drops the first
+  `T - start` seconds. The result agrees with a continuous render to about
+  -149 dB on the full chain. Chimes needed one extra rule to stay exact: every
+  element's life is capped at 58 s and fades to true zero, so it can never
+  outlive the 60 s lookback.
+
+### The chain order
+
+`scene -> Fragmenter -> Distance -> AMChannel (optional) -> master guard`
+
+The order is a design decision and each position has a reason. The scene is
+the memory; the fragmenter gates it in whole cells, with soft 0.4 s crossfades
+so it never cuts, which is how "dreams replay experience incompletely" is made
+literal. Distance then puts what is left in another room (the closing lowpass,
+the quieter direct sound, the bigger reverb), so fragments are heard from far
+away rather than the far away being chopped. The AM channel comes last of the
+creative stages because it is the radio the whole night is heard through: it
+is what makes a scene a *broadcast* rather than a recording, and it is
+meant to add the hiss and take the band's edges off whatever is upstream.
+Finally the master guard is unity below -6 dBFS and a smooth tanh knee towards
+-1 dBFS above that, continuous in value and in slope, so a stack of events can
+never clip and the guard never makes a click of its own. Peak safety is owned
+there and, for the waves, also proven at the source (see below). The
+channel can be switched off (`--no-channel`) for comparison; the guard cannot.
+
+Two level rules support the spec's ratchet (the night's level only ever
+descends), for the audition's constant warp. The channel's warmth stage has
+unity gain for quiet signals, so nothing the planner asks of `squash` can make
+a quiet scene louder; and the waves' master gain is derived from an analytic
+bound on the sum of every wave that could overlap, not from sampled seeds.
+They do not make the warp controls level-neutral: proportion, slowness and
+distance each raise level at their extremes (see "Before the planner moves
+anything" in the project state), and that is the planner's to fix.
+
+### The single factory
+
+`NightFactory.audition` is the only place the chain is assembled. The spec's
+requirement is that the app and the Mac tool "construct the night through the
+same single factory function, and the tool may only *override* named fields on
+top of it." `nightctl` therefore builds no sound itself; it parses a request
+(`AuditionRequest`: scene, seconds, start second, seed, the four warp values,
+channel on or off, channel settings, sample rate), validates it, and hands it to
+the factory. Component seeds are derived from the request's seed by
+`NightRandom.hash(seed, i, 0)` for `i` = 0 to 3, so the same seed gives the
+same night everywhere and each stage draws from its own streams. The reason
+for the rule is the one the Python engine learned from its excerpt tools: a
+tuning tool that builds a *slightly different* engine from the app's is a tool
+that tunes the wrong thing.
+
+### What this is not
+
+There is no real-time rendering yet. The chain is rendered whole, in 4096-frame
+blocks, into one array and written as a float32 WAV. Several parts allocate in
+ways an audio thread cannot (the chime mallets, the waves' per-wave filters,
+per-sample `pow` and hashing in the channel), and these are recorded in
+`docs/project-state.md` as the work to do before the app. The warp and channel
+settings are constants for the length of an audition (`Curve.constant`);
+the components accept curves, but only a little of that is exercised (there is
+no seek test with a time-varying warp), and no planner exists to write one.

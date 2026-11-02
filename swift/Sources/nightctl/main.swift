@@ -1,0 +1,3 @@
+import NightCLI
+
+NightCtl.main()

@@ -24,3 +24,8 @@ ui/elm-stuff/
 
 # Working notes from the planning workflow — drafts, not published docs.
 .superpowers/
+
+# Swift package build output
+swift/.build/
+swift/.swiftpm/
+swift/listening/measurements.txt
