@@ -40,6 +40,18 @@ private func filtered(_ f: Biquad, _ x: [Float]) -> [Float] {
         #expect(abs(db(rms(y[Int(sr / 2)...]) / ref) - 6) < 0.2)
     }
 
+    @Test(arguments: [44100.0, 48000.0])
+    func bandpassPassesCenterOnly(sr: Double) {
+        let bp = Biquad.bandpass(center: 1000, q: 1.5, sampleRate: sr)
+        let ref = rms(sine(1000, seconds: 1, sr: sr)[Int(sr / 2)...])
+        let center = filtered(bp, sine(1000, seconds: 1, sr: sr))
+        let low = filtered(bp, sine(100, seconds: 1, sr: sr))
+        let high = filtered(bp, sine(10000, seconds: 1, sr: sr))
+        #expect(abs(db(rms(center[Int(sr / 2)...]) / ref)) < 0.5)
+        #expect(db(rms(low[Int(sr / 2)...]) / ref) < -20)
+        #expect(db(rms(high[Int(sr / 2)...]) / ref) < -20)
+    }
+
     @Test func setCoefficientsKeepsState() {
         let sr = 44100.0
         var a = Biquad.lowpass(cutoff: 1000, sampleRate: sr)

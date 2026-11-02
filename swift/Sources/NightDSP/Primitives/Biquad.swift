@@ -20,6 +20,12 @@ public struct Biquad {
         return Biquad(b0: (1 + c) / 2, b1: -(1 + c), b2: (1 + c) / 2, a0: 1 + alpha, a1: -2 * c, a2: 1 - alpha)
     }
 
+    /// Constant 0 dB peak gain at `center`.
+    public static func bandpass(center: Double, q: Double, sampleRate: Double) -> Biquad {
+        let (c, alpha) = terms(center, q, sampleRate)
+        return Biquad(b0: alpha, b1: 0, b2: -alpha, a0: 1 + alpha, a1: -2 * c, a2: 1 - alpha)
+    }
+
     public static func peaking(center: Double, q: Double, gainDB: Double, sampleRate: Double) -> Biquad {
         let (c, alpha) = terms(center, q, sampleRate)
         let a = pow(10, gainDB / 40)
