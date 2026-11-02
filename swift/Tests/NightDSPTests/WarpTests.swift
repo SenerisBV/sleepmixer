@@ -38,6 +38,22 @@ private func gains(_ f: Fragmenter, from: Int, count: Int) -> [Double] {
         #expect(c1 <= 0.4 * c0, "centroid \(c0) -> \(c1) Hz")
     }
 
+    @Test(arguments: [44100.0, 48000.0])
+    func distanceDarkensTheRoomToo(sr: Double) {
+        let n = noise(seconds: 6, sr: sr, seed: 9)
+        func highEnergy(_ depth: Double) -> Double {
+            var x = n
+            var d = Distance(sampleRate: sr, seed: 1, warp: constant(distance: depth), startSecond: 0)
+            d.process(&x, count: x.count)
+            let y = Array(x[Int(2 * sr)...])
+            let total = y.reduce(0.0) { $0 + Double($1) * Double($1) }
+            return total * Analysis.bandEnergyRatio(y, sampleRate: sr, above: 2000)
+        }
+        let drop = 10 * log10(highEnergy(0) / highEnergy(1))
+        print("distanceDarkensTheRoomToo \(sr): >2 kHz energy drop \(drop) dB")
+        #expect(drop >= 20, "drop \(drop) dB")
+    }
+
     @Test func distanceGlides() {
         let sr = 44100.0
         let jump = Curve<WarpDepth> { t in WarpDepth(distance: t >= 10 ? 1 : 0) }
