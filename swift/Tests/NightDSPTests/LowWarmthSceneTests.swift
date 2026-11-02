@@ -98,6 +98,25 @@ private func hz(midi: Int) -> Double { 440 * pow(2, Double(midi - 69) / 12) }
         #expect(abs(centroids[1] / centroids[0] - 1) <= 0.1, "centroids \(centroids)")
     }
 
+    /// Added in review: the lowpass is in Hz, not a fraction of the sample rate. `staysLow` can't
+    /// see this (its band ratio is far under its limit and its centroid sits on the fundamentals),
+    /// so every note of every chord, for every root, must get identical harmonics at both rates.
+    @Test func cutoffIsInHz() {
+        for root in LowWarmthScene.rootMIDIRange {
+            for t in LowWarmthScene.triads {
+                let r = root + t.degree
+                for midi in [r, r + 7, r + t.third + 12] {
+                    for f in LowWarmthScene.pair(hz(midi: midi)) {
+                        let a = LowWarmthScene.harmonicAmps(f: f, sampleRate: 44100)
+                        let b = LowWarmthScene.harmonicAmps(f: f, sampleRate: 48000)
+                        #expect(!a.isEmpty)
+                        #expect(a == b, "MIDI \(midi), \(f) Hz: \(a.count) vs \(b.count) harmonics")
+                    }
+                }
+            }
+        }
+    }
+
     /// The summed envelope never moves faster than one raised-cosine swell at its steepest.
     @Test func swellIsSmooth() {
         let bound = Double.pi / (2 * LowWarmthScene.swellSeconds * sr) * 1.01
