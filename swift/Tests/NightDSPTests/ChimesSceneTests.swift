@@ -84,6 +84,18 @@ private func render(seed: UInt64, warp: WarpDepth = .plain, from: Double = 0, se
         #expect(slowCentroid < plainCentroid)
     }
 
+    /// Guards the pitch drop directly: the centroid test can pass on density and decay alone.
+    @Test func slownessLowersPitchByThreeSemitones() {
+        for seed in UInt64(1)...5 {
+            for cell in [0, 1, 7, 42, 13_000] {
+                let plain = ChimesScene.fundamental(seed: seed, cell: cell, warp: .plain)
+                let slow = ChimesScene.fundamental(seed: seed, cell: cell, warp: WarpDepth(slowness: 1))
+                #expect(plain >= 196 && plain < 392 * 4)
+                #expect(abs(slow / plain - pow(2, -3.0 / 12)) < 1e-9)
+            }
+        }
+    }
+
     @Test func proportionReweights() {
         let full = Curve.constant(WarpDepth(proportion: 1))
         for i in UInt64(0)..<40 {

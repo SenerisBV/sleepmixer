@@ -94,6 +94,15 @@ public struct ChimesScene: Scene {
         return (0..<4).map { $0 == favoured ? favouredDB * proportion : recededDB * proportion }
     }
 
+    /// The strike's fundamental for the warp it froze at birth: the seed's root, the cell's
+    /// pentatonic degree, lowered by `slowDropSemitones × slowness`. The renderer uses this too.
+    static func fundamental(seed: UInt64, cell: Int, warp: WarpDepth) -> Double {
+        let r = rootRange
+        let root = r.lowerBound * pow(r.upperBound / r.lowerBound, NightRandom.unit(seed, rootStream, 0))
+        let degree = pentatonic[min(Int(NightRandom.unit(seed, 3, UInt64(cell)) * 10), 9)]
+        return root * pow(2, (degree - slowDropSemitones * warp.slowness) / 12)
+    }
+
     public static func strikeEnvelope(t: Double) -> Double {
         Envelope.attackDecay(t: t, attack: strikeAttack, decay: strikeDecay)
     }
@@ -119,7 +128,6 @@ public struct ChimesScene: Scene {
     private let seed: UInt64
     private let sr: Double
     private let warp: Curve<WarpDepth>
-    private let root: Double
     private var position: Int
     private var nextCell: Int
     private var voices: [Voice] = []
@@ -130,8 +138,6 @@ public struct ChimesScene: Scene {
         self.seed = seed
         self.sr = sampleRate
         self.warp = warp
-        let r = Self.rootRange
-        root = r.lowerBound * pow(r.upperBound / r.lowerBound, NightRandom.unit(seed, Self.rootStream, 0))
         let start = startSecond.isFinite ? max(0, startSecond) : 0
         position = Self.frame(start, sampleRate)
         // Every strike born up to the lookback before the start may still be sounding.
@@ -143,8 +149,7 @@ public struct ChimesScene: Scene {
         guard let s = Self.strike(seed: seed, cell: cell, warp: warp) else { return nil }
         let slow = s.warp.slowness
         let birth = Self.frame(s.birth, sr)
-        let degree = Self.pentatonic[min(Int(NightRandom.unit(seed, 3, UInt64(cell)) * 10), 9)]
-        let f0 = root * pow(2, (degree - Self.slowDropSemitones * slow) / 12)
+        let f0 = Self.fundamental(seed: seed, cell: cell, warp: s.warp)
         let g = Self.gains(seed: seed, cell: cell, proportion: s.warp.proportion).map { pow(10, $0 / 20) * Self.masterGain }
 
         var partials: [Partial] = []
