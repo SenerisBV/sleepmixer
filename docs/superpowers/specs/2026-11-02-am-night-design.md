@@ -232,13 +232,102 @@ Claude's suggestion; the builder may change them):
 
 | Scene | Kind | Elements (suggested) | Difficulty |
 |---|---|---|---|
-| **Rich round chimes** | tones | strike, body partials, long bloom, beating between near partials | easy |
+| **Rich round chimes** (soft-mallet bars, revised after listening; see below) | tones | fundamental, faint two-octaves-up overtone, a faint tenth-partial glint, the room it rings into | easy |
+| **Low warmth** (added after listening; see below) | tones | slow warm low chords, detuned pair, swell | easy |
 | **Tones / drones** | tones | fundamental, upper partials, slow beating | easy (Python palette has one) |
 | **Pixellated waves** | rhythmic texture | swell, break, hiss of the wash, rendered at low resolution (bit depth and sample rate stepped down) so it reads as *remembered* surf | easy–medium |
 | **Sleeping on a train** | rhythmic texture | rail clack pattern, low rumble, carriage sway, a far-off horn | medium |
 | **Wind through a long vent** | rhythmic texture | breath of air, the tube's resonance (pitched), rattles | easy–medium |
 | **Carolers** | distant people | voices on chords, a melody line, breath between phrases | **hard** |
 | **Someone upstairs practicing** | distant people | a phrase, its mistakes and restarts, the pause, heard through the floor | **hard** |
+
+### What listening taught: soft mallets, not bells (2026-11-02)
+
+The first listening set (Plan 7a) was the operator's first contact with the
+engine. Their verdicts: the **waves "came out great"** ("I quite like the
+waves", the pixellation "works well, perhaps because those are low"); the
+**chimes were acceptable but at risk**: "if it grates later then it might be
+something with the higher notes feeling too tinny, thin, or chilly."
+
+They then named the centre of their sound moodboard: Radiohead's *Kid A*, the
+opening of the song "that feels like a grown up music box", and the low end of
+*Everything In Its Right Place*: "very soothing and warm and feels like
+something from childhood." They wondered whether they were "mixing up the
+vintage-feeling of AM sound with the vintage-feeling of the Prophet 5, which
+is very warm". The two are different and pull opposite ways (AM is thin and
+far; a vintage synth is warm and near), and they asked to hear rather than
+describe: "I'm afraid I might not be accurate enough without hearing."
+
+**Three rounds of throwaway renders settled it** (scripts kept only in the
+session scratchpad, not the repo):
+
+1. Five variants on one melody at one loudness: the current chimes, an
+   analogue-synth "music box", the same with a warm low bed, the bells an
+   octave lower and rounded over the bed, and the synth through a warmer
+   radio. **The lowered, rounded bells won**; the synth timbre ranked last.
+   (The Prophet-5 attribution itself turned out shaky: it is most often linked
+   to *Everything In Its Right Place*, and even that is disputed. What the
+   operator loves is a quality, not an instrument.)
+2. The winner with one thing changed at a time. **Only raising the pitch back
+   lost something**, and specifically "the first high note in each sequence
+   … the vibrations sound more like an alert than soothing, like chimes they
+   do at train stations before an announcement." Removing the low bed,
+   removing the rounding and adding the AM channel weren't flagged.
+3. The operator supplied a reference recording of what warm means to them,
+   "like they're hitting a xylophone with felted mallets - there's no initial
+   metallic ting when the note starts … but not staccato". Measured (no agent
+   can listen): notes mostly around A4 reaching to about G5, so **the range
+   wasn't the problem**; overtones 20–27 dB below the fundamental (near-pure
+   tone); 20–45 ms soft attack with no bright onset; −20 dB within 0.5–1 s.
+   The bell recipe's overtones were at −8/−13/−20 dB and inharmonic (×2.76,
+   ×4.07). **That inharmonic shimmer is the station-chime quality**, and it
+   lands in the ear's most sensitive range as notes rise. Felted bars built
+   from those measurements, at the problem pitches and an octave above,
+   "sound calming now".
+
+**The chimes scene is therefore rebuilt as soft-mallet bars** (the operator's
+word was "felted"; "soft mallets" and a "round tone" are the musician's
+terms): a near-pure fundamental, a faint overtone two octaves up (×4, about
+−24 dB) and a fainter one at ×10 (about −36 dB), each overtone dying faster
+than the fundamental as on a real bar; no mallet noise at all; a raised-
+cosine soft start. High notes are allowed: the operator's stress test an
+octave above was calm.
+
+**Three dials the night turns, all of them the operator's idea and
+direction, with the shape Claude's call:**
+
+- **Ring length.** "Longer feels sleepier but I think note length is
+  something we should manage as a sleep pattern." Shorter while falling
+  asleep, lengthening with depth. (Spike values: ring time constant 1.4 s
+  read close to the reference; 2.8 s read sleepier.)
+- **Softness of the start.** The 80 ms swell "in particular makes me
+  sleepy" against the 35 ms strike. Gentle strike early, toward a swell
+  late.
+- **Vibrato** (a slow amplitude pulse, vibraphone-motor style, 4.5 Hz at 18%
+  depth in the spike). "That feels sort of disorienting, but I think that's
+  also a knob that turns." *Claude's call:* none while falling asleep;
+  rising only in the deepest stretches, where the night is meant to be
+  most dreamlike; always shallow.
+
+These are the chimes' own way of getting further away, alongside the four
+warp controls. They obey the same rules: frozen per note at its birth, and
+changing nothing about level (the level ratchet, and the planner
+preconditions recorded in `docs/project-state.md`, apply to them too: a
+longer ring must not make the scene louder overall).
+
+**Low warmth becomes its own scene** (*Claude's call*). The warm low chord
+bed was in the winning variant, and the operator loves the low end of
+*Everything In Its Right Place*, but removing it from the winner wasn't
+flagged. So it isn't baked into the chimes; it is a scene the night can bring
+in and out: slow low chords, a slightly detuned pair per note, lowpassed
+around 380 Hz, swelling in over seconds.
+
+**Kept as built:** the waves (liked as they are; the one watch item is the
+"break" element, which could tip harsh like the bell overtones did if the
+night favours it, and softening it with depth is the fix if it ever
+grates). The AM channel stays on the chimes (adding it wasn't flagged), but
+its settings were tuned against the old bells and should be re-checked by
+ear with the new ones.
 
 **The two "distant people" scenes are a known risk.** Synthesized choir and
 synthesized instrument practice are easy to make cheesy. The AM channel and
