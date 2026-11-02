@@ -98,7 +98,7 @@ Still the reset. The light's nearly gone off the far flats. The withies are just
 
 Nobody's moved. Wenna's put her pencil down.
 
-There's a thing that happens, at a long reset, toward the turn, where the players stop being players. I don't know how else to say it. They're just people standing on the sand. Marsh with his stave across his shoulders, humming. Quaile with her eyes shut. Fennick, very still, and the water coming in round her boots now, and she hasn't looked down. And the bell lying there between them on its side, and the water reaching it, touching it, and it's lifted, just a little, just rocked, and it's made one sound. [pause] Just one. Tock.
+There's a thing that happens, at a long reset, toward the turn, where the players stop being players. I don't know how else to say it. They're just people standing on the sand. Marsh with his stave across his shoulders, humming. Quaile with her eyes shut. Fennick, very still, and the water coming in round her boots now, and she hasn't looked down. And the bell lying there between them on its side, and the water not at it yet. Not quite.
 
 And nobody's moved.
 
@@ -106,7 +106,9 @@ And nobody's moved.
 
 The heron's walking. Right through the middle of it. Slow, on his long legs, between the players, past the bell. Nobody's moving for him. He's not moving for them. He's just going through, the way he goes through every evening, as if this was his flat and we were all just standing on it for a bit.
 
-Water's at the fourth withy. When it reaches the third, as you know, that's the match, and the bell stays where it lies, and whatever it says, it says.
+Water's at the fourth withy. And it's reached the bell, it's touching it, and the bell's lifted, just a little, just rocked, and it's made one sound. [pause] Just one. Tock.
+
+When the water reaches the third, as you know, that's the match, and the bell stays where it lies, and whatever it says, it says.
 
 The lights are coming on along the wall. Somebody's lit the lamp on the hut next door. There's that smell, isn't there, the salt and the mud warming and someone's flask of something sweet. The little boy in the green jumper is still standing. Still holding his stick. He's not going to give in before Marsh does, you can see it on him.
 

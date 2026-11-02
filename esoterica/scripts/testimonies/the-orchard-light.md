@@ -17,7 +17,7 @@ voice:
 <!-- intensity: high -->
 not yellow. Everybody wants it to be yellow, because of the apples, I suppose, and the time of day. But it wasn't yellow. [pause] If I had to put it on a chart, and I've tried, I've sat here with the paint cards from the shop, it's somewhere between the inside of a pear and the colour of a candle flame when you look at it through your fingers. Not the flame. The light going through your fingers. That pink at the edges. And then yellow on top of that, a little. All right. A little yellow.
 
-I was pruning. Late in the year, which is wrong, you prune in the cold, but the old Pellbrook trees at the bottom of the slope had got away from me and I thought I'll just take the water shoots off before they go any further. So I had the long saw and the little saw and the ladder, the three-legged one, and I was up in the fourth tree of the sixth row. I know that because I've counted it since. Fourth tree, sixth row. [pause] I go and stand under it.
+I was pruning. Late in the summer, which is wrong by the book, you prune in the cold, but the old Pellbrook trees at the bottom of the slope had got away from me and I thought I'll just take the water shoots off before they go any further. So I had the long saw and the little saw and the ladder, the three-legged one, and I was up in the fourth tree of the sixth row. I know that because I've counted it since. Fourth tree, sixth row. [pause] I go and stand under it.
 
 And the sun had gone. I want to be accurate. The sun had been down maybe ten minutes, the sky was that flat colour it goes, and I was thinking I'd do one more cut and pack it in. And I put my hand up into the branches for the next shoot, and there was an apple in my hand, and it was lit.
 

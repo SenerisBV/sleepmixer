@@ -32,7 +32,7 @@ Et maintenant, écoutez. Les bruits autour de vous. Peut-être une voiture, au l
 
 Et sous ces bruits, si vous écoutez bien, il y en a un autre. [pause] Très doux. Très régulier. [softly] Comme de l'eau.
 
-Ce n'est rien. C'est seulement l'eau qui monte. Lentement. Par le bas du lit.
+Ce n'est rien. C'est seulement l'eau qui monte, tiède, exactement à la température de votre peau. Lentement. Par le bas du lit. Et vous respirez très bien.
 
 [passage]
 
@@ -64,7 +64,7 @@ Vous vous levez. C'est très facile, sous l'eau. Vous n'avez qu'à le vouloir et
 <!-- intensity: low -->
 Vous entrez.
 
-Dans l'entrée, il y a des manteaux accrochés au mur. Ils flottent un peu, les manches levées, comme s'ils voulaient vous saluer. Il y a un banc pour s'asseoir, et sous le banc, des chaussures alignées, bien rangées, la pointe vers le mur. [pause] Vous pouvez laisser les vôtres. Vous n'en avez plus besoin.
+Dans l'entrée, il y a des manteaux accrochés au mur. Ils flottent un peu, les manches levées, comme s'ils voulaient vous saluer. Il y a un banc pour s'asseoir, et sous le banc, des chaussures alignées, bien rangées, la pointe vers le mur. [pause] Il y a une place libre au bout de la rangée, comme si on l'avait gardée pour vous.
 
 Il y a un couloir. Les murs sont couverts de petits carreaux de faïence, blancs et bleus, et entre les carreaux, de minuscules coquillages se sont installés, comme s'ils avaient trouvé là un bon endroit pour passer l'hiver.
 

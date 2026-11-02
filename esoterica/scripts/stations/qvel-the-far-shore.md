@@ -46,7 +46,7 @@ The Bridge of Small Forgettings has one lane open in each direction while the pl
 
 And the tram along the Esplanade is running normally, every few minutes, or whenever you happen to be standing at the stop.
 
-That's the crossings. Twenty-six past the low bell. QVEL.
+That's the crossings. Thirty past the low bell. QVEL.
 
 [passage]
 
@@ -67,7 +67,7 @@ In community notices: the choir at the Fishmarket Steps is looking for low voice
 
 [pause]
 
-Thirty-four past the low bell. You're listening to QVEL.
+Thirty-eight past the low bell. You're listening to QVEL.
 
 [passage]
 
@@ -76,13 +76,13 @@ QVEL weather, on the eights. [pause]
 
 The drizzle has eased over the Stillwater. A little mist lying on the water now, the soft kind, about knee high. The second moon is up over Carrow Spit, a little blue, as forecast. Light winds from the near side, still that smell of toast. Still about the warmth of a hand.
 
-The tide is coming in along the Esplanade. High water at the hour of moths. The stones on the lower steps will be wet, so watch your footing, or don't; most people find they float a little at this hour anyway.
+The tide is coming in along the Esplanade. High water at the hour of moths. The stones on the lower steps will be wet, so watch your footing.
 
 For anyone out on the water tonight: calm, calm, calm. The buoys off the spit are ringing gently. The fishing boats are in. The heron on the breakwater has been there since sundown and shows no sign of going anywhere.
 
 [pause]
 
-Forty-two past the low bell.
+Thirty-nine past the low bell.
 
 Looking ahead. [breath] The night stays mild. Long and mild and mostly quiet. Further arrivals from the near side expected through the small hours, most of them asleep, most of them very comfortable. Clearing toward morning, with the long light coming in low across the water some time after you stop listening.
 
