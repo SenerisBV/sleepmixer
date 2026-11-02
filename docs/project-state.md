@@ -106,8 +106,19 @@ is plain with `--no-channel`. Levels are after the master guard.
 These are measurements, not verdicts. They say the files are finite, bounded,
 and different from each other in the directions the design intended on some
 axes and not on others (the "far" chimes have a higher centroid than the plain
-ones, which is the reverse of what "further away" suggests; the table doesn't
-say why, and nobody has listened to find out). Whether any of it is a warm
+ones, which looks like the reverse of what "further away" suggests. It was
+checked by rendering the same far warp with `--no-channel` (seed 1, 60 s):
+chimes go from a centroid of 507 Hz plain to 438 Hz far (363 Hz with distance
+1 alone), and waves from 339 Hz plain to 162 Hz far (165 Hz with distance 1
+alone). So distance does darken the content, as designed; the brighter
+reading *with* the channel (chimes 656 to 924 Hz) comes from the channel's
+noise floor, whose hiss and crackle stay fixed while the content falls (chimes
+RMS drops from -26.3 to -30.4 dB), so the floor's share of the spectrum grows.
+That matters for the planner: as content recedes, the channel's noise has to
+come down with it, or the far end of the night gets hissier and brighter
+instead of further away. The waves' centroid still rises slightly with the
+channel (939 to 1033 Hz) for the same reason. Nobody has listened to either,
+and these are centroids, not a judgement of how it sounds). Whether any of it is a warm
 memory of a train, or merely a quiet hum, is not something a number can say.
 Two things the table does show plainly: the channel takes about 5 dB off the
 chimes' RMS and 6 dB off the peak at plain warp, and it moves waves' centroid
@@ -309,8 +320,13 @@ of them matter before anything runs on an audio thread:**
   lowers loud sources (down to -9.5 dBFS at squash 1 for a full-scale
   source). It never raises anything, so the ratchet's direction holds, but it
   is not a pure character control.
-- **Plain waves are very bass-heavy before the channel**: a centroid of about
-  114 Hz in one factory measurement and 339 Hz (seed 1) in the table above. The channel is doing a
+- **Plain waves are very bass-heavy before the channel**: a spectral centroid of
+  339 Hz with seed 1 over 60 s (the `waves-nochannel.wav` row above). An
+  earlier figure of about 114 Hz was an implementer's probe during the factory
+  task (also waves, channel off; seeds and length not recorded, probably the
+  10 s renders of `channelOffKeepsTheLowEnd`), so it is a different
+  measurement of the same thing; centroids of a bass-dominated signal move a
+  lot with the sample. The channel is doing a
   great deal of the work of making them audible as waves.
 
 **For listening:**
@@ -329,12 +345,35 @@ of them matter before anything runs on an audio thread:**
   (0.0167 against 0.0226 of the energy), because the sample-and-hold's droop
   outweighs the aliased images. "Pixellated" may not mean "gritty" the way
   the operator imagines.
-- **Exactness of seeks has conditions.** Seek is exact only for a constant
-  fade rate (a varying rate before the seek point leaves the fade phase
-  different). The factory's lead-in makes seeks bit-exact for the scenes and
-  about -149 dB for the whole chain.
+- **Exactness of seeks, precisely, per component:**
+  - *Chimes:* exact from a cold start (`seekIsExact`, `seekIsExactLateAndChunked`
+    compare with `==`).
+  - *Waves:* approximate cold, because the 4 kHz output lowpass is stateful
+    and crosses waves (a cold seek measures about -63 dB relative,
+    `coldSeekIsNearlyExact`). With the factory's 6 s lead-in it comes out
+    bit-exact in every case tested (`seekWithLeadInIsExact`, `==`).
+  - *Fragmenter:* exact (a pure function of the absolute frame).
+  - *Distance:* approximate cold (filter, reverb tail and glide have state),
+    settled by the lead-in. It has no seek test of its own; the factory's
+    whole-chain test covers it.
+  - *AM channel:* approximate cold (filters, compressor, glide), settled by the
+    lead-in (`seekIsClose` measured -177 dB), and only for a *constant* fade
+    rate: a varying rate before the seek point leaves the fade phase different.
+  - *Whole chain through the factory:* about -149 dB residual against a longer
+    render, for both scenes (`seekingMatchesALongerRender`).
 
 **Test and tooling debts (minor):**
+
+- Smaller ones left in place: a stray `print` in `distanceDarkensTheRoomToo`;
+  `distanceZeroIsNearlyTransparent` is named as if it were transparent but
+  allows +-2 dB; the master guard's slope tolerance is a loose 1e-2;
+  `badInputWritesNothing` can't detect late validation (it never calls `run()`);
+  `wavRoundTrip` doesn't check the RIFF and data sizes, bit depth, byte rate or
+  block align; the processor variant of `seekLeadIn` is untested and has no
+  bounds precondition; the reverb first-echo test window is tied to the current
+  minimum delay; `NightPlanTests` has an unnecessary `@testable import`; the
+  `elementGains` doc says "strike in cell" without checking that one is
+  present; the chimes call `Envelope` per sample during the attack.
 
 - The hash's golden value pins only `(0,0,0)`; there are no clamp tests for
   `ChannelSettings` levels, fade values, or `WarpDepth`'s setters.

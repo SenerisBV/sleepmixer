@@ -1936,8 +1936,12 @@ that true.
   differences in `Double`, never from a `Float` clock, so hour eight is not
   noisier than minute one.
 - **Exact versus pre-roll seeks.** Where a component has no memory beyond its
-  lookback (the scenes' voices, the fragmenter's gates, the channel's hiss and
-  crackle), a seek is exact: it matches continuous playback bit for bit. Where
+  lookback (the chimes' voices, the fragmenter's gates, the channel's hiss and
+  crackle), a seek is exact: it matches continuous playback bit for bit.
+  The waves are the in-between case: their per-wave filters restart from each
+  wave's birth, but a 4 kHz output lowpass is stateful across waves, so a cold
+  waves seek is close and not exact; after the factory's lead-in it is
+  bit-exact in every case tested. Where
   it has memory (a filter's state, the reverb tail, the compressor's detector,
   the one-pole glides), a cold start differs from continuous playback until the
   state converges. Those components are *started early and the lead-in is
