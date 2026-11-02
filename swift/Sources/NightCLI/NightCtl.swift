@@ -32,6 +32,9 @@ public struct NightCtl: ParsableCommand {
         @Option public var slowness: Double = 0
         @Option public var fragmentation: Double = 0
         @Option public var proportion: Double = 0
+        @Option public var ring: Double = 0
+        @Option public var softness: Double = 0
+        @Option public var vibrato: Double = 0
         @Flag(name: .customLong("no-channel"), help: "Skip the AM channel.") public var noChannel = false
         @Option(name: .customLong("sample-rate")) public var sampleRate: Double = 44100
         @Option(help: "Output path (default ./<scene>-<seed>.wav).") public var out: String?
@@ -41,7 +44,8 @@ public struct NightCtl: ParsableCommand {
 
         public func validate() throws {
             for (name, v) in [("distance", distance), ("slowness", slowness),
-                              ("fragmentation", fragmentation), ("proportion", proportion)] {
+                              ("fragmentation", fragmentation), ("proportion", proportion),
+                              ("ring", ring), ("softness", softness), ("vibrato", vibrato)] {
                 guard v.isFinite, (0...1).contains(v) else {
                     throw ValidationError("--\(name) must be between 0 and 1 (got \(v)).")
                 }
@@ -61,7 +65,8 @@ public struct NightCtl: ParsableCommand {
             AuditionRequest(
                 scene: scene, seconds: seconds, startSecond: at, seed: seed,
                 warp: WarpDepth(distance: distance, slowness: slowness,
-                                fragmentation: fragmentation, proportion: proportion),
+                                fragmentation: fragmentation, proportion: proportion,
+                                ring: ring, softness: softness, vibrato: vibrato),
                 channel: !noChannel, sampleRate: sampleRate)
         }
 

@@ -13,6 +13,12 @@ import NightPlan
             scene: .chimes, seconds: 30, seed: 9, warp: WarpDepth(distance: 0.5), channel: false))
     }
 
+    @Test func parsesToneDials() throws {
+        let a = try NightCtl.Audition.parse(
+            ["chimes", "--ring", "0.5", "--softness", "1", "--vibrato", "0.25"])
+        #expect(a.request().warp == WarpDepth(ring: 0.5, softness: 1, vibrato: 0.25))
+    }
+
     @Test func rejectsBadInput() {
         #expect(throws: (any Error).self) { try NightCtl.Audition.parse(["bells"]) }
         #expect(throws: (any Error).self) { try NightCtl.Audition.parse(["chimes", "--distance", "1.5"]) }
@@ -31,6 +37,9 @@ import NightPlan
         (["chimes", "--at=100000"], "--at"),
         (["chimes", "--distance=nan"], "--distance"),
         (["chimes", "--distance=1.5"], "--distance"),
+        (["chimes", "--ring=1.5"], "--ring"),
+        (["chimes", "--softness=-0.1"], "--softness"),
+        (["chimes", "--vibrato=nan"], "--vibrato"),
     ])
     func validateNamesTheField(args: [String], field: String) {
         do {
