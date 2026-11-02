@@ -1,20 +1,23 @@
 import Foundation
 import NightPlan
 
-/// Rich round chimes: soft mallet strikes on a pentatonic set, each ringing a body of
-/// inharmonic partials, a slow bloom and a pair of beating partials.
+/// Soft-mallet chimes: felted bars on a pentatonic set. Each note is a near-pure fundamental with a
+/// faint overtone two octaves up (×4) and a fainter one at ×10, each overtone dying faster than the
+/// fundamental as on a real bar; no mallet noise; a raised-cosine soft start. Three tone dials,
+/// frozen per note at its birth: ring (the decay time), softness (the attack) and vibrato (a slow
+/// amplitude pulse). Ring and vibrato are level-neutral; proportion is power-preserving.
 ///
-/// Seekable by construction. Strikes live on a fixed grid of cells; each strike reads the warp
-/// once, at its birth, and every sample it makes is a pure function of the absolute frame:
-/// oscillator phases come from `frame - birthFrame`, the mallet filter runs from the strike's
-/// own birth, and any recurrence used for speed restarts on a block grid aligned to absolute
-/// frames. Contributions are summed in a fixed order (cell index, then element), so a render
-/// started at any second is bit-identical to the same frames of a continuous render.
+/// Seekable by construction. Notes live on a fixed grid of cells; each note reads the warp once,
+/// at its birth, and every sample it makes is a pure function of the absolute frame: phases and
+/// decays come from `frame - birthFrame`, and every recurrence used for speed (the partials'
+/// rotations, their decay steps and the vibrato's rotation) restarts on a block grid aligned to
+/// absolute frames. Contributions are summed in a fixed order (cell index, then partial), so a
+/// render started at any second is bit-identical to the same frames of a continuous render.
 public struct ChimesScene: Scene {
     public static let kind = SceneKind.chimes
-    public let elements = ["strike", "body", "bloom", "beating"]
+    public let elements = ["fundamental", "fourth", "tenth"]
 
-    // MARK: - Values from the brief (placeholders recorded in Task 8)
+    // MARK: - Values from the brief (placeholders recorded in docs/project-state.md)
 
     static let cellSeconds = 2.2
     static let offsetSeconds = 1.6
@@ -22,36 +25,49 @@ public struct ChimesScene: Scene {
     static let rootRange = 196.0...392.0
     static let pentatonic: [Double] = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21]
     static let slowDropSemitones = 3.0
-    public static let strikeAttack = 0.02
-    public static let strikeDecay = 0.08
-    static let bodyRatios = [1.0, 2.0, 2.76, 4.07]
-    static let bodyDecays = [6.0, 3.0, 2.0, 1.2]
-    static let bodyAmps = [1.0, 0.5, 0.35, 0.2]
-    static let bloomAttack = 1.5
-    static let bloomDecay = 12.0
-    static let beatOffsetHz = 0.35
-    static let beatDecay = 8.0
     static let lookbackSeconds = 60.0
+    /// The bar: partial ratios and their base amplitudes (0, -24 and -36 dB).
+    static let ratios: [Double] = [1, 4, 10]
+    static let baseAmps: [Double] = [1, pow(10, -24.0 / 20), pow(10, -36.0 / 20)]
+    /// Ring: the fundamental's decay time constant, 1.4 s (the spike's "close to the reference")
+    /// to 4.2 s (a placeholder ceiling). The partial at ×k decays with `τ / sqrt(k)`.
+    static let ringRange = 1.4...4.2
+    /// Softness: the raised-cosine attack, 35 ms (the spike's strike) to 0.12 s (a placeholder ceiling).
+    static let attackRange = 0.035...0.12
+    /// Vibrato: an amplitude pulse at 4.5 Hz, depth 0.18 × the dial.
+    public static let vibratoHz = 4.5
+    static let vibratoMaxDepth = 0.18
+    static let tailTimeConstants = 7.0    // a note ends 7 ring time constants (-61 dB) after birth...
+    static let lifetimeCap = 58.0         // ...or at 58 s, inside the 60 s lookback
+    static let fadeSeconds = 4.0          // every note fades to true zero before it ends
+    static let fadeFraction = 0.25        // (or over its last quarter, if shorter)
 
-    // MARK: - Invented values (placeholders recorded in Task 8)
+    // MARK: - Invented values (placeholders recorded in docs/project-state.md)
 
     static let rootStream: UInt64 = 0
-    static let noiseStream: UInt64 = 5
-    static let malletRatio = 2.0          // mallet band centre, × the strike's fundamental
-    static let malletMaxHz = 2500.0
-    static let malletQ = 1.2
-    static let strikeLevel = 0.3
-    static let malletSeconds = strikeAttack + 12 * strikeDecay
-    static let bodyAttack = 0.02
-    static let bloomAmps = [0.35, 0.25]   // fundamental, octave below
-    static let beatAttack = 0.3
-    static let beatAmps = [0.2, 0.2]      // below, above
-    static let tailTimeConstants = 7.0    // an element ends 7 decay constants (-61 dB) after its attack...
-    static let lifetimeCap = 58.0         // ...or at 58 s, inside the 60 s lookback
-    static let fadeSeconds = 4.0          // every element fades to true zero before it ends
-    static let fadeFraction = 0.25        // (or over its last quarter, if shorter)
+    static let favouredStream: UInt64 = 4
+    // Stream 5 was the bells' mallet noise; it is retired, not reused.
+    static let vibratoPhaseStream: UInt64 = 6
     static let blockFrames = 256          // recurrences restart on this absolute-frame grid
-    static let masterGain = 0.1          // a dense plain passage peaks near -6 dBFS (median over seeds)
+    static let masterGain = 0.32          // a plain passage peaks near -6 dBFS (median of 600 s over 20 seeds: -6.0)
+
+    // MARK: - Dials
+
+    /// The ring time constant τ, linear in the dial.
+    public static func ringSeconds(_ ring: Double) -> Double {
+        ringRange.lowerBound + (ringRange.upperBound - ringRange.lowerBound) * ring
+    }
+
+    /// The raised-cosine attack length, linear in the dial.
+    public static func attackSeconds(_ softness: Double) -> Double {
+        attackRange.lowerBound + (attackRange.upperBound - attackRange.lowerBound) * softness
+    }
+
+    /// The vibrato's depth: the pulse dips by up to this fraction of the note's level.
+    public static func vibratoDepth(_ v: Double) -> Double { vibratoMaxDepth * v }
+
+    /// The highest fundamental the scene can play: the top of the root range at the top degree.
+    static let highestFundamental = rootRange.upperBound * pow(2, pentatonic.last! / 12)
 
     // MARK: - The grid (pure, shared by the renderer and the tests)
 
@@ -70,7 +86,7 @@ public struct ChimesScene: Scene {
 
     private static func frame(_ second: Double, _ sr: Double) -> Int { Int((second * sr).rounded()) }
 
-    /// Birth times (frame-quantised seconds) of strikes born in `[from, to)`.
+    /// Birth times (frame-quantised seconds) of notes born in `[from, to)`.
     static func strikeTimes(seed: UInt64, sampleRate: Double, warp: Curve<WarpDepth>, from: Double, to: Double) -> [Double] {
         let first = max(0, Int(((from - offsetSeconds) / cellSeconds).rounded(.down)))
         let last = Int((to / cellSeconds).rounded(.up))
@@ -82,16 +98,18 @@ public struct ChimesScene: Scene {
         }
     }
 
-    /// Per-element gains in dB, in `elements` order, for the strike in cell `index`.
+    /// Linear per-partial gains, in `elements` order, applied on top of `baseAmps` for the note in
+    /// cell `index`. These are the gains the renderer uses.
     static func elementGains(seed: UInt64, index: UInt64, warp: Curve<WarpDepth>) -> [Double] {
         gains(seed: seed, cell: Int(index), proportion: warp(birthSecond(seed: seed, cell: Int(index))).proportion)
     }
 
     private static func gains(seed: UInt64, cell: Int, proportion: Double) -> [Double] {
-        Proportion.gainsDB(seed: seed, stream: 4, index: UInt64(cell), count: 4, proportion: proportion)
+        Proportion.powerPreservingGains(seed: seed, stream: favouredStream, index: UInt64(cell),
+                                        baseAmps: baseAmps, proportion: proportion)
     }
 
-    /// The strike's fundamental for the warp it froze at birth: the seed's root, the cell's
+    /// The note's fundamental for the warp it froze at birth: the seed's root, the cell's
     /// pentatonic degree, lowered by `slowDropSemitones × slowness`. The renderer uses this too.
     static func fundamental(seed: UInt64, cell: Int, warp: WarpDepth) -> Double {
         let r = rootRange
@@ -100,8 +118,26 @@ public struct ChimesScene: Scene {
         return root * pow(2, (degree - slowDropSemitones * warp.slowness) / 12)
     }
 
-    public static func strikeEnvelope(t: Double) -> Double {
-        Envelope.attackDecay(t: t, attack: strikeAttack, decay: strikeDecay)
+    // MARK: - Peak bound
+
+    /// The analytic worst-case peak, maximised over ring ∈ {0, 0.5, 1} at softness 0, slowness 0
+    /// and proportion 1, with vibrato at its crest. One note can reach at most
+    /// `master · sqrt(1.4/τ) · max_favoured Σ base·g / (1 - d/2)`; every cell is taken as occupied,
+    /// and the k-th earlier note as at least `k·2.2 - 1.6` s older (birth offsets span 0…1.6 s),
+    /// decayed by `exp(-age/τ)`.
+    public static func peakBound() -> Double {
+        let crest = 1 / (1 - vibratoDepth(1) / 2)
+        let loudest = (0..<baseAmps.count).map { f in
+            zip(baseAmps, Proportion.powerPreservingGains(favoured: f, baseAmps: baseAmps, proportion: 1))
+                .map { $0 * $1 }.reduce(0, +)
+        }.max()!
+        return [0.0, 0.5, 1.0].map { ring in
+            let tau = ringSeconds(ring)
+            let note = masterGain * (ringRange.lowerBound / tau).squareRoot() * loudest * crest
+            let r = exp(-cellSeconds / tau)
+            let older = exp(offsetSeconds / tau) * r / (1 - r)
+            return note * (1 + older)
+        }.max()!
     }
 
     // MARK: - Voices
@@ -110,16 +146,108 @@ public struct ChimesScene: Scene {
         var amp: Double
         var omega: Double            // radians per frame
         var cosW: Double, sinW: Double
-        var attack: Double, decay: Double, step: Double
-        var lifeFrames: Int, fadeFrames: Int
+        var tauFrames: Double        // decay time constant, in frames
+        var step: Double             // per-frame decay
     }
 
     private struct Voice {
-        var cell: Int
         var birth: Int               // absolute frame
         var end: Int                 // first absolute frame with no sound
-        var mallet: [Double]         // finished strike element, from birth
         var partials: [Partial]
+        var level: Double            // master · sqrt(1.4/τ) / (1 - d/2)
+        var attack: Double           // seconds
+        var attackFrames: Int
+        var depth: Double            // vibrato depth d
+        var vibOmega: Double, vibCos: Double, vibSin: Double, vibPhase: Double
+        var lifeFrames: Int, fadeFrames: Int
+
+        init(birth: Int, f0: Double, warp: WarpDepth, gains: [Double], phase: Double, sr: Double) {
+            let tau = ChimesScene.ringSeconds(warp.ring)
+            self.birth = birth
+            partials = []
+            for k in 0..<ChimesScene.ratios.count {
+                let hz = f0 * ChimesScene.ratios[k]
+                guard hz > 0, hz < 0.45 * sr else { continue }
+                let omega = 2 * Double.pi * hz / sr
+                let tauFrames = sr * tau / ChimesScene.ratios[k].squareRoot()
+                partials.append(Partial(amp: ChimesScene.baseAmps[k] * gains[k], omega: omega,
+                                        cosW: cos(omega), sinW: sin(omega),
+                                        tauFrames: tauFrames, step: exp(-1 / tauFrames)))
+            }
+            depth = ChimesScene.vibratoDepth(warp.vibrato)
+            level = ChimesScene.masterGain * (ChimesScene.ringRange.lowerBound / tau).squareRoot() / (1 - depth / 2)
+            attack = ChimesScene.attackSeconds(warp.softness)
+            attackFrames = Int((attack * sr).rounded(.up))
+            vibOmega = 2 * Double.pi * ChimesScene.vibratoHz / sr
+            vibCos = cos(vibOmega)
+            vibSin = sin(vibOmega)
+            vibPhase = phase
+            let lifeSeconds = min(ChimesScene.tailTimeConstants * tau, ChimesScene.lifetimeCap)
+            lifeFrames = ChimesScene.frame(lifeSeconds, sr)
+            fadeFrames = max(1, ChimesScene.frame(min(ChimesScene.fadeSeconds, ChimesScene.fadeFraction * lifeSeconds), sr))
+            end = birth + lifeFrames
+        }
+
+        /// Adds this note's frames in `[b, b + block.count)` into `block`. Every recurrence starts
+        /// from closed-form values at the block's first frame, so the result depends only on `b`.
+        func render(into block: inout [Double], from b: Int, sr: Double) {
+            let blockEnd = b + block.count
+            let first = max(b, birth), last = min(blockEnd, end)
+            guard first < last else { return }
+            let k0 = first - birth
+            let count = last - first
+            var c = [Double](repeating: 0, count: partials.count)
+            var s = c, e = c
+            for (i, p) in partials.enumerated() {
+                let phase = p.omega * Double(k0)
+                c[i] = cos(phase); s[i] = sin(phase)
+                e[i] = exp(-Double(k0) / p.tauFrames)
+            }
+            let theta = vibOmega * Double(k0) + vibPhase
+            var vc = cos(theta), vs = sin(theta)
+            let fadeStart = lifeFrames - fadeFrames
+            for j in 0..<count {
+                let k = k0 + j
+                var x = 0.0
+                for i in 0..<partials.count {
+                    x += partials[i].amp * e[i] * s[i]
+                    let c2 = c[i] * partials[i].cosW - s[i] * partials[i].sinW
+                    s[i] = s[i] * partials[i].cosW + c[i] * partials[i].sinW
+                    c[i] = c2
+                    e[i] *= partials[i].step
+                }
+                var env = level
+                if k < attackFrames { env *= Envelope.raisedCosine(Double(k) / sr / attack) }
+                if k >= fadeStart {
+                    env *= 0.5 + 0.5 * cos(Double.pi * Double(k - fadeStart) / Double(fadeFrames))
+                }
+                if depth > 0 {
+                    env *= 1 - depth * (0.5 - 0.5 * vc)
+                    let vc2 = vc * vibCos - vs * vibSin
+                    vs = vs * vibCos + vc * vibSin
+                    vc = vc2
+                }
+                block[first - b + j] += x * env
+            }
+        }
+    }
+
+    /// One isolated note born at frame 0, through the same voice code as the scene: vibrato phase
+    /// 0, and at `warp.proportion` the element `favoured` is the one that swells.
+    static func renderNote(f: Double, warp: WarpDepth, seconds: Double, sampleRate: Double, favoured: Int = 0) -> [Float] {
+        let g = Proportion.powerPreservingGains(favoured: favoured, baseAmps: baseAmps, proportion: warp.proportion)
+        let voice = Voice(birth: 0, f0: f, warp: warp, gains: g, phase: 0, sr: sampleRate)
+        let n = Int(seconds * sampleRate)
+        var out = [Float](repeating: 0, count: n)
+        var block = [Double](repeating: 0, count: blockFrames)
+        var b = 0
+        while b < n {
+            for i in 0..<blockFrames { block[i] = 0 }
+            voice.render(into: &block, from: b, sr: sampleRate)
+            for i in 0..<min(blockFrames, n - b) { out[b + i] = Float(block[i]) }
+            b += blockFrames
+        }
+        return out
     }
 
     private let seed: UInt64
@@ -137,99 +265,31 @@ public struct ChimesScene: Scene {
         self.warp = warp
         let start = startSecond.isFinite ? max(0, startSecond) : 0
         position = Self.frame(start, sampleRate)
-        // Every strike born up to the lookback before the start may still be sounding.
+        // Every note born up to the lookback before the start may still be sounding.
         nextCell = max(0, Int(((start - Self.lookbackSeconds) / Self.cellSeconds).rounded(.down)))
         block = [Double](repeating: 0, count: Self.blockFrames)
     }
 
     private func makeVoice(cell: Int) -> Voice? {
         guard let s = Self.strike(seed: seed, cell: cell, warp: warp) else { return nil }
-        let slow = s.warp.slowness
-        let birth = Self.frame(s.birth, sr)
-        let f0 = Self.fundamental(seed: seed, cell: cell, warp: s.warp)
-        let g = Self.gains(seed: seed, cell: cell, proportion: s.warp.proportion).map { pow(10, $0 / 20) * Self.masterGain }
-
-        var partials: [Partial] = []
-        func add(_ hz: Double, _ amp: Double, _ attack: Double, _ decay: Double) {
-            guard hz > 0, hz < 0.45 * sr else { return }
-            let lifeSeconds = min(attack + Self.tailTimeConstants * decay, Self.lifetimeCap)
-            let omega = 2 * Double.pi * hz / sr
-            partials.append(Partial(
-                amp: amp, omega: omega, cosW: cos(omega), sinW: sin(omega),
-                attack: attack, decay: decay, step: exp(-1 / (sr * decay)),
-                lifeFrames: Self.frame(lifeSeconds, sr),
-                fadeFrames: max(1, Self.frame(min(Self.fadeSeconds, Self.fadeFraction * lifeSeconds), sr))))
-        }
-        for k in 0..<4 {
-            add(f0 * Self.bodyRatios[k], Self.bodyAmps[k] * g[1], Self.bodyAttack, Self.bodyDecays[k] * (1 + 2 * slow))
-        }
-        add(f0, Self.bloomAmps[0] * g[2], Self.bloomAttack, Self.bloomDecay * (1 + slow))
-        add(f0 / 2, Self.bloomAmps[1] * g[2], Self.bloomAttack, Self.bloomDecay * (1 + slow))
-        add(f0 - Self.beatOffsetHz, Self.beatAmps[0] * g[3], Self.beatAttack, Self.beatDecay)
-        add(f0 + Self.beatOffsetHz, Self.beatAmps[1] * g[3], Self.beatAttack, Self.beatDecay)
-
-        // The mallet: hashed noise through a filter zeroed at birth, then the strike envelope.
-        var filter = Biquad.bandpass(center: min(f0 * Self.malletRatio, Self.malletMaxHz), q: Self.malletQ, sampleRate: sr)
-        let noiseSeed = NightRandom.hash(seed, Self.noiseStream, UInt64(cell))
-        let level = Self.strikeLevel * g[0]
-        let mallet = (0..<Self.frame(Self.malletSeconds, sr)).map { k in
-            let x = filter.process(Float(NightRandom.signed(noiseSeed, Self.noiseStream, UInt64(k))))
-            return Double(x) * Self.strikeEnvelope(t: Double(k) / sr) * level
-        }
-
-        let end = birth + max(mallet.count, partials.map(\.lifeFrames).max() ?? 0)
-        return Voice(cell: cell, birth: birth, end: end, mallet: mallet, partials: partials)
+        return Voice(birth: Self.frame(s.birth, sr),
+                     f0: Self.fundamental(seed: seed, cell: cell, warp: s.warp),
+                     warp: s.warp,
+                     gains: Self.gains(seed: seed, cell: cell, proportion: s.warp.proportion),
+                     phase: 2 * Double.pi * NightRandom.unit(seed, Self.vibratoPhaseStream, UInt64(cell)),
+                     sr: sr)
     }
 
     /// Renders the absolute block starting at `b` (a multiple of `blockFrames`) into `block`.
     private mutating func renderBlock(_ b: Int) {
-        let n = Self.blockFrames
-        let blockEnd = b + n
+        let blockEnd = b + Self.blockFrames
         voices.removeAll { $0.end <= b }
         while Double(nextCell) * Self.cellSeconds * sr <= Double(blockEnd) {
             if let v = makeVoice(cell: nextCell) { voices.append(v) }
             nextCell += 1
         }
-        for i in 0..<n { block[i] = 0 }
-        for v in voices where v.birth < blockEnd {
-            // strike
-            let mFirst = max(b, v.birth), mLast = min(blockEnd, v.birth + v.mallet.count)
-            if mFirst < mLast {
-                for f in mFirst..<mLast { block[f - b] += v.mallet[f - v.birth] }
-            }
-            // body, bloom, beating
-            for p in v.partials {
-                let first = max(b, v.birth), last = min(blockEnd, v.birth + p.lifeFrames)
-                guard first < last else { continue }
-                var k = first - v.birth
-                let phase = p.omega * Double(k)
-                var c = cos(phase), s = sin(phase)
-                var e = 0.0, decaying = false
-                let fadeStart = p.lifeFrames - p.fadeFrames
-                for f in first..<last {
-                    let t = Double(k) / sr
-                    var env: Double
-                    if t < p.attack {
-                        env = Envelope.attackDecay(t: t, attack: p.attack, decay: p.decay)
-                    } else if decaying {
-                        e *= p.step
-                        env = e
-                    } else {
-                        e = Envelope.attackDecay(t: t, attack: p.attack, decay: p.decay)
-                        decaying = true
-                        env = e
-                    }
-                    if k >= fadeStart {
-                        env *= 0.5 + 0.5 * cos(Double.pi * Double(k - fadeStart) / Double(p.fadeFrames))
-                    }
-                    block[f - b] += p.amp * env * s
-                    let c2 = c * p.cosW - s * p.sinW
-                    s = s * p.cosW + c * p.sinW
-                    c = c2
-                    k += 1
-                }
-            }
-        }
+        for i in 0..<Self.blockFrames { block[i] = 0 }
+        for v in voices where v.birth < blockEnd { v.render(into: &block, from: b, sr: sr) }
         blockStart = b
     }
 
