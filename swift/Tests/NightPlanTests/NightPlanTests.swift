@@ -18,6 +18,15 @@ import Testing
     let w = WarpDepth(distance: 1.5, slowness: -0.2, fragmentation: .nan, proportion: 0.4)
     #expect(w == WarpDepth(distance: 1, slowness: 0, fragmentation: 0, proportion: 0.4))
 }
+@Test func toneDialsClamp() {
+    let w = WarpDepth(ring: 1.5, softness: -1, vibrato: .nan)
+    #expect(w.ring == 1 && w.softness == 0 && w.vibrato == 0)
+    var v = WarpDepth()
+    v.ring = 2; v.softness = -3; v.vibrato = .nan
+    #expect(v.ring == 1 && v.softness == 0 && v.vibrato == 0)
+    v.ring = 0.4; v.softness = 0.5; v.vibrato = 0.6
+    #expect(v == WarpDepth(ring: 0.4, softness: 0.5, vibrato: 0.6))
+}
 @Test func channelClampsAndKeepsAnOctave() {
     var c = ChannelSettings.early; c.highCornerHz = 200; c.lowCornerHz = 300
     #expect(c.highCornerHz >= c.lowCornerHz * 2)

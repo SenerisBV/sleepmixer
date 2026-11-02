@@ -5,6 +5,7 @@ import NightPlan
 
 @Suite struct NightFactoryTests {
     @Test func everyCornerIsSafe() {
+        #expect(Set(SceneKind.allCases) == [.chimes, .waves, .warmth])
         for kind in SceneKind.allCases {
             for bits in 0..<16 {
                 for channel in [true, false] {
@@ -43,7 +44,7 @@ import NightPlan
         }
     }
 
-    @Test(arguments: [SceneKind.waves, .chimes])
+    @Test(arguments: [SceneKind.waves, .chimes, .warmth])
     func seekingMatchesALongerRender(kind: SceneKind) {
         let sr = 44100
         let warp = WarpDepth(distance: 0.5, fragmentation: 0.3)

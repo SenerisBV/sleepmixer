@@ -50,6 +50,7 @@ public enum NightFactory {
         switch r.scene {
         case .chimes: return build(ChimesScene.self, r)
         case .waves: return build(WavesScene.self, r)
+        case .warmth: return build(LowWarmthScene.self, r)
         }
     }
 

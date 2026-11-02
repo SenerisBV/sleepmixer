@@ -1,22 +1,24 @@
 # NightEngine (Swift)
 
-The Swift engine for Plan 7, the AM night: generated scenes (rich round chimes,
-pixellated waves) heard through an AM-radio channel, bent away from themselves
-by distance, slowness, fragmentation and proportion. This is Plan 7a, the first
-slice: two scenes, the warp, the channel, and `nightctl`, a Mac command-line
+The Swift engine for Plan 7, the AM night: generated scenes (soft-mallet
+chimes, pixellated waves, low warmth) heard through an AM-radio channel, bent
+away from themselves by distance, slowness, fragmentation and proportion, with
+three tone dials (ring, softness, vibrato) for the chimes. This is Plans 7a and
+7b: three scenes, the warp, the channel, and `nightctl`, a Mac command-line
 tool for auditioning them. There is no app yet.
 
 Design and state: `docs/superpowers/specs/2026-11-02-am-night-design.md`,
-`docs/architecture.md` ("The Swift engine (Plan 7a)") and
-`docs/project-state.md` ("Plan 7a", with every placeholder by name and value).
-Nobody has listened to the output yet; all constants are placeholders.
+`docs/architecture.md` ("The Swift engine (Plans 7a and 7b)") and
+`docs/project-state.md` ("Plan 7a" and "Plan 7b", with every placeholder by
+name and value). The operator has listened to the 7a set only; the 7b set is
+waiting for them, and all constants are placeholders.
 
 ## Layout
 
 | Target | Imports | Contains |
 |---|---|---|
-| `NightPlan` | **Foundation only; no other target** | `NightRandom`, `WarpDepth`, `ChannelSettings`, `Curve`, `SceneKind` |
-| `NightDSP` | Foundation and `NightPlan`; never AVFoundation, UIKit or AppKit | primitives, `ChimesScene`, `WavesScene`, `Fragmenter`, `Distance`, `AMChannel`, `NightFactory` |
+| `NightPlan` | **Foundation only; no other target** | `NightRandom`, `WarpDepth` (seven dials), `ChannelSettings`, `Curve`, `SceneKind` |
+| `NightDSP` | Foundation and `NightPlan`; never AVFoundation, UIKit or AppKit | primitives, `ChimesScene`, `WavesScene`, `LowWarmthScene`, `Fragmenter`, `Distance`, `AMChannel`, `NightFactory` |
 | `NightCLI` | `NightDSP`, `NightPlan`, ArgumentParser | the `scenes` and `audition` commands |
 | `nightctl` | `NightCLI` | `main.swift` |
 
@@ -38,7 +40,7 @@ swift test -c release
 
 **Always test with `-c release`.** Per-sample DSP in debug is 10 to 50 times
 slower and the suite renders minutes of audio. The tests are pure unit tests;
-there is no database. The suite currently has 80 tests.
+there is no database. The suite currently has 104 tests.
 
 ## Audition
 
@@ -49,11 +51,16 @@ swift run -c release nightctl audition waves --distance 0.5 --slowness 0.5 --out
 swift run -c release nightctl audition waves --distance 1 --slowness 1 \
     --fragmentation 0.6 --proportion 0.8 --at 28800 --seconds 30
 swift run -c release nightctl audition chimes --no-channel
+swift run -c release nightctl audition chimes --ring 1 --softness 1 --vibrato 0.5
+swift run -c release nightctl audition warmth --seconds 60 --play
 ```
 
 Options: `--seconds` (above 0, up to 3600, default 60), `--at` (start second within the
 night; seeks are cheap), `--seed`, `--distance`, `--slowness`,
-`--fragmentation`, `--proportion` (each 0 to 1), `--no-channel`,
+`--fragmentation`, `--proportion` (each 0 to 1), `--ring`, `--softness`,
+`--vibrato` (the chimes' tone dials, each 0 to 1; ring is how long a note
+rings, softness how slowly it starts, vibrato a slow wavering; the other scenes
+ignore them), `--no-channel`,
 `--sample-rate` (default 44100), `--out` (default `./<scene>-<seed>.wav`) and
 `--play` (afplay). It prints the path, RMS, peak and spectral centroid. Bad
 input exits with code 64 and writes no file. The tool builds sound only through
@@ -61,8 +68,12 @@ input exits with code 64 and writes no file. The tool builds sound only through
 
 ## The listening set
 
-`swift/listening/render.sh` regenerates eight 60-second files (seed 1): chimes
-and waves, each plain, at `--distance 0.5 --slowness 0.5`, at
-`--distance 1 --slowness 1 --fragmentation 0.6 --proportion 0.8`, and plain
-with `--no-channel`. It also writes `measurements.txt`. The WAVs are
-git-ignored (the repository ignores `*.wav`), so run the script to get them.
+`swift/listening/render.sh` regenerates ten 60-second files (seed 1):
+the waves (plain, at `--distance 0.5 --slowness 0.5`, at `--distance 1
+--slowness 1 --fragmentation 0.6 --proportion 0.8`, and plain with
+`--no-channel`); the soft chimes (`chimes-soft-plain`, `chimes-soft-sleepy` at
+`--ring 1 --softness 1`, `chimes-soft-deep` at `--ring 1 --softness 1 --vibrato
+1 --distance 0.6 --slowness 0.5`, and `chimes-soft-nochannel`); and the
+warmth (`warmth-plain`, `warmth-nochannel`). It also writes `measurements.txt`.
+The WAVs are git-ignored (the repository ignores `*.wav`), so run the script
+to get them. The old bell-chime files from 7a no longer exist.
