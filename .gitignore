@@ -28,3 +28,4 @@ ui/elm-stuff/
 # Swift package build output
 swift/.build/
 swift/.swiftpm/
+swift/listening/measurements.txt
