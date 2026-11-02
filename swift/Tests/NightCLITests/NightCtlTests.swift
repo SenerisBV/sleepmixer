@@ -28,6 +28,7 @@ import NightPlan
         (["chimes", "--seconds", "0"], "--seconds"),
         (["chimes", "--seconds=nan"], "--seconds"),
         (["chimes", "--at=-3"], "--at"),
+        (["chimes", "--at=100000"], "--at"),
         (["chimes", "--distance=nan"], "--distance"),
         (["chimes", "--distance=1.5"], "--distance"),
     ])

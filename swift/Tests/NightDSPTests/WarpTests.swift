@@ -50,7 +50,6 @@ private func gains(_ f: Fragmenter, from: Int, count: Int) -> [Double] {
             return total * Analysis.bandEnergyRatio(y, sampleRate: sr, above: 2000)
         }
         let drop = 10 * log10(highEnergy(0) / highEnergy(1))
-        print("distanceDarkensTheRoomToo \(sr): >2 kHz energy drop \(drop) dB")
         #expect(drop >= 20, "drop \(drop) dB")
     }
 

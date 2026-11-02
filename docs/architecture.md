@@ -1971,11 +1971,14 @@ never clip and the guard never makes a click of its own. Peak safety is owned
 there and, for the waves, also proven at the source (see below). The
 channel can be switched off (`--no-channel`) for comparison; the guard cannot.
 
-Two level rules keep the whole thing honest with the spec's ratchet (the
-night's level only ever descends). The channel's warmth stage has unity gain
-for quiet signals, so nothing the planner asks of `squash` can make a quiet
-scene louder; and the waves' master gain is derived from an analytic bound on
-the sum of every wave that could overlap, not from sampled seeds.
+Two level rules support the spec's ratchet (the night's level only ever
+descends), for the audition's constant warp. The channel's warmth stage has
+unity gain for quiet signals, so nothing the planner asks of `squash` can make
+a quiet scene louder; and the waves' master gain is derived from an analytic
+bound on the sum of every wave that could overlap, not from sampled seeds.
+They do not make the warp controls level-neutral: proportion, slowness and
+distance each raise level at their extremes (see "Before the planner moves
+anything" in the project state), and that is the planner's to fix.
 
 ### The single factory
 

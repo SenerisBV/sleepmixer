@@ -12,6 +12,7 @@ import Testing
 }
 @Test func hashGoldenValue() {   // pins the algorithm so Swift on every device agrees
     #expect(NightRandom.hash(0, 0, 0) == 0xE220A8397B1DCDAF)   // SplitMix64's canonical first output for seed 0
+    #expect(NightRandom.hash(7, 1, 42) == 0x1B7ABC44FECF50A8)   // nonzero stream and index; verified independently in Python
 }
 @Test func warpClampsEveryField() {
     let w = WarpDepth(distance: 1.5, slowness: -0.2, fragmentation: .nan, proportion: 0.4)

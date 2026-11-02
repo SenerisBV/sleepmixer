@@ -14,11 +14,11 @@ import NightPlan
                     settings.squash = 1
                     settings.hissLevelDB = -20
                     let out = NightFactory.audition(AuditionRequest(
-                        scene: kind, seconds: 3, warp: warp, channel: channel, channelSettings: settings))
-                    #expect(out.count == 3 * 44100)
+                        scene: kind, seconds: 30, startSecond: 600, warp: warp, channel: channel, channelSettings: settings))
+                    #expect(out.count == 30 * 44100)
                     #expect(out.allSatisfy { $0.isFinite })
                     let peak = out.reduce(Float(0)) { max($0, abs($1)) }
-                    #expect(peak <= 0.95, "\(kind) bits \(bits) channel \(channel) peak \(peak)")
+                    #expect(peak <= 0.8913, "\(kind) bits \(bits) channel \(channel) peak \(peak)")
                 }
             }
         }
@@ -56,8 +56,7 @@ import NightPlan
             Analysis.rmsDB(zip(x, y).map { $0 - $1 }[...]) - Analysis.rmsDB(y[...])
         }
         let vsTail = residualDB(b, tail), vsHead = residualDB(b, head)
-        print("SEEK \(kind) residual vs tail \(vsTail) dB, vs head \(vsHead) dB")
-        #expect(vsTail <= -30, "\(kind): seeked render is only \(vsTail) dB under the tail")
+        #expect(vsTail <= -90, "\(kind): seeked render is only \(vsTail) dB under the tail")
         #expect(vsHead >= -10, "\(kind): seeked render is too close to the first 20 s (\(vsHead) dB)")
     }
 

@@ -51,7 +51,7 @@ swift run -c release nightctl audition waves --distance 1 --slowness 1 \
 swift run -c release nightctl audition chimes --no-channel
 ```
 
-Options: `--seconds` (0 to 3600, default 60), `--at` (start second within the
+Options: `--seconds` (above 0, up to 3600, default 60), `--at` (start second within the
 night; seeks are cheap), `--seed`, `--distance`, `--slowness`,
 `--fragmentation`, `--proportion` (each 0 to 1), `--no-channel`,
 `--sample-rate` (default 44100), `--out` (default `./<scene>-<seed>.wav`) and

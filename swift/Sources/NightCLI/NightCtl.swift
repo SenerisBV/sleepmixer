@@ -49,8 +49,8 @@ public struct NightCtl: ParsableCommand {
             guard seconds.isFinite, seconds > 0, seconds <= 3600 else {
                 throw ValidationError("--seconds must be greater than 0 and at most 3600 (got \(seconds)).")
             }
-            guard at.isFinite, at >= 0 else {
-                throw ValidationError("--at must be 0 or more (got \(at)).")
+            guard at.isFinite, (0...86_400).contains(at) else {
+                throw ValidationError("--at must be between 0 and 86400 (got \(at)).")
             }
             guard sampleRate.isFinite, (8000...192_000).contains(sampleRate) else {
                 throw ValidationError("--sample-rate must be between 8000 and 192000 (got \(sampleRate)).")

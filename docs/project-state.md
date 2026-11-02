@@ -111,13 +111,18 @@ checked by rendering the same far warp with `--no-channel` (seed 1, 60 s):
 chimes go from a centroid of 507 Hz plain to 438 Hz far (363 Hz with distance
 1 alone), and waves from 339 Hz plain to 162 Hz far (165 Hz with distance 1
 alone). So distance does darken the content, as designed; the brighter
-reading *with* the channel (chimes 656 to 924 Hz) comes from the channel's
-noise floor, whose hiss and crackle stay fixed while the content falls (chimes
-RMS drops from -26.3 to -30.4 dB), so the floor's share of the spectrum grows.
+reading *with* the channel (chimes 656 to 924 Hz) is consistent with the
+channel's fixed noise floor: its hiss and crackle stay put while the content
+falls (chimes RMS drops from -26.3 to -30.4 dB), so the floor's share of the
+spectrum grows. The stronger evidence is at fragmentation 1: the chimes'
+centroid is 1854 Hz with the channel against 586 Hz without, and the waves'
+is 1891 Hz against 310 Hz, because the noise floor fills the silent cells.
 That matters for the planner: as content recedes, the channel's noise has to
 come down with it, or the far end of the night gets hissier and brighter
-instead of further away. The waves' centroid still rises slightly with the
-channel (939 to 1033 Hz) for the same reason. Nobody has listened to either,
+instead of further away. The waves' centroid also rises with the channel
+(939 to 1033 Hz), but their with-channel RMS does not fall, so the
+"floor outgrows the content" explanation is not established for them.
+Nobody has listened to either,
 and these are centroids, not a judgement of how it sounds). Whether any of it is a warm
 memory of a train, or merely a quiet hum, is not something a number can say.
 Two things the table does show plainly: the channel takes about 5 dB off the
@@ -125,6 +130,50 @@ chimes' RMS and 6 dB off the peak at plain warp, and it moves waves' centroid
 from 339 Hz to 977 Hz (the channel removes the body below 180 Hz and adds hiss
 and saturation harmonics, so "the channel makes it brighter" is the truth even
 though "the channel makes it narrower" is also the truth).
+
+### Before the planner moves anything
+
+Preconditions found by the final whole-branch review of Plan 7a. None is a
+bug in the shipped audition tool (it holds the warp constant); each becomes
+one the moment a planner moves the controls.
+
+- **I1, the warp is not level-neutral.** Measured over 120 s and 3 seeds:
+  proportion 1 raises waves by +4 dB peak and +2.3 dB RMS, and chimes by +2 dB
+  peak; slowness 1 raises waves by up to +3.5 dB peak; distance 1 raises chimes
+  seed 3 without the channel from -19.5 to -17.0 dB RMS and from -5.0 to -3.5
+  dBFS peak; the combined far warp raises waves without the channel from -15.9
+  to -8.3 dBFS peak. Causes: the proportion rule (+6 dB favoured, -12 dB
+  receded) does not preserve power; slower waves overlap more; and reverb
+  build-up exceeds the direct-sound loss. The spec's ratchet says the free
+  controls must not make the night louder. The fix belongs to the planner:
+  power-preserving proportion, reverb-compensated distance, or a per-source
+  level stage under the ratchet.
+- **I2, per-source seeds.** `NightFactory` derives component seeds as
+  `hash(seed, i, 0)`. In a mix of several sources, every source's channel would
+  get identical hiss and crackle, and every Fragmenter would drop out in the
+  same cells. Use `hash(seed, component, sourceIndex)`.
+- **I3, the crackle clamp.** `ChannelSettings` allows crackle up to -20 dBFS
+  whatever the hiss level, and crackle continues through the fragmenter's
+  silent cells. Make it structural, like the octave rule: crackle <= hiss - 6 dB.
+- **M5, constant-settings assumptions.** On a seek, Distance and AMChannel
+  start their glides at the target, which the 6 s lead-in settles to about e^-3
+  of the lag under a moving curve. The waves' hold grid re-latches once per
+  256-frame block when the rate changes. There is no test with a moving curve
+  for the scenes or Distance; the first planner test should seek into a moving
+  warp.
+- **M6, Distance's lowpass is unconnected to the channel's high corner.** At
+  distance 0 it sits at 8000 Hz, and the spec requires distance's lowpass never
+  to exceed the brightness ceiling.
+- **M7, the factory renders offline only.** The app needs a streaming
+  `NightGraph.render(into:)` with the same chain and guard, which `audition`
+  should wrap, to keep the one-factory rule.
+- **Cleanups for the planner milestone:** make `Distance.cornerHz` internal,
+  and sanitise `startSecond` in Distance and Fragmenter like the scenes do.
+- **Test note (final review):** `everyCornerIsSafe` cannot fail without the
+  master guard at present: unguarded 30 s renders from second 600 peak at 0.54
+  at most, below the guard's knee. It is a backstop contract (peak <= ceiling),
+  not evidence the guard is exercised; the guard's own unit tests cover that.
+
 
 ### Every placeholder, by component
 
