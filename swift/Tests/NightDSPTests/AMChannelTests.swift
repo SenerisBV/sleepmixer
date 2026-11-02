@@ -107,6 +107,23 @@ private func windowDBs(_ x: [Float], seconds: Double, sr: Double) -> [Double] {
         #expect(still < 1, "span at depth 0: \(still) dB")
     }
 
+    /// Selective fading shifts the tone: the sweeping peaking cut moves the 1 s centroid of white
+    /// noise, which the broadband fade alone does not.
+    @Test func selectiveFadingShiftsTone() {
+        let sr = 44100.0
+        let input = noise(seconds: 60, sr: sr, seed: 21).map { $0 * 0.3 }
+        func span(_ depth: Double) -> Double {
+            let y = through(input, with { $0.fadeDepth = depth; $0.fadeRateHz = 0.2 }, sr: sr)
+            let n = Int(sr)
+            let c = stride(from: 2 * n, to: y.count - n + 1, by: n).map {
+                Analysis.centroidHz(Array(y[$0..<($0 + n)]), sampleRate: sr)
+            }
+            return c.max()! - c.min()!
+        }
+        let moving = span(1), still = span(0)
+        #expect(moving >= 2.5 * still, "centroid span \(moving) Hz at depth 1 vs \(still) Hz at depth 0")
+    }
+
     /// A rate change must not jump the smooth noise: the fade phase only ever advances by rate/sr.
     @Test func fadeRateChangeIsContinuous() {
         let sr = 44100.0
