@@ -31,8 +31,6 @@ public struct ChimesScene: Scene {
     static let bloomDecay = 12.0
     static let beatOffsetHz = 0.35
     static let beatDecay = 8.0
-    static let favouredDB = 6.0
-    static let recededDB = -12.0
     static let lookbackSeconds = 60.0
 
     // MARK: - Invented values (placeholders recorded in Task 8)
@@ -90,8 +88,7 @@ public struct ChimesScene: Scene {
     }
 
     private static func gains(seed: UInt64, cell: Int, proportion: Double) -> [Double] {
-        let favoured = min(Int(NightRandom.unit(seed, 4, UInt64(cell)) * 4), 3)
-        return (0..<4).map { $0 == favoured ? favouredDB * proportion : recededDB * proportion }
+        Proportion.gainsDB(seed: seed, stream: 4, index: UInt64(cell), count: 4, proportion: proportion)
     }
 
     /// The strike's fundamental for the warp it froze at birth: the seed's root, the cell's
