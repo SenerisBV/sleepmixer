@@ -1870,12 +1870,12 @@ prerequisites, because mtime-driven rebuilding was actively wrong here: a
 following `make ui` would have skipped the compile and re-recorded the hash of
 the debug build as current — turning the guard into a rubber stamp.
 
-## The Swift engine (Plan 7a)
+## The Swift engine (Plans 7a and 7b)
 
 The Swift package at `swift/` (`NightEngine`) is the second engine in this
 repository, and it does not share code with the Python one. It renders
 generated scenes through an AM-radio channel and bends them away from
-themselves along four dimensions. Plan 7a builds only the part that can be
+themselves along four dimensions. Plan 7a builds (and 7b extends, see the last subsection below) only the part that can be
 tuned by ear: two scenes, the warp, the channel, and a command-line tool to
 hear them. See `docs/project-state.md` ("Plan 7a") for what shipped, every
 invented number, and what hasn't been heard.
@@ -2038,7 +2038,7 @@ in `NightPlan`. See `docs/project-state.md` ("Plan 7b") for the values.
 
 There is no real-time rendering yet. The chain is rendered whole, in 4096-frame
 blocks, into one array and written as a float32 WAV. Several parts allocate in
-ways an audio thread cannot (the chime mallets, the waves' per-wave filters,
+ways an audio thread cannot (the chimes' per-voice arrays, the waves' per-wave filters,
 per-sample `pow` and hashing in the channel), and these are recorded in
 `docs/project-state.md` as the work to do before the app. The warp and channel
 settings are constants for the length of an audition (`Curve.constant`);

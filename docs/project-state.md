@@ -4,7 +4,7 @@
 
 **Read this first.** On 2026-11-02 the operator redirected the project. The
 night is no longer made from their songs. It's made from a built-in library
-of **generated scenes with an AM-radio character** (rich round chimes,
+of **generated scenes with an AM-radio character** (soft-mallet chimes,
 pixellated waves, sleeping on a train, wind through a long vent, carolers,
 someone upstairs practicing), which **warp across the night into their own
 descendants**: further away, slower, in pieces, out of proportion, "like
@@ -45,9 +45,11 @@ mixer as built through Plan 5, Phase 3.
 
 **Status (2026-11-02): built and tested; not yet listened to.** Plan 7a is the
 first slice of Plan 7: prove the sound before building anything around it. It
-is a Swift package at `swift/` that renders two generated scenes (rich round
-chimes and pixellated waves) through the AM channel, warps them along the four
-dimensions (distance, slowness, fragmentation, proportion), and lets the
+is a Swift package at `swift/` that renders two generated scenes (at the time
+rich round chimes, since rebuilt as soft-mallet chimes in Plan 7b, and pixellated
+waves) through the AM channel, warps them along the four
+dimensions (distance, slowness, fragmentation, proportion; Plan 7b adds the
+three tone dials ring, softness and vibrato alongside them), and lets the
 operator audition any combination from a Mac command line. There is no app, no
 planner, no voice layer, no night log, and no engine that runs in real time yet.
 The slice exists so the operator can hear whether the character is right before
@@ -92,14 +94,15 @@ nothing to apply to here.
 Produced by `swift/listening/render.sh`: seed 1, 60 s, 44.1 kHz. "plain" is
 warp 0 through the channel; "mid" is `--distance 0.5 --slowness 0.5`; "far" is
 `--distance 1 --slowness 1 --fragmentation 0.6 --proportion 0.8`; "no channel"
-is plain with `--no-channel`. Levels are after the master guard.
+is plain with `--no-channel`. Levels are after the master guard. **The chimes
+rows are the 7a bells, superseded by Plan 7b; the waves rows stand.**
 
 | File | RMS (dB) | Peak (dBFS) | Centroid (Hz) |
 |---|---|---|---|
-| `chimes-plain.wav` | -26.3 | -14.0 | 656 |
-| `chimes-mid.wav` | -32.7 | -16.1 | 692 |
-| `chimes-far.wav` | -30.4 | -17.3 | 924 |
-| `chimes-nochannel.wav` | -21.1 | -7.6 | 507 |
+| `chimes-plain.wav` (bells, superseded by Plan 7b) | -26.3 | -14.0 | 656 |
+| `chimes-mid.wav` (bells, superseded by Plan 7b) | -32.7 | -16.1 | 692 |
+| `chimes-far.wav` (bells, superseded by Plan 7b) | -30.4 | -17.3 | 924 |
+| `chimes-nochannel.wav` (bells, superseded by Plan 7b) | -21.1 | -7.6 | 507 |
 | `waves-plain.wav` | -36.8 | -20.4 | 977 |
 | `waves-mid.wav` | -37.4 | -20.1 | 939 |
 | `waves-far.wav` | -36.6 | -17.8 | 1033 |
@@ -107,7 +110,7 @@ is plain with `--no-channel`. Levels are after the master guard.
 
 These are measurements, not verdicts. They say the files are finite, bounded,
 and different from each other in the directions the design intended on some
-axes and not on others (the "far" chimes have a higher centroid than the plain
+axes and not on others (the "far" chimes (bells, superseded by Plan 7b) have a higher centroid than the plain
 ones, which looks like the reverse of what "further away" suggests. It was
 checked by rendering the same far warp with `--no-channel` (seed 1, 60 s):
 chimes go from a centroid of 507 Hz plain to 438 Hz far (363 Hz with distance
@@ -128,7 +131,7 @@ Nobody has listened to either,
 and these are centroids, not a judgement of how it sounds). Whether any of it is a warm
 memory of a train, or merely a quiet hum, is not something a number can say.
 Two things the table does show plainly: the channel takes about 5 dB off the
-chimes' RMS and 6 dB off the peak at plain warp, and it moves waves' centroid
+bell chimes' (superseded by Plan 7b) RMS and 6 dB off the peak at plain warp, and it moves waves' centroid
 from 339 Hz to 977 Hz (the channel removes the body below 180 Hz and adds hiss
 and saturation harmonics, so "the channel makes it brighter" is the truth even
 though "the channel makes it narrower" is also the truth).
@@ -140,8 +143,8 @@ bug in the shipped audition tool (it holds the warp constant); each becomes
 one the moment a planner moves the controls.
 
 - **I1, the warp is not level-neutral.** Measured over 120 s and 3 seeds:
-  proportion 1 raises waves by +4 dB peak and +2.3 dB RMS, and chimes by +2 dB
-  peak; slowness 1 raises waves by up to +3.5 dB peak; distance 1 raises chimes
+  proportion 1 raises waves by +4 dB peak and +2.3 dB RMS, and chimes (bells, superseded by Plan 7b) by +2 dB
+  peak; slowness 1 raises waves by up to +3.5 dB peak; distance 1 raises the bell chimes (superseded by Plan 7b)
   seed 3 without the channel from -19.5 to -17.0 dB RMS and from -5.0 to -3.5
   dBFS peak; the combined far warp raises waves without the channel from -15.9
   to -8.3 dBFS peak. Causes: the proportion rule (+6 dB favoured, -12 dB
@@ -325,11 +328,13 @@ with the result.
   independent noise at the summed power but not independently distinct. The
   fix, a stream per wave, is deferred until someone listens and says
   overlapping waves sound like one wave twice.
-- **The chimes' 58 s element cap.** The plan said the longest tail was 36 s; the
+- **The chimes' 58 s element cap (bells, superseded by Plan 7b; the cap itself
+  carried over to the soft chimes as `min(7τ, 58 s)`).** The plan said the longest tail was 36 s; the
   bloom at full slowness decays over 24 s and is still at -21 dB at 60 s. The
   implementer capped life at 58 s with a 4 s fade so that seeks stay exact
   and nothing is cut. The slowest blooms lose their last whisper.
-- **Chimes may peak near -2.6 dBFS before the channel at full proportion.**
+- **Bell chimes may peak near -2.6 dBFS before the channel at full proportion
+  (superseded by Plan 7b: soft chimes are power-preserving and bounded at 0.8685).**
   The master guard owns peak safety, and a corner test checks the whole chain.
 - **A discriminating pitch-drop test for the slow chimes.** The plan's test
   passed with the pitch drop removed (the density and decay changes alone moved
@@ -369,8 +374,9 @@ of them matter before anything runs on an audio thread:**
 **Level and loudness:**
 
 - **The two scenes are not level-matched.** Plain waves peak about -15 dBFS
-  and plain chimes about -6 dBFS before the channel (the table's no-channel
-  rows show -14.9 and -7.6 over a 60 s sample). Whoever plans the night will
+  and plain chimes about -6 dBFS before the channel (bells, superseded by Plan
+  7b; the soft chimes also peak near -6 dBFS, median -6.1 over 600 s; the table's
+  7a no-channel rows showed -14.9 and -7.6 over a 60 s sample). Whoever plans the night will
   need to balance them, or the planner will need a per-scene gain.
 - **Squash is still coupled to loud-material level.** Raising squash
   lowers loud sources (down to -9.5 dBFS at squash 1 for a full-scale
@@ -541,6 +547,22 @@ Measurements, not verdicts. Two things the table does show: the warmth peaks
 about 3 dB lower than the chimes without the channel (-10.1 against -7.0 at
 seed 1; the long-run figures are -10.5 against -6), which is a decision
 recorded below, and its centroid is low (165 Hz without the channel). The
+**`chimes-soft-deep` is not brighter.** Its centroid is 1040 Hz against plain's
+904 with the channel, while its RMS is 10 dB lower, which reads as brighter. Rendered with `--no-channel` (seed 1, 60 s) the two are
+plain 493 Hz (RMS -21.1, peak -7.0) and deep 463 Hz (RMS -34.7, peak -18.6): the
+content is a little darker, as distance should make it (the RMS drop is 13.6 dB
+without the channel against 9.5 dB with it). The brighter reading with the channel is consistent with
+7a's noise-floor finding: the hiss and crackle stay put while the content falls
+(-34.7 dB content against a -51 dB channel floor), so the floor's share of the spectrum grows.
+That is the same effect the planner must handle (the channel's noise coming
+down as content recedes). Likewise `chimes-soft-sleepy` is 1.0 dB *louder* in
+RMS than plain after the channel (-26.5 against -27.5) although the ring dial
+is +0.02 dB level-neutral: without the channel the two differ by -0.3 dB (-21.4
+against -21.1), the dial's neutrality is a long-run figure for the bare scene,
+and sleepy's peak is 1.9 dB lower (-8.9 against -7.0). The 1.3 dB swing is consistent with
+the channel's compressor and saturation acting on a peakier plain signal more than
+on the smoother sleepy one; that mechanism was not isolated.
+The
 channel again lifts the centroid on both new scenes (493 to 904 Hz on the
 chimes, 165 to 253 Hz on the warmth), for the reason already given in the 7a
 table: its band removes body and adds hiss.
