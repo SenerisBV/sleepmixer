@@ -29,3 +29,8 @@ ui/elm-stuff/
 swift/.build/
 swift/.swiftpm/
 swift/listening/measurements.txt
+
+# Secrets — API keys for script writing and voicing. Never commit.
+.env
+.env.*
+!.env.example
