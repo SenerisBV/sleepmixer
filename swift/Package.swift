@@ -12,5 +12,6 @@ let package = Package(
         .target(name: "NightPlan"),
         .target(name: "NightDSP", dependencies: ["NightPlan"]),
         .testTarget(name: "NightPlanTests", dependencies: ["NightPlan"]),
+        .testTarget(name: "NightDSPTests", dependencies: ["NightDSP", "NightPlan"]),
     ]
 )
