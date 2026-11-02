@@ -43,8 +43,25 @@ import NightPlan
         }
     }
 
-    @Test func seekingMatchesTheTailOfALongerRender() {
-        // Hour-eight start: right length, finite, audible.
+    @Test(arguments: [SceneKind.waves, .chimes])
+    func seekingMatchesALongerRender(kind: SceneKind) {
+        let sr = 44100
+        let warp = WarpDepth(distance: 0.5, fragmentation: 0.3)
+        let a = NightFactory.audition(AuditionRequest(scene: kind, seconds: 40, seed: 7, warp: warp))
+        let b = NightFactory.audition(AuditionRequest(scene: kind, seconds: 20, startSecond: 20, seed: 7, warp: warp))
+        #expect(b.count == 20 * sr)
+        let tail = Array(a[(20 * sr)..<(40 * sr)])
+        let head = Array(a[0..<(20 * sr)])
+        func residualDB(_ x: [Float], _ y: [Float]) -> Double {
+            Analysis.rmsDB(zip(x, y).map { $0 - $1 }[...]) - Analysis.rmsDB(y[...])
+        }
+        let vsTail = residualDB(b, tail), vsHead = residualDB(b, head)
+        print("SEEK \(kind) residual vs tail \(vsTail) dB, vs head \(vsHead) dB")
+        #expect(vsTail <= -30, "\(kind): seeked render is only \(vsTail) dB under the tail")
+        #expect(vsHead >= -10, "\(kind): seeked render is too close to the first 20 s (\(vsHead) dB)")
+    }
+
+    @Test func hourEightIsHealthy() {
         let r = AuditionRequest(scene: .waves, seconds: 5, startSecond: 28_800, warp: WarpDepth(distance: 0.5))
         let out = NightFactory.audition(r)
         #expect(out.count == 5 * 44100)

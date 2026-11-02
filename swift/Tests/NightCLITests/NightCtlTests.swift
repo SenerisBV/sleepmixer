@@ -21,6 +21,27 @@ import NightPlan
         #expect(throws: (any Error).self) { try NightCtl.Audition.parse(["chimes", "--seconds", "3601"]) }
     }
 
+    /// Each bad value must be rejected by validate() (not by a parse-level "missing value"),
+    /// and the message must name the field.
+    @Test(arguments: [
+        (["chimes", "--seconds=-1"], "--seconds"),
+        (["chimes", "--seconds", "0"], "--seconds"),
+        (["chimes", "--seconds=nan"], "--seconds"),
+        (["chimes", "--at=-3"], "--at"),
+        (["chimes", "--distance=nan"], "--distance"),
+        (["chimes", "--distance=1.5"], "--distance"),
+    ])
+    func validateNamesTheField(args: [String], field: String) {
+        do {
+            _ = try NightCtl.Audition.parse(args)
+            Issue.record("\(args) parsed without error")
+        } catch {
+            let message = NightCtl.Audition.message(for: error)
+            #expect(message.contains("must be"), "\(args): \(message)")
+            #expect(message.contains(field), "\(args): \(message)")
+        }
+    }
+
     @Test func badInputWritesNothing() throws {
         let tmp = NSTemporaryDirectory() + "nightctl-bad-\(UUID().uuidString).wav"
         #expect(throws: (any Error).self) {
