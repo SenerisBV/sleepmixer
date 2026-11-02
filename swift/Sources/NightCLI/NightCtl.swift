@@ -24,7 +24,7 @@ public struct NightCtl: ParsableCommand {
     public struct Audition: ParsableCommand {
         public static let configuration = CommandConfiguration(abstract: "Render a scene to a WAV file.")
 
-        @Argument(help: "chimes or waves") public var scene: SceneKind
+        @Argument(help: "chimes, waves or warmth") public var scene: SceneKind
         @Option(help: "Length in seconds (0 to 3600).") public var seconds: Double = 60
         @Option(name: .customLong("at"), help: "Start second within the night.") public var at: Double = 0
         @Option public var seed: UInt64 = 1

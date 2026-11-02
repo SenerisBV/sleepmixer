@@ -11,6 +11,8 @@ import NightPlan
             ["chimes", "--seconds", "30", "--distance", "0.5", "--no-channel", "--seed", "9"])
         #expect(a.request() == AuditionRequest(
             scene: .chimes, seconds: 30, seed: 9, warp: WarpDepth(distance: 0.5), channel: false))
+        let w = try NightCtl.Audition.parse(["warmth", "--seconds", "45", "--proportion", "1"])
+        #expect(w.request() == AuditionRequest(scene: .warmth, seconds: 45, warp: WarpDepth(proportion: 1)))
     }
 
     @Test func parsesToneDials() throws {
