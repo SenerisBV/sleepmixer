@@ -242,7 +242,16 @@ every paragraph 23.9 s (+17%); tag before every sentence 25.3 s (+23%, but 80%
 more characters). Files: scratchpad `molasses-long/`. The molasses takes on
 disk are kept as they are; the takes before them are in
 `esoterica/library/_superseded/` (`-speed-0.85`, `-speed-0.7-ignored`).
-**Decision pending with the operator:** tag per paragraph or per sentence.
+**Decided (operator, 2026-11-03): per paragraph, plus ellipses.** "One per
+paragraph is better - I think one per sentence risks feeling disjointed", and
+"Ellipses make sense" (v4 reads punctuation as pacing). Voicing now puts the tag
+before every paragraph that has words (`voicing.with_delivery`, constant
+`DELIVERY_EACH = "paragraph"`; a cue-only paragraph like `[pause]` gets none).
+The placement is in the piece-cache key and in each sidecar
+(`delivery_each`), so the molasses takes, voiced with one tag per request, now
+show as stale ("its delivery tag was placed once per request"). Estimate for
+the re-voice: Lantern 7,886, Northern 11,682 characters (before any ellipses
+are added to the scripts). Not spent yet; waiting for the operator's go.
 ElevenLabs total now about 81,386 of 265,000.
 
 **Placeholders** (Claude's, tune by ear):

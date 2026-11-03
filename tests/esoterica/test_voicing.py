@@ -848,3 +848,38 @@ def test_delivery_is_refused_for_a_provider_that_would_speak_it(tmp_path):
     with pytest.raises(ValueError, match="delivery"):
         voice_recording(s, fp, Voice("cartesia", "sonic-3.6", "x"), tmp_path / "lib")
     assert fp.calls == []
+
+
+# --- delivery tag before every paragraph ---------------------------------------------
+
+def test_with_delivery_tags_every_worded_paragraph():
+    from sleepmix.esoterica.voicing import with_delivery, delivery_chars
+    text = "First words.\n\n[pause]\n\n  Second words. [breath] more."
+    out = with_delivery(text, "[slowly]")
+    assert out == "[slowly] First words.\n\n[pause]\n\n[slowly] Second words. [breath] more."
+    assert with_delivery(text, None) == text
+    assert delivery_chars(text, None) == 0
+    assert delivery_chars(text, "[slowly]") == len(out) - len(text)
+
+
+def test_sidecar_without_paragraph_placement_is_stale(tmp_path):
+    import json
+    from sleepmix.esoterica.script import load_script
+    from sleepmix.esoterica.voicing import check_takes, text_sha256
+    d = tmp_path / "scripts" / "testimonies"
+    d.mkdir(parents=True)
+    (d / "a.md").write_text('---\nid: a\nshow: testimonies\ntitle: A\nlanguage: en\n'
+                            'speaker: x\nsource_character: tape\nvoice_profile: x\n'
+                            'delivery: "[slowly]"\nvoice:\n---\nwords here\n')
+    s = load_script(d / "a.md")
+    lib = tmp_path / "lib" / "a"
+    lib.mkdir(parents=True)
+    (lib / "p01.raw.wav").write_bytes(b"")
+    rec = {"index": 0, "text_sha256": text_sha256(s.passages[0].text),
+           "speed": None, "delivery": "[slowly]"}
+    (lib / "p01.raw.json").write_text(json.dumps(rec))
+    stale, _ = check_takes(s, tmp_path / "lib")
+    assert "before every paragraph" in stale["p01"]
+    rec["delivery_each"] = "paragraph"
+    (lib / "p01.raw.json").write_text(json.dumps(rec))
+    assert check_takes(s, tmp_path / "lib")[0] == {}

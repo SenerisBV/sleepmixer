@@ -73,7 +73,8 @@ def max_chars(cls):
 
 def sent_chars(cls):
     """Independent of the CLI's counting: billed text, plus a script's delivery
-    tag before every request (ElevenLabs only; Cartesia refuses tags)."""
+    tag (and a space) before every paragraph with words in every request
+    (ElevenLabs only; Cartesia refuses tags)."""
     from sleepmix.esoterica.voicing import recording_pieces
     total = 0
     for s in load_all(REAL):
@@ -83,8 +84,10 @@ def sent_chars(cls):
             else:
                 total += billed_chars(p.text, cls.translate_cues, max_chars(cls))
             if s.delivery and cls is ElevenLabs:
-                n = len(recording_pieces(s, p, max_chars(cls), cls.translate_cues))
-                total += n * (len(s.delivery) + 1)
+                for pc in recording_pieces(s, p, max_chars(cls), cls.translate_cues):
+                    worded = [q for q in re.split(r"\n\s*\n", pc.text)
+                              if re.sub(r"\[[^\]]*\]", "", q).strip()]
+                    total += len(worded) * (len(s.delivery) + 1)
     return total
 
 
@@ -96,7 +99,7 @@ def test_estimate_prints_characters_and_cost(fakes, no_keys):
     r = run(["estimate", "--scripts", str(REAL), "--voices", str(VOICES)])
     assert r.exit_code == 0, r.output
     el, ca = sent_chars(ElevenLabs), sent_chars(Cartesia)
-    assert ca > el  # Cartesia's <break> tags are longer than the neutral cues
+    assert ca != el  # different cue translations; only ElevenLabs gets delivery tags
     assert re.search(rf"elevenlabs .*{el:,} characters", r.output)
     assert re.search(rf"cartesia .*{ca:,} characters", r.output)
     assert "elevenlabs" in r.output and "cartesia" in r.output

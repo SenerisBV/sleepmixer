@@ -65,6 +65,28 @@ RENDER_EDGE_S = 0.010      # raised-cosine fade at both ends of a rendered file,
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"'”’)]*\s+")
 _TOKEN = re.compile(r"<[^>]*>|\[[^\]]*\]|\S+")
 _LONG_PAUSE = re.compile(r"\s*\[long pause\]\s*")
+_PARAGRAPH = re.compile(r"\n\s*\n")
+_CUES_ONLY = re.compile(r"^\s*(\[[^\]]*\]\s*)*$")
+
+# Where a script's `delivery` tag goes. ElevenLabs v4 tags steer only the next
+# sentence or two (measured 2026-11-03: one tag at the start of a ~1,600-char
+# request slowed it ~0%; one per paragraph +17%), so it goes before every
+# paragraph. Recorded in each take's sidecar and in the piece-cache key.
+DELIVERY_EACH = "paragraph"
+
+
+def with_delivery(text: str, delivery: str | None) -> str:
+    """`text` with the delivery tag before every paragraph that has words
+    (a cue-only paragraph such as `[pause]` gets none)."""
+    if not delivery:
+        return text
+    return "\n\n".join(para if _CUES_ONLY.match(para) else f"{delivery} {para.lstrip()}"
+                       for para in _PARAGRAPH.split(text))
+
+
+def delivery_chars(text: str, delivery: str | None) -> int:
+    """Characters the delivery tags add to `text`."""
+    return len(with_delivery(text, delivery)) - len(text)
 _FRENCH_LINE = re.compile(r"^(?:(?:le|la|les|un|une|des|du|au|aux)\s|l['’])", re.I)
 
 
@@ -349,7 +371,7 @@ def piece_cache(out: Path, n: int, piece: Piece, voice: Voice,
     if speed is not None:
         fields += (f"speed={speed!r}",)
     if delivery:
-        fields += (f"delivery={delivery}",)
+        fields += (f"delivery={delivery}", f"each={DELIVERY_EACH}")
     key = hashlib.sha256("\n".join(fields).encode("utf-8"))
     return Path(out).parent / f"{_base(out)}.s{n + 1:02d}.{key.hexdigest()[:10]}.seg.wav"
 
@@ -378,8 +400,8 @@ def uncached_chars(pieces: list[Piece], out: Path, voice: Voice,
     `redo`: it is about to be deleted and voiced again)."""
     if Path(out).exists() and not redo:
         return 0
-    extra = len(delivery) + 1 if delivery else 0
-    return sum(len(translate(pc.text)) + extra for n, pc in enumerate(pieces)
+    return sum(len(translate(pc.text)) + delivery_chars(pc.text, delivery)
+               for n, pc in enumerate(pieces)
                if not piece_cache(out, n, pc, voice, speed, delivery).exists())
 
 
@@ -404,7 +426,7 @@ def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Pa
         if cache.exists():
             audio.append(_read_mono(cache))
             continue
-        text = f"{delivery} {pc.text}" if delivery else pc.text
+        text = with_delivery(pc.text, delivery)
         x, sr = provider.synthesize(text, voice.voice_id, voice.model, pc.language)
         x = _to_sr(x, sr)
         _write_atomic(x, cache)  # paid for: keep it before anything else can fail
@@ -641,6 +663,7 @@ def _take_record(p, voice: Voice, backfilled: bool = False,
     without the key predates it and means None."""
     return {"index": p.index, "text_sha256": text_sha256(p.text),
             **_voice_record(voice), "speed": speed, "delivery": delivery,
+            "delivery_each": DELIVERY_EACH if delivery else None,
             "backfilled": backfilled}
 
 
@@ -701,6 +724,10 @@ def check_takes(script: Script, library: Path) -> tuple[dict[str, str], list]:
             elif rec.get("delivery") != script.delivery:
                 stale[name] = (f"its delivery tag changed since it was voiced "
                                f"({rec.get('delivery') or 'none'} -> {script.delivery or 'none'})")
+            elif script.delivery and rec.get("delivery_each") != DELIVERY_EACH:
+                stale[name] = (f"its delivery tag was placed "
+                               f"{rec.get('delivery_each') or 'once per request'}; "
+                               f"it now goes before every {DELIVERY_EACH}")
         elif manifest_text.get(p.index) == spoken_text(p):
             backfill.append(p)
         else:
