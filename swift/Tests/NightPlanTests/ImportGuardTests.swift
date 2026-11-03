@@ -35,3 +35,13 @@ private func importLines(_ url: URL) throws -> [String] {
         }
     }
 }
+
+@Test func nightRadioImportsNoPlatformFrameworks() throws {
+    let files = swiftFiles(under: "NightRadio")
+    #expect(!files.isEmpty)
+    for f in files {
+        for line in try importLines(f) {
+            #expect(line.firstMatch(of: /import (AVFoundation|UIKit|AppKit|SwiftUI)/) == nil, "\(f.lastPathComponent): \(line)")
+        }
+    }
+}

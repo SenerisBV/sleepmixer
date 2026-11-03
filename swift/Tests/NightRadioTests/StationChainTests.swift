@@ -141,19 +141,6 @@ private func seedStartingInSegmentZero() -> UInt64 {
     #expect(loads.withLock { $0 } == ["s01.wav", "s02.wav"])
 }
 
-@Test func nightRadioImportsNoAVFoundation() throws {
-    let root = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        .appendingPathComponent("Sources/NightRadio")
-    let files = (FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
-        .filter { $0.pathExtension == "swift" }
-    #expect(!files.isEmpty)
-    for f in files {
-        let text = try String(contentsOf: f, encoding: .utf8)
-        #expect(!text.contains("import AVFoundation"), "\(f.lastPathComponent)")
-    }
-}
-
 @Test func deterministic() throws {
     let bundle = try StationBundle.load(directory: try makeBundle())
     var x = StationChain(recipe: recipe, bundle: bundle, seed: 7, clock: clock(7), sampleRate: sr)
