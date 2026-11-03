@@ -56,3 +56,19 @@ def test_rejects_unknown_format_version(tmp_path):
     path.write_text(json.dumps(d))
     with pytest.raises(ValueError, match="format_version"):
         read_manifest(path)
+
+
+@pytest.mark.parametrize("content", ["not json", "[]", '{"format_version": 1}',
+                                     '{"format_version": 1, "passages": [{"x": 1}]}'])
+def test_malformed_manifest_raises_manifest_error(tmp_path, content):
+    p = tmp_path / "recording.json"
+    p.write_text(content)
+    with pytest.raises(mf.ManifestError) as e:
+        read_manifest(p)
+    assert str(p) in str(e.value)
+    assert isinstance(e.value, ValueError)
+
+
+def test_missing_manifest_names_path(tmp_path):
+    with pytest.raises(mf.ManifestError, match="nope.json"):
+        read_manifest(tmp_path / "nope.json")

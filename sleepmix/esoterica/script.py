@@ -62,7 +62,8 @@ def load_script(path: Path) -> Script:
         where = f"{path.name}" + (f", line {line}" if line else "")
         raise ScriptError(f"{where}: {msg}")
 
-    lines = path.read_text(encoding="utf-8").split("\n")
+    text = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
     if not lines or lines[0] != "---":
         fail("missing front matter (file must start with a '---' line)", 1)
     try:
@@ -76,35 +77,45 @@ def load_script(path: Path) -> Script:
     if not isinstance(meta, dict):
         fail("front matter must be a YAML mapping", 1)
 
+    def key_line(key: str) -> int:
+        for n in range(1, end):
+            if re.match(rf"^{re.escape(str(key))}\s*:", lines[n]):
+                return n + 1
+        return 1
+
     for key in meta:
         if key not in _REQUIRED and key not in _OPTIONAL:
-            fail(f"unknown front matter key '{key}'", 1)
+            fail(f"unknown front matter key '{key}'", key_line(key))
     for key in _REQUIRED:
         if key not in meta:
-            fail(f"missing front matter key '{key}'", 1)
+            fail(f"missing front matter key '{key}'")
     for key in ("id", "show", "title", "language", "speaker", "source_character"):
         if not isinstance(meta[key], str) or not meta[key].strip():
-            fail(f"front matter '{key}' must be a non-empty string", 1)
+            fail(f"front matter '{key}' must be a non-empty string", key_line(key))
     if meta["id"] != path.stem:
-        fail(f"id '{meta['id']}' does not match the filename '{path.stem}'", 1)
+        fail(f"id '{meta['id']}' does not match the filename '{path.stem}'",
+             key_line("id"))
     if meta["show"] not in SHOWS:
-        fail(f"unknown show '{meta['show']}'", 1)
+        fail(f"unknown show '{meta['show']}'", key_line("show"))
     if meta["language"] not in LANGUAGES:
-        fail(f"unknown language '{meta['language']}'", 1)
+        fail(f"unknown language '{meta['language']}'", key_line("language"))
     if meta["source_character"] not in SOURCE_CHARACTERS:
-        fail(f"unknown source_character '{meta['source_character']}'", 1)
+        fail(f"unknown source_character '{meta['source_character']}'",
+             key_line("source_character"))
     vp = meta.get("voice_profile")
     if vp is not None and not isinstance(vp, str):
-        fail("voice_profile must be a string", 1)
+        fail("voice_profile must be a string", key_line("voice_profile"))
     voice = meta["voice"]
     if voice is not None and not isinstance(voice, dict):
-        fail("voice must be empty or a mapping", 1)
+        fail("voice must be empty or a mapping", key_line("voice"))
 
     # Split the body into raw passages of (file line number, text) pairs.
     raw: list[list[tuple[int, str]]] = [[]]
+    start_lines = [end + 2]  # file line where each passage starts (its separator)
     for i in range(end + 1, len(lines)):
         if lines[i] == "[passage]":
             raw.append([])
+            start_lines.append(i + 1)
         else:
             raw[-1].append((i + 1, lines[i]))
 
@@ -129,11 +140,13 @@ def load_script(path: Path) -> Script:
             for cue in _BRACKET.findall(text):
                 if cue not in CUES:
                     fail(f"unknown cue {cue}", ln)
+            if "[" in _BRACKET.sub("", text) or "]" in _BRACKET.sub("", text):
+                fail("stray '[' or ']' (an unbalanced or split cue would be "
+                     "spoken aloud)", ln)
         body = "\n".join(t for _, t in chunk).strip()
         p = Passage(idx, body, intensity)
         if not spoken_text(p):
-            fail(f"passage {idx + 1} is empty (no spoken text)",
-                 chunk[0][0] if chunk else None)
+            fail(f"passage {idx + 1} is empty (no spoken text)", start_lines[idx])
         passages.append(p)
 
     return Script(id=meta["id"], show=meta["show"], title=meta["title"],
@@ -144,4 +157,15 @@ def load_script(path: Path) -> Script:
 
 def load_all(root: Path) -> list[Script]:
     """Parse every `<show>/<id>.md` under root, sorted by show then id."""
-    return [load_script(p) for p in sorted(Path(root).glob("*/*.md"))]
+    scripts = []
+    seen: dict[str, Path] = {}
+    for p in sorted(Path(root).glob("*/*.md")):
+        s = load_script(p)
+        if p.parent.name != s.show:
+            raise ScriptError(f"{p.name}: lives in directory '{p.parent.name}' "
+                              f"but its show is '{s.show}'")
+        if s.id in seen:
+            raise ScriptError(f"duplicate id '{s.id}': {seen[s.id]} and {p}")
+        seen[s.id] = p
+        scripts.append(s)
+    return scripts

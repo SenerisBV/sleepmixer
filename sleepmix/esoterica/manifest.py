@@ -10,6 +10,10 @@ from pathlib import Path
 FORMAT_VERSION = 1
 
 
+class ManifestError(ValueError):
+    """An unreadable or malformed recording.json (message names the path)."""
+
+
 @dataclass
 class PassageEntry:
     index: int
@@ -54,9 +58,17 @@ def write_manifest(m: Manifest, dir: Path) -> Path:
 
 
 def read_manifest(path: Path) -> Manifest:
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if data.get("format_version") != FORMAT_VERSION:
-        raise ValueError(f"{path}: unsupported format_version "
-                         f"{data.get('format_version')!r}")
-    data["passages"] = [PassageEntry(**p) for p in data["passages"]]
-    return Manifest(**data)
+    path = Path(path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise TypeError("top level is not an object")
+        if data.get("format_version") != FORMAT_VERSION:
+            raise ManifestError(f"{path}: unsupported format_version "
+                                f"{data.get('format_version')!r}")
+        data["passages"] = [PassageEntry(**p) for p in data["passages"]]
+        return Manifest(**data)
+    except ManifestError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError) as e:
+        raise ManifestError(f"{path}: invalid manifest ({type(e).__name__}: {e})") from e

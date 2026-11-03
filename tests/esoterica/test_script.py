@@ -207,3 +207,79 @@ def test_load_all_real_scripts():
 
 def test_load_all_empty_dir(tmp_path):
     assert load_all(tmp_path) == []
+
+
+def test_split_cue_rejected(tmp_path):
+    p = good(tmp_path, body="words [long\npause] more\n")
+    with pytest.raises(ScriptError) as e:
+        load_script(p)
+    assert "a-script.md" in str(e.value) and "line 11" in str(e.value)
+
+
+def test_stray_bracket_rejected(tmp_path):
+    p = good(tmp_path, body="fine [pause] and then ] oops\n")
+    with pytest.raises(ScriptError, match=r"a-script.md, line 11"):
+        load_script(p)
+
+
+def test_front_matter_error_reports_key_line(tmp_path):
+    p = good(tmp_path)
+    p.write_text(p.read_text().replace("source_character: tape", "source_character: vinyl"))
+    with pytest.raises(ScriptError, match=r"a-script.md, line 8: .*vinyl"):
+        load_script(p)
+    p = good(tmp_path, show="sideline")
+    p.write_text(p.read_text().replace("show: sideline", "show: cartoons"))
+    with pytest.raises(ScriptError, match=r"line 3: unknown show"):
+        load_script(p)
+
+
+def test_unknown_key_reports_its_line(tmp_path):
+    p = good(tmp_path, extra="voice-voice_profile: female\n")
+    with pytest.raises(ScriptError, match=r"line 9: unknown front matter key"):
+        load_script(p)
+
+
+def test_missing_key_has_no_line(tmp_path):
+    p = good(tmp_path)
+    p.write_text(p.read_text().replace("voice:\n", ""))
+    with pytest.raises(ScriptError) as e:
+        load_script(p)
+    assert "line" not in str(e.value)
+
+
+def test_empty_passage_reports_separator_line(tmp_path):
+    # body starts at file line 11: "words"=11, blank=12, [passage]=13
+    p = good(tmp_path, body="words\n\n[passage]\n\n\n[passage]\n\nmore\n")
+    with pytest.raises(ScriptError, match=r"line 13: passage 2 is empty"):
+        load_script(p)
+
+
+def test_load_all_rejects_wrong_directory(tmp_path):
+    p = good(tmp_path)  # show: testimonies
+    wrong = tmp_path / "sideline"
+    wrong.mkdir()
+    (wrong / "a-script.md").write_text(p.read_text())
+    p.unlink()
+    with pytest.raises(ScriptError, match="sideline.*testimonies"):
+        load_all(tmp_path)
+
+
+def test_load_all_rejects_duplicate_ids(tmp_path):
+    a = good(tmp_path)
+    other = tmp_path / "sideline"
+    other.mkdir()
+    # same id inside the other show's dir would fail the filename rule, so
+    # duplicate via a second file name is impossible; duplicate across shows:
+    (other / "a-script.md").write_text(a.read_text().replace("show: testimonies", "show: sideline"))
+    with pytest.raises(ScriptError) as e:
+        load_all(tmp_path)
+    msg = str(e.value)
+    assert "duplicate id" in msg and "sideline" in msg and "testimonies" in msg
+
+
+def test_bom_and_crlf(tmp_path):
+    p = good(tmp_path)
+    p.write_bytes(b"\xef\xbb\xbf" + p.read_text().replace("\n", "\r\n").encode())
+    s = load_script(p)
+    assert [q.intensity for q in s.passages] == ["high", "medium", "low"]
+    assert "\r" not in s.passages[0].text and "\r" not in s.speaker
