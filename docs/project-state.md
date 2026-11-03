@@ -4767,3 +4767,40 @@ the take, `CUT_DISTANCE_PENALTY` 0.02 (`segments.py`); `BUNDLE_MIN_S` 20 and
 `BUNDLE_MAX_S` 150 (`cli.py`). Cuts are a pause midpoint nearest where the
 paragraph-character share predicts the `[segment]` marker falls; if no pause
 is left after the previous cut, a segment is silently not cut (fewer segments).
+
+### Plan 9 Task 7: a station's sound (`NightRadio`)
+
+New Swift library target `NightRadio` (deps `NightDSP`, `NightPlan`; Foundation only,
+no AVFoundation, guarded by `nightRadioImportsNoAVFoundation`). Code in
+`swift/Sources/NightRadio/`:
+
+- `StationBundle` reads `station.json` (id, title, segment seconds, segment URLs).
+  Segment files are not opened here.
+- `StationChain`: warmth/chimes/waves × recipe gain × bed gain → `Fragmenter` →
+  `Distance` (all on `Curve { Drift.bedWarp(clock.level(at:)) }`), plus
+  `StationVoice`, → `AMChannel(Curve { Drift.channel(...) })` → `masterGuard`.
+  Engine seconds from 0 (cold start, no lead-in; the on-fade in Task 8 covers settling).
+  Curves call `DriftClock.level(at:)` directly: no per-block snapshot was needed
+  (processors read it at most once per 512 frames, scenes per event).
+- `StationVoice`: plays the program's segment via `FileSource` with clip time 0 at
+  the segment start (a segment starting mid-block starts at its exact frame);
+  per-block linear ramp to `Drift.voiceGainDB`; own `Distance` on
+  `WarpDepth(distance: Drift.voiceDistance)`. Preloads the next clip when
+  `upcoming` is under 5 s away; holds at most current + next. A nil load is
+  silence; the schedule carries on. A clip longer than its scheduled seconds
+  plays out rather than being cut.
+- `StaticChain`: `AMChannel` over zeros with the static settings, × per-block
+  ramp to `Drift.staticGainDB`, then `masterGuard`.
+- Seeds: `NightRandom.hash(seed, stationIndex, k)` with stationIndex = index in
+  `StationRecipe.all` (static = 3), k: warmth 0, chimes 1, waves 2, fragmenter 3,
+  bed distance 4, channel 5, program 6, voice distance 7.
+
+**Placeholders (tune by ear):** `StationChain.bedGainDB` −8 dB;
+`StaticChain.settings` (low 300, high 3000, hiss −30, crackle −36, fadeDepth 0.4,
+fadeRate 0.08, squash 0.3); `StationVoice.preloadSeconds` 5 s.
+
+**Measured:** release build on the Mac, three StationChains + StaticChain, 60 s at
+44.1 kHz in 2048-frame blocks: 1.51 s wall-clock, **about 40× real time**
+(`swift test -c release --filter rendersFastEnough`; needs ≥ 10×). Test temp
+bundle (300 Hz tone at −24 dBFS RMS): voice 11.8 dB above the Lantern bed over
+speech at drift 0; static RMS −35.8 dBFS at drift 0.
