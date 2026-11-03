@@ -11,7 +11,9 @@ from sleepmix.cli import main
 from sleepmix.esoterica import cli as ecli
 from sleepmix.esoterica.providers import Cartesia, ElevenLabs
 from sleepmix.esoterica.script import load_all
-from sleepmix.esoterica.voicing import billed_chars, shuffle_billed_chars, shuffle_lines
+from sleepmix.esoterica.voicing import (
+    Voice, billed_chars, load_voices, shuffle_billed_chars, shuffle_lines,
+)
 
 from .fakes import FakeProvider
 
@@ -64,6 +66,10 @@ def no_keys(monkeypatch):
     monkeypatch.setattr(ecli, "api_key", boom)
 
 
+def max_chars(cls):
+    return int(load_voices(VOICES).providers[cls.name]["max_chars"])
+
+
 def sent_chars(cls):
     total = 0
     for s in load_all(REAL):
@@ -71,7 +77,7 @@ def sent_chars(cls):
             if s.show == "shuffles":
                 total += shuffle_billed_chars(shuffle_lines(p.text), cls.translate_cues)
             else:
-                total += billed_chars(p.text, cls.translate_cues)
+                total += billed_chars(p.text, cls.translate_cues, max_chars(cls))
     return total
 
 
@@ -262,8 +268,8 @@ def test_audition_estimate_counts_translated_characters(fakes, tmp_path):
              "--voices", str(VOICES), "--out", str(tmp_path / "a")])
     s = next(x for x in load_all(REAL) if x.id == "the-corridors")
     ex = ecli.audition_excerpt(s)
-    el = billed_chars(ex, ElevenLabs.translate_cues)
-    ca = billed_chars(ex, Cartesia.translate_cues)
+    el = billed_chars(ex, ElevenLabs.translate_cues, max_chars(ElevenLabs))
+    ca = billed_chars(ex, Cartesia.translate_cues, max_chars(Cartesia))
     assert re.search(rf"elevenlabs .*{3 * el:,} characters", r.output)
     assert re.search(rf"cartesia .*{2 * ca:,} characters", r.output)
 
@@ -275,6 +281,7 @@ def test_voice_refuses_to_resume_with_a_different_voice(fakes, tmp_path):
     d.mkdir(parents=True)
     (d / "voice.json").write_text('{"provider": "elevenlabs", "model": "eleven_v4", '
                                   '"voice_id": "someone-else"}')
+    sf.write(d / "p01.raw.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")  # paid
     r = CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--yes",
                                   "--scripts", str(REAL), "--voices", str(v1),
                                   "--library", str(lib)])
@@ -328,9 +335,11 @@ def test_render_all_skips_unvoiced_but_named_id_still_fails(fakes, no_keys, tmp_
 
 def test_remaining_counts_raw_files_not_rendered(tmp_path):
     s = [x for x in load_all(REAL) if x.id == "the-corridors"][0]
+    cfg = load_voices(VOICES)
+    v = Voice("elevenlabs", "eleven_v4", "x")
     d = tmp_path / s.id
     d.mkdir()
     sf.write(d / "p01.wav", np.zeros(10, np.float32), 44100, subtype="FLOAT")
-    full = ecli._remaining(s, tmp_path, "elevenlabs")
+    full = ecli._remaining(s, tmp_path, v, cfg)
     sf.write(d / "p01.raw.wav", np.zeros(10, np.float32), 44100, subtype="FLOAT")
-    assert ecli._remaining(s, tmp_path, "elevenlabs") < full
+    assert ecli._remaining(s, tmp_path, v, cfg) < full

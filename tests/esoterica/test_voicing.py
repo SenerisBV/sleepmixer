@@ -11,6 +11,7 @@ from sleepmix.esoterica.providers import Cartesia, ElevenLabs, ProviderError
 from sleepmix.esoterica.script import load_all, load_script
 import json
 import logging
+import re
 
 from sleepmix.esoterica.voicing import (
     PER_RECORDING_SHOWS, Voice, VoiceMismatchError, billed_chars, check_distinct_voices,
@@ -149,13 +150,15 @@ def test_voice_passage_long_pause_is_real_silence(tmp_path):
     assert longest >= 2.0 * sr
 
 
-def test_voice_passage_failure_leaves_no_file(tmp_path):
+def test_voice_passage_failure_leaves_no_file_but_keeps_paid_pieces(tmp_path):
     fp = FakeProvider(fail_when=lambda t: "two" in t)
     fp.max_chars = 10
     out = tmp_path / "p.wav"
     with pytest.raises(ProviderError):
         voice_passage(fp, "one one. two two. three.", V, "en", out)
-    assert list(tmp_path.iterdir()) == []
+    # no output, no temp file; only the one piece that was paid for, cached
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert len(names) == 1 and re.fullmatch(r"p\.s01\.[0-9a-f]{10}\.seg\.wav", names[0])
 
 
 # --- voice_recording ------------------------------------------------------------
@@ -310,13 +313,13 @@ def test_voice_passage_sends_chunks_within_limit_after_translation(tmp_path):
 def test_billed_chars_counts_what_is_sent():
     text = "One. [pause] Two. [long pause] Three [breath] four."
     # [long pause] is a split, never sent; each segment counted after translation
-    assert billed_chars(text, Cartesia.translate_cues) == (
+    assert billed_chars(text, Cartesia.translate_cues, 1000) == (
         len(Cartesia.translate_cues("One. [pause] Two."))
         + len(Cartesia.translate_cues("Three [breath] four.")))
-    assert billed_chars(text, ElevenLabs.translate_cues) == (
+    assert billed_chars(text, ElevenLabs.translate_cues, 1000) == (
         len(ElevenLabs.translate_cues("One. [pause] Two."))
         + len(ElevenLabs.translate_cues("Three [breath] four.")))
-    assert billed_chars(text, Cartesia.translate_cues) > len("One. Two.Three four.")
+    assert billed_chars(text, Cartesia.translate_cues, 1000) > len("One. Two.Three four.")
 
 
 def test_resume_with_a_different_voice_is_refused(tmp_path):
@@ -498,3 +501,120 @@ def test_manifest_without_character_params_still_reads(tmp_path):
     del data["character_params"]
     path.write_text(json.dumps(data))
     assert read_manifest(path).character_params == {}
+
+
+# --- final review: resume at the request, not the passage -----------------------
+
+LONG = "Alpha one. Bravo two. Charlie three. Delta four. Echo five."
+
+
+def _sent(fp):
+    return [c[0] for c in fp.calls]
+
+
+def test_failure_at_piece_n_rerun_bills_only_n_onwards(tmp_path):
+    clean = FakeProvider()
+    clean.max_chars = 15  # one sentence per request
+    voice_passage(clean, LONG, V, "en", tmp_path / "clean" / "p01.raw.wav")
+    pieces = _sent(clean)
+    assert len(pieces) == 5
+
+    out = tmp_path / "rec" / "p01.raw.wav"
+    bad = FakeProvider(fail_when=lambda t: t.startswith("Charlie"))
+    bad.max_chars = 15
+    with pytest.raises(ProviderError):
+        voice_passage(bad, LONG, V, "en", out)
+    assert _sent(bad) == pieces[:2]
+    assert not out.exists()
+    assert len(voicing.segment_caches(out.parent, "p01")) == 2
+    good = FakeProvider()
+    good.max_chars = 15
+    voice_passage(good, LONG, V, "en", out)
+    assert _sent(good) == pieces[2:]  # pieces 1 and 2 were not paid for again
+    # caches are dropped once the raw take is written; the take is what an
+    # uninterrupted run makes, byte for byte
+    assert voicing.segment_caches(out.parent) == []
+    assert sorted(p.name for p in out.parent.iterdir()) == ["p01.raw.wav"]
+    assert out.read_bytes() == (tmp_path / "clean" / "p01.raw.wav").read_bytes()
+
+
+def test_long_pause_segments_resume_too(tmp_path):
+    text = "First part. [long pause] Second part. [long pause] Third part."
+    out = tmp_path / "p01.raw.wav"
+    bad = FakeProvider(fail_when=lambda t: "Third" in t)
+    with pytest.raises(ProviderError):
+        voice_passage(bad, text, V, "en", out)
+    good = FakeProvider()
+    voice_passage(good, text, V, "en", out)
+    assert _sent(good) == ["Third part."]
+
+
+def test_shuffle_resumes_at_the_failed_image(tmp_path):
+    lines = ["bright yellow", "warm rain", "une pomme verte", "sour apple"]
+    s = write_script(tmp_path / "scripts", "shuffles", "shuf", ["\n".join(lines)])
+    voice_recording(s, FakeProvider(), V, tmp_path / "clean")
+    lib = tmp_path / "lib"
+    assert voice_recording(s, FakeProvider(fail_when=lambda t: "pomme" in t), V, lib) is None
+    good = FakeProvider()
+    assert voice_recording(s, good, V, lib) is not None
+    assert _sent(good) == ["une pomme verte", "sour apple"]
+    assert ((lib / "shuf" / "p01.raw.wav").read_bytes()
+            == (tmp_path / "clean" / "shuf" / "p01.raw.wav").read_bytes())
+
+
+def test_a_cache_for_other_text_or_voice_is_not_reused(tmp_path):
+    out = tmp_path / "p01.raw.wav"
+    bad = FakeProvider(fail_when=lambda t: "Bravo" in t)
+    bad.max_chars = 15
+    with pytest.raises(ProviderError):
+        voice_passage(bad, "Alpha one. Bravo two.", V, "en", out)
+    other_voice = FakeProvider()
+    other_voice.max_chars = 15
+    voice_passage(other_voice, "Alpha one. Bravo two.", Voice("fake", "m", "v2"), "en",
+                  tmp_path / "x" / "p01.raw.wav")
+    edited = FakeProvider()
+    edited.max_chars = 15
+    voice_passage(edited, "Alpha won. Bravo two.", V, "en", out)
+    assert _sent(edited) == ["Alpha won.", "Bravo two."]
+    assert voicing.segment_caches(tmp_path) == []  # the stale piece is cleaned up too
+
+
+def test_remaining_estimate_counts_only_uncached_pieces(tmp_path, monkeypatch):
+    from sleepmix.esoterica import cli as ecli
+    s = write_script(tmp_path / "scripts", "testimonies", "rec",
+                     ["Alpha one. Bravo two. Charlie three.", "Delta four."])
+    cfg = load_voices(VOICES)
+    cfg.providers["fake"] = {"model": "m", "price_per_char": 0.0, "max_chars": 15}
+    monkeypatch.setitem(ecli.PROVIDERS, "fake", FakeProvider())  # only translate_cues is used
+    lib = tmp_path / "lib"
+    assert ecli._remaining(s, lib, V, cfg) == len("Alpha one.Bravo two.Charlie three.Delta four.")
+    bad = FakeProvider(fail_when=lambda t: "Charlie" in t)
+    bad.max_chars = 15
+    assert voice_recording(s, bad, V, lib) is None
+    assert ecli._remaining(s, lib, V, cfg) == len("Charlie three.Delta four.")
+
+
+# --- final review: an unused voice.json binds nothing -----------------------------
+
+def test_voice_json_without_paid_audio_is_not_binding(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One fails.", "Two."])
+    lib = tmp_path / "lib"
+    assert voice_recording(s, FakeProvider(fail_when=lambda t: "One" in t), V, lib) is None
+    assert json.loads((lib / "rec" / "voice.json").read_text())["voice_id"] == "v1"
+    assert not voicing.paid_audio(lib / "rec")
+    v2 = Voice("fake", "m", "v2")
+    check_resume_voice(s, v2, lib)  # nothing paid: no refusal
+    assert voice_recording(s, FakeProvider(), v2, lib) is not None
+    assert json.loads((lib / "rec" / "voice.json").read_text())["voice_id"] == "v2"
+
+
+def test_voice_json_with_only_a_piece_cache_binds(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec",
+                     ["Alpha one. Bravo two."])
+    lib = tmp_path / "lib"
+    bad = FakeProvider(fail_when=lambda t: "Bravo" in t)
+    bad.max_chars = 15
+    assert voice_recording(s, bad, V, lib) is None
+    assert voicing.raw_takes(lib / "rec") == [] and voicing.paid_audio(lib / "rec")
+    with pytest.raises(VoiceMismatchError):
+        check_resume_voice(s, Voice("fake", "m", "v2"), lib)

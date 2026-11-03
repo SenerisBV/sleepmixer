@@ -7,12 +7,20 @@ applied and loudness re-normalised; free to re-render) plus `recording.json`,
 written only once every passage is rendered. Every passage is mono float32 at 44100 Hz, normalised to
 -24 dBFS RMS over speech frames with peaks limited to -3 dBFS (placeholders).
 
-Resumable by construction: a passage whose RAW WAV exists is never sent again, and
-each WAV is written to a temp file and renamed, so an interrupted write never
-leaves a file that a rerun would mistake for finished work.
+Resumable to the request: a passage is sent as pieces (its `[long pause]`
+segments, each chunked to the provider's limit; a shuffle's images). Every
+provider response is cached at once as `pNN.sMM.<key>.seg.wav` (MM = 1-based
+piece number, key = hash of provider, model, voice, language and the piece's
+text), so a failure at piece N leaves pieces 1..N-1 paid for and kept; a rerun
+sends only N onwards. When every piece is cached the raw take is assembled,
+written, and the passage's caches are deleted. A passage whose raw WAV exists
+is never sent again. Every file is written to a dot-prefixed temp file and
+renamed, so an interrupted write never leaves a file a rerun would mistake for
+finished work.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -161,17 +169,6 @@ def chunk(text: str, max_chars: int, measure: Callable[[str], int] = len) -> lis
     return out
 
 
-def billed_chars(text: str, translate: Callable[[str], str]) -> int:
-    """Characters a provider is sent for one passage's neutral text: split at
-    `[long pause]` (never sent), each segment counted after cue translation."""
-    return sum(len(translate(seg)) for seg in _LONG_PAUSE.split(text) if seg.strip())
-
-
-def shuffle_billed_chars(lines: list[str], translate: Callable[[str], str]) -> int:
-    """Characters sent for a shuffle burst (one request per image)."""
-    return sum(len(translate(ln)) for ln in lines)
-
-
 def split_sentences(text: str) -> list[str]:
     """Sentences of `text` (split after . ! ? or …, plus any closing quote)."""
     return [s.strip() for s in _SENTENCE_END.split(text.strip()) if s.strip()]
@@ -289,13 +286,129 @@ def _duration(path: Path) -> float:
 
 # --- voicing ------------------------------------------------------------------
 
-def _speak(provider: Provider, text: str, voice: Voice, language: str) -> list[np.ndarray]:
-    parts = []
-    for piece in chunk(text, provider.max_chars,
-                       measure=lambda t: len(provider.translate_cues(t))):
-        audio, sr = provider.synthesize(piece, voice.voice_id, voice.model, language)
-        parts.append(_edges(_to_sr(audio, sr)))
-    return parts
+@dataclass(frozen=True)
+class Piece:
+    """One provider request: neutral text (the provider translates cues),
+    its language and the silence before it (None: a seeded shuffle gap)."""
+    text: str
+    language: str
+    gap_before: float | None
+
+
+def passage_pieces(text: str, max_chars: int, translate: Callable[[str], str],
+                   language: str) -> list[Piece]:
+    """A passage's requests in order: each `[long pause]` segment (the pause is
+    real silence, never sent), chunked so the translated text fits max_chars."""
+    out: list[Piece] = []
+    for segment in _LONG_PAUSE.split(text):
+        if not segment.strip():
+            continue
+        for j, piece in enumerate(chunk(segment, max_chars,
+                                        measure=lambda t: len(translate(t)))):
+            gap = 0.0 if not out else (CHUNK_GAP_S if j else LONG_PAUSE_S)
+            out.append(Piece(piece, language, gap))
+    return out
+
+
+def shuffle_pieces(lines: list[str], language: str) -> list[Piece]:
+    """One request per image, each in its own language; seeded 2-3 s gaps."""
+    return [Piece(ln, line_language(ln, language), None if i else 0.0)
+            for i, ln in enumerate(lines)]
+
+
+def billed_chars(text: str, translate: Callable[[str], str], max_chars: int) -> int:
+    """Characters a provider is sent for one passage's neutral text: exactly
+    the pieces `voice_passage` sends, each counted after cue translation."""
+    return sum(len(translate(pc.text))
+               for pc in passage_pieces(text, max_chars, translate, "en"))
+
+
+def shuffle_billed_chars(lines: list[str], translate: Callable[[str], str]) -> int:
+    """Characters sent for a shuffle burst (one request per image)."""
+    return sum(len(translate(pc.text)) for pc in shuffle_pieces(lines, "en"))
+
+
+_SEG = re.compile(r"^(?P<base>.+)\.s(?P<n>\d{2,})\.(?P<key>[0-9a-f]{10})\.seg\.wav$")
+_RAW = re.compile(r"^p(?P<n>\d{2,})\.raw\.wav$")
+
+
+def _base(out: Path) -> str:
+    """'p01.raw.wav' -> 'p01'; 'elevenlabs-blue.wav' -> 'elevenlabs-blue'."""
+    name = Path(out).name
+    for suffix in (".raw.wav", ".wav"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return Path(out).stem
+
+
+def piece_cache(out: Path, n: int, piece: Piece, voice: Voice) -> Path:
+    """Where piece `n` (0-based) of the file `out` is cached once paid for."""
+    key = hashlib.sha256("\n".join((voice.provider, voice.model, voice.voice_id,
+                                     piece.language, piece.text)).encode("utf-8"))
+    return Path(out).parent / f"{_base(out)}.s{n + 1:02d}.{key.hexdigest()[:10]}.seg.wav"
+
+
+def segment_caches(d: Path, base: str | None = None) -> list[Path]:
+    """Cached provider pieces in `d` (of the one file `base`, or of any)."""
+    d = Path(d)
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.iterdir()
+                  if (m := _SEG.match(p.name)) and (base is None or m["base"] == base))
+
+
+def raw_takes(d: Path) -> list[Path]:
+    """The finished raw takes `pNN.raw.wav` in `d` (never a cache or temp file)."""
+    d = Path(d)
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.iterdir() if _RAW.match(p.name))
+
+
+def uncached_chars(pieces: list[Piece], out: Path, voice: Voice,
+                   translate: Callable[[str], str]) -> int:
+    """Characters still to pay for to make `out` (0 if it exists)."""
+    if Path(out).exists():
+        return 0
+    return sum(len(translate(pc.text)) for n, pc in enumerate(pieces)
+               if not piece_cache(out, n, pc, voice).exists())
+
+
+def _read_mono(path: Path) -> np.ndarray:
+    x, sr = sf.read(str(path), dtype="float32")
+    return _to_sr(x, sr)
+
+
+def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Path,
+                  rng: np.random.Generator | None = None) -> float:
+    """Synthesize every uncached piece (caching each response at once), then
+    assemble, normalise and write `out`, and drop the caches."""
+    out = Path(out)
+    if out.exists():
+        return _duration(out)
+    if not pieces:
+        raise ValueError(f"nothing to voice for {out.name}")
+    audio: list[np.ndarray] = []
+    for n, pc in enumerate(pieces):
+        cache = piece_cache(out, n, pc, voice)
+        if cache.exists():
+            audio.append(_read_mono(cache))
+            continue
+        x, sr = provider.synthesize(pc.text, voice.voice_id, voice.model, pc.language)
+        x = _to_sr(x, sr)
+        _write_atomic(x, cache)  # paid for: keep it before anything else can fail
+        audio.append(x)
+    parts: list[np.ndarray] = []
+    for pc, x in zip(pieces, audio):
+        gap = rng.uniform(*SHUFFLE_GAP_S) if pc.gap_before is None else pc.gap_before
+        if parts and gap:
+            parts.append(_silence(gap))
+        parts.append(_edges(x))
+    y = normalise(np.concatenate(parts))
+    _write_atomic(y, out)
+    for cache in segment_caches(out.parent, _base(out)):
+        cache.unlink(missing_ok=True)
+    return len(y) / SR
 
 
 def voice_passage(provider: Provider, text: str, voice: Voice, language: str,
@@ -304,46 +417,24 @@ def voice_passage(provider: Provider, text: str, voice: Voice, language: str,
 
     A `[long pause]` is real silence (LONG_PAUSE_S) rather than a provider cue,
     so the lessons get a dependable gap to answer in. Does nothing if `out`
-    exists.
+    exists; resumes from the piece caches if an earlier run failed part-way.
     """
-    out = Path(out)
-    if out.exists():
-        return _duration(out)
-    pieces: list[np.ndarray] = []
-    for segment in _LONG_PAUSE.split(text):
-        if not segment.strip():
-            continue
-        if pieces:
-            pieces.append(_silence(LONG_PAUSE_S))
-        for j, part in enumerate(_speak(provider, segment, voice, language)):
-            if j:
-                pieces.append(_silence(CHUNK_GAP_S))
-            pieces.append(part)
-    if not pieces:
-        raise ValueError(f"nothing to voice for {out.name}")
-    x = normalise(np.concatenate(pieces))
-    _write_atomic(x, out)
-    return len(x) / SR
+    pieces = passage_pieces(text, provider.max_chars, provider.translate_cues, language)
+    return _voice_pieces(provider, pieces, voice, out)
 
 
 def voice_shuffle(provider: Provider, lines: list[str], voice: Voice, language: str,
                   out: Path, rng: np.random.Generator) -> float:
     """One image per call, assembled with 2–3 s gaps from `rng`."""
-    out = Path(out)
-    if out.exists():
-        return _duration(out)
-    pieces: list[np.ndarray] = []
-    for line in lines:
-        audio, sr = provider.synthesize(line, voice.voice_id, voice.model,
-                                        line_language(line, language))
-        if pieces:
-            pieces.append(_silence(rng.uniform(*SHUFFLE_GAP_S)))
-        pieces.append(_edges(_to_sr(audio, sr)))
-    if not pieces:
-        raise ValueError(f"nothing to voice for {out.name}")
-    x = normalise(np.concatenate(pieces))
-    _write_atomic(x, out)
-    return len(x) / SR
+    return _voice_pieces(provider, shuffle_pieces(lines, language), voice, out, rng)
+
+
+def recording_pieces(script: Script, p, max_chars: int,
+                     translate: Callable[[str], str]) -> list[Piece]:
+    """The requests that voice passage `p` of `script` (shuffle-aware)."""
+    if script.show == "shuffles":
+        return shuffle_pieces(shuffle_lines(p.text), script.language)
+    return passage_pieces(p.text, max_chars, translate, script.language)
 
 
 def shuffle_lines(text: str) -> list[str]:
@@ -383,13 +474,20 @@ def _voice_record(v: Voice) -> dict:
     return {"provider": v.provider, "model": v.model, "voice_id": v.voice_id}
 
 
+def paid_audio(d: Path) -> bool:
+    """Does `d` hold anything a provider was paid for (a raw take or a piece cache)?"""
+    return bool(raw_takes(d) or segment_caches(d))
+
+
 def check_resume_voice(script: Script, voice: Voice, library: Path) -> None:
     """Refuse to mix voices inside one recording. Raises VoiceMismatchError
     (message names the recording and both voices) before anything is spent.
 
     The recording directory's `voice.json` (written before the first request)
     says which voice made its passages; a finished `recording.json` says the
-    same. Raw takes on disk with neither record are refused too: their voice
+    same. A `voice.json` with no paid audio beside it (no raw take, no piece
+    cache: the first request never succeeded) binds nothing and is rewritten
+    by the next `voice`. Paid audio with neither record is refused: its voice
     is unknown. (Rendered `pNN.wav` files alone imply nothing: they can be
     re-made free from raws, so they are not a paid voice.)
     """
@@ -397,16 +495,19 @@ def check_resume_voice(script: Script, voice: Voice, library: Path) -> None:
     want = _voice_record(voice)
     have = None
     vf, mf = d / VOICE_FILE, d / "recording.json"
-    if vf.exists():
+    paid = paid_audio(d)
+    if vf.exists() and paid:
         try:
             have = json.loads(vf.read_text(encoding="utf-8"))
+            if not isinstance(have, dict):
+                raise ValueError("not an object")
         except ValueError:
             raise VoiceMismatchError(f"{script.id}: {vf} is unreadable; "
                                      "delete the directory to re-voice") from None
     elif mf.exists():
         m = read_manifest(mf)
         have = {"provider": m.provider, "model": m.model, "voice_id": m.voice_id}
-    elif d.is_dir() and any(d.glob("p*.raw.wav")):
+    elif paid:
         raise VoiceMismatchError(f"{script.id}: passages exist in {d} with no record "
                                  "of their voice; delete them to re-voice")
     if have is not None and {k: have.get(k) for k in want} != want:
@@ -421,13 +522,13 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
     """Voice every passage of `script` into `<library>/<id>/`.
 
     Returns the manifest, or None if a provider error stopped the run (the
-    passages already written stay; no manifest is written; rerun to finish).
-    `on_error(message)` is called with the (key-free) reason when that happens.
+    passages and piece caches already paid for stay; no manifest is written;
+    rerun to finish). `on_error(message)` is called with the (key-free) reason
+    when that happens.
     """
     d = Path(library) / script.id
-    manifest_path = d / "recording.json"
     check_resume_voice(script, voice, library)
-    if not (d / VOICE_FILE).exists():
+    if not (d / VOICE_FILE).exists() or not paid_audio(d):
         d.mkdir(parents=True, exist_ok=True)
         (d / VOICE_FILE).write_text(json.dumps(_voice_record(voice), indent=2) + "\n",
                                     encoding="utf-8")

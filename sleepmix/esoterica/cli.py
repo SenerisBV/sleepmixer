@@ -18,8 +18,9 @@ from .providers import Cartesia, ElevenLabs, ProviderError
 from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
     Voice, VoiceMismatchError, VoicesConfig, billed_chars, check_distinct_voices,
-    check_resume_voice, load_voices, raw_passage_file, render_recording, shuffle_billed_chars, shuffle_lines,
-    shuffle_rng, split_sentences, voice_passage, voice_recording, voice_shuffle, voice_slot,
+    check_resume_voice, load_voices, raw_passage_file, raw_takes, recording_pieces,
+    render_recording, shuffle_billed_chars, shuffle_lines, shuffle_rng, split_sentences,
+    uncached_chars, voice_passage, voice_recording, voice_shuffle, voice_slot,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -56,19 +57,24 @@ def _build_providers(names, cfg: VoicesConfig, env_path: Path) -> dict:
 
 
 # --- billed characters (what each provider is actually sent; no key needed) ----
+# The one estimator: the exact pieces voicing sends (chunked to the provider's
+# max_chars, `[long pause]` never sent), each counted after cue translation.
 
-def passage_chars(script: Script, p: Passage, provider: str) -> int:
+def _max_chars(cfg: VoicesConfig, provider: str) -> int:
+    return int(cfg.providers[provider]["max_chars"])
+
+
+def passage_chars(script: Script, p: Passage, provider: str, cfg: VoicesConfig) -> int:
     t = PROVIDERS[provider].translate_cues
-    if script.show == "shuffles":
-        return shuffle_billed_chars(shuffle_lines(p.text), t)
-    return billed_chars(p.text, t)
+    return sum(len(t(pc.text))
+               for pc in recording_pieces(script, p, _max_chars(cfg, provider), t))
 
 
-def excerpt_chars(excerpt, provider: str) -> int:
+def excerpt_chars(excerpt, provider: str, cfg: VoicesConfig) -> int:
     t = PROVIDERS[provider].translate_cues
     if isinstance(excerpt, list):
         return shuffle_billed_chars(excerpt, t)
-    return billed_chars(excerpt, t)
+    return billed_chars(excerpt, t, _max_chars(cfg, provider))
 
 
 def _common(f):
@@ -123,7 +129,7 @@ def estimate(scripts_root, voices_path, env_path):
     click.echo(f"  {'':<24} " + " ".join(f"{n:>11}" for n in names))
     chars = {n: 0 for n in names}
     for s in scripts:
-        row = {n: sum(passage_chars(s, p, n) for p in s.passages) for n in names}
+        row = {n: sum(passage_chars(s, p, n, cfg) for p in s.passages) for n in names}
         for n in names:
             chars[n] += row[n]
         click.echo(f"  {s.id:<24} " + " ".join(f"{row[n]:>11,}" for n in names))
@@ -134,10 +140,15 @@ def estimate(scripts_root, voices_path, env_path):
 
 # --- voice ----------------------------------------------------------------------
 
-def _remaining(script: Script, library: Path, provider: str) -> int:
-    d = library / script.id
-    return sum(passage_chars(script, p, provider) for p in script.passages
-               if not (d / raw_passage_file(p.index)).exists())
+def _remaining(script: Script, library: Path, voice: Voice, cfg: VoicesConfig) -> int:
+    """Characters still to pay for: passages with no raw take, minus any of
+    their pieces already cached by an earlier, interrupted run."""
+    d = Path(library) / script.id
+    t = PROVIDERS[voice.provider].translate_cues
+    mc = _max_chars(cfg, voice.provider)
+    return sum(uncached_chars(recording_pieces(script, p, mc, t),
+                              d / raw_passage_file(p.index), voice, t)
+               for p in script.passages)
 
 
 @esoterica.command()
@@ -169,9 +180,9 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
     chars: dict[str, int] = {}
     for s in scripts:
         v = cfg.voice_for(voice_slot(s))
-        chars[v.provider] = chars.get(v.provider, 0) + _remaining(s, library, v.provider)
+        chars[v.provider] = chars.get(v.provider, 0) + _remaining(s, library, v, cfg)
     click.echo(f"Voicing {len(scripts)} recording(s) into {library} "
-               "(passages already on disk are skipped and not counted):")
+               "(passages and pieces already on disk are skipped and not counted):")
     for line in _cost_lines(chars, cfg):
         click.echo(line)
     if not yes:
@@ -219,7 +230,7 @@ def render(script_id, all_, library, scripts_root):
         if not scripts:
             raise click.ClickException(f"no script with id '{script_id}'")
     for s in scripts:
-        if all_ and not any((Path(library) / s.id).glob("p*.raw.wav")):
+        if all_ and not raw_takes(Path(library) / s.id):
             click.echo(f"  {s.id}: skipped, not voiced")  # --all only; a named id still fails
             continue
         try:
@@ -319,7 +330,7 @@ def audition(slot, show, all_, yes, out_dir, scripts_root, voices_path, env_path
     click.echo(f"Audition into {out_dir} (files already on disk are skipped and not counted):")
     for k, s in chosen.items():
         excerpt = audition_excerpt(s)
-        per = {prov: excerpt_chars(excerpt, prov) for prov in cfg.candidates[k]}
+        per = {prov: excerpt_chars(excerpt, prov, cfg) for prov in cfg.candidates[k]}
         for prov, cands in cfg.candidates[k].items():
             for c in cands:
                 out = out_dir / k / f"{prov}-{slug(c['name'])}.wav"
