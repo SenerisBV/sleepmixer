@@ -17,10 +17,11 @@ from .env import api_key
 from .providers import Cartesia, ElevenLabs, ProviderError
 from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
-    Voice, VoiceMismatchError, VoicesConfig, billed_chars, check_distinct_voices,
-    check_resume_voice, load_voices, raw_passage_file, raw_takes, recording_pieces,
+    MissingRawError, StaleTakesError, Voice, VoiceMismatchError, VoicesConfig, billed_chars,
+    check_distinct_voices, check_resume_voice, check_takes, load_voices,
+    raw_passage_file, raw_takes, recording_pieces, revoice_files,
     render_recording, shuffle_billed_chars, shuffle_lines, shuffle_rng, split_sentences,
-    uncached_chars, voice_passage, voice_recording, voice_shuffle, voice_slot,
+    uncached_chars, voice_passage, voice_recording, voice_shuffle, voice_slot, write_backfill,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -140,28 +141,52 @@ def estimate(scripts_root, voices_path, env_path):
 
 # --- voice ----------------------------------------------------------------------
 
-def _remaining(script: Script, library: Path, voice: Voice, cfg: VoicesConfig) -> int:
-    """Characters still to pay for: passages with no raw take, minus any of
-    their pieces already cached by an earlier, interrupted run."""
+def _remaining(script: Script, library: Path, voice: Voice, cfg: VoicesConfig,
+               revoice: frozenset[int] = frozenset()) -> int:
+    """Characters still to pay for: passages with no raw take (or named by
+    --revoice), minus any of their pieces already cached for the current text
+    by an earlier, interrupted run."""
     d = Path(library) / script.id
     t = PROVIDERS[voice.provider].translate_cues
     mc = _max_chars(cfg, voice.provider)
     return sum(uncached_chars(recording_pieces(script, p, mc, t),
-                              d / raw_passage_file(p.index), voice, t)
+                              d / raw_passage_file(p.index), voice, t,
+                              redo=p.index in revoice)
                for p in script.passages)
+
+
+_PNN = re.compile(r"^p?(\d{1,3})$")
+
+
+def _parse_revoice(values: tuple[str, ...]) -> list[str]:
+    """('p02', '3', 'p04,p05') -> ['p02', 'p03', 'p04', 'p05']."""
+    out = []
+    for v in values:
+        for item in filter(None, (x.strip() for x in v.split(","))):
+            m = _PNN.match(item.lower())
+            if not m or int(m[1]) < 1:
+                raise click.UsageError(f"--revoice takes passage names like p02, not '{item}'")
+            out.append(f"p{int(m[1]):02d}")
+    return sorted(set(out))
 
 
 @esoterica.command()
 @click.argument("script_id", required=False)
 @click.option("--all", "all_", is_flag=True, help="Every script.")
+@click.option("--revoice", "revoice_", multiple=True, metavar="pNN",
+              help="Re-voice a stale passage (repeatable, or comma-separated). Its raw "
+                   "take is deleted only with --yes, after the estimate. One script id only.")
 @click.option("--yes", is_flag=True, help="Actually call the provider and spend.")
 @click.option("--library", type=click.Path(path_type=Path), default=LIBRARY,
               show_default=True)
 @_common
-def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
+def voice(script_id, all_, revoice_, yes, library, scripts_root, voices_path, env_path):
     """Voice SCRIPT_ID (or --all) with the slot's chosen voice from voices.yaml."""
     if bool(script_id) == bool(all_):
         raise click.UsageError("give one script id or --all")
+    if revoice_ and not script_id:
+        raise click.UsageError("--revoice needs one script id, not --all")
+    named = _parse_revoice(revoice_)
     scripts, cfg = _load(scripts_root, voices_path)
     if script_id:
         scripts = [s for s in scripts if s.id == script_id]
@@ -177,24 +202,60 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
             check_resume_voice(s, cfg.voice_for(voice_slot(s)), library)
     except (VoiceMismatchError, ValueError) as e:
         raise click.ClickException(str(e)) from None
+    # stale-script guard: nothing is spent (or deleted) while a take no longer
+    # matches its script, unless every stale take is named with --revoice
+    for s in scripts:
+        stale, _ = check_takes(s, library)
+        if named:
+            not_stale = [n for n in named if n not in stale]
+            if not_stale:
+                raise click.ClickException(
+                    f"{s.id}: {', '.join(not_stale)} not stale (its take matches the "
+                    "script); --revoice only replaces stale takes. To re-voice a good "
+                    "take anyway, delete its pNN.raw.wav and pNN.raw.json yourself.")
+            stale = {n: w for n, w in stale.items() if n not in named}
+        if stale:
+            raise click.ClickException(str(StaleTakesError(s.id, stale)))
+    redo = frozenset(int(n[1:]) - 1 for n in named)
+    doomed = [f for n in named for f in revoice_files(library / scripts[0].id, n)] \
+        if named else []
     chars: dict[str, int] = {}
     for s in scripts:
         v = cfg.voice_for(voice_slot(s))
-        chars[v.provider] = chars.get(v.provider, 0) + _remaining(s, library, v, cfg)
+        chars[v.provider] = chars.get(v.provider, 0) + _remaining(s, library, v, cfg, redo)
     click.echo(f"Voicing {len(scripts)} recording(s) into {library} "
                "(passages and pieces already on disk are skipped and not counted):")
     for line in _cost_lines(chars, cfg):
         click.echo(line)
+    if doomed:
+        click.echo("--revoice deletes (with --yes): "
+                   + ", ".join(f.name for f in doomed))
     if not yes:
         _no_spend_note()
         return
     providers = _build_providers((cfg.voice_for(voice_slot(s)).provider for s in scripts),
                                  cfg, env_path)
+    if named:
+        s = scripts[0]
+        d = library / s.id
+        # the takes that stay keep their proof of text: backfill their sidecars
+        # from the manifest before the manifest (which describes the old takes) goes
+        try:
+            write_backfill(s, library, check_takes(s, library)[1])
+        except StaleTakesError as e:
+            raise click.ClickException(str(e)) from None
+        for f in doomed:
+            f.unlink(missing_ok=True)
+        (d / "recording.json").unlink(missing_ok=True)  # describes the old takes
+        click.echo(f"  {s.id}: deleted {', '.join(f.name for f in doomed)}")
     failed = []
     for s in scripts:
         v = cfg.voice_for(voice_slot(s))
-        m = voice_recording(s, providers[v.provider], v, library,
-                            on_error=lambda msg: click.echo(f"  failed: {msg}", err=True))
+        try:
+            m = voice_recording(s, providers[v.provider], v, library,
+                                on_error=lambda msg: click.echo(f"  failed: {msg}", err=True))
+        except (StaleTakesError, VoiceMismatchError) as e:
+            raise click.ClickException(str(e)) from None
         if m is None:
             failed.append(s.id)
         else:
@@ -202,7 +263,7 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
             click.echo(f"  {s.id}: {len(m.passages)} passages, {total / 60:.1f} min")
     if failed:
         click.echo(f"{len(failed)} recording(s) incomplete: {', '.join(failed)}. "
-                   "Re-run to finish; finished passages are kept.", err=True)
+                   "Re-run to finish; finished passages and paid pieces are kept.", err=True)
         raise SystemExit(1)
 
 
@@ -218,7 +279,8 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
 def render(script_id, all_, library, scripts_root):
     """Re-render source character from the raw takes. Free: no provider, no key.
 
-    With --all, recordings that have no raw takes yet are skipped."""
+    With --all, recordings with no raw takes, or only some, are skipped; one
+    whose script changed since voicing is refused (exit 1 at the end)."""
     if bool(script_id) == bool(all_):
         raise click.UsageError("give one script id or --all")
     try:
@@ -229,15 +291,31 @@ def render(script_id, all_, library, scripts_root):
         scripts = [s for s in scripts if s.id == script_id]
         if not scripts:
             raise click.ClickException(f"no script with id '{script_id}'")
+    refused = []
     for s in scripts:
         if all_ and not raw_takes(Path(library) / s.id):
             click.echo(f"  {s.id}: skipped, not voiced")  # --all only; a named id still fails
             continue
         try:
             m = render_recording(s, library)
+        except MissingRawError as e:
+            if not all_:
+                raise click.ClickException(str(e)) from None
+            click.echo(f"  {s.id}: skipped, partially voiced (missing {', '.join(e.missing)})")
+            continue
+        except StaleTakesError as e:
+            if not all_:
+                raise click.ClickException(str(e)) from None
+            click.echo(f"  refused: {e}", err=True)
+            refused.append(s.id)
+            continue
         except (FileNotFoundError, ValueError) as e:
             raise click.ClickException(str(e)) from None
         click.echo(f"  {s.id}: {len(m.passages)} passages rendered ({m.source_character})")
+    if refused:
+        click.echo(f"{len(refused)} recording(s) not rendered, their script changed since "
+                   f"voicing: {', '.join(refused)}", err=True)
+        raise SystemExit(1)
 
 
 # --- audition -------------------------------------------------------------------

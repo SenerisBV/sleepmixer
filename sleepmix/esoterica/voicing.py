@@ -366,9 +366,10 @@ def raw_takes(d: Path) -> list[Path]:
 
 
 def uncached_chars(pieces: list[Piece], out: Path, voice: Voice,
-                   translate: Callable[[str], str]) -> int:
-    """Characters still to pay for to make `out` (0 if it exists)."""
-    if Path(out).exists():
+                   translate: Callable[[str], str], redo: bool = False) -> int:
+    """Characters still to pay for to make `out` (0 if it exists, unless
+    `redo`: it is about to be deleted and voiced again)."""
+    if Path(out).exists() and not redo:
         return 0
     return sum(len(translate(pc.text)) for n, pc in enumerate(pieces)
                if not piece_cache(out, n, pc, voice).exists())
@@ -528,6 +529,7 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
     """
     d = Path(library) / script.id
     check_resume_voice(script, voice, library)
+    ensure_current(script, library)
     if not (d / VOICE_FILE).exists() or not paid_audio(d):
         d.mkdir(parents=True, exist_ok=True)
         (d / VOICE_FILE).write_text(json.dumps(_voice_record(voice), indent=2) + "\n",
@@ -536,6 +538,8 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
     try:
         for p in script.passages:
             raw = d / raw_passage_file(p.index)
+            if not raw.exists():  # record the text before paying for it
+                _write_json_atomic(_take_record(p, voice), d / take_sidecar_file(p.index))
             if script.show == "shuffles":
                 voice_shuffle(provider, shuffle_lines(p.text), voice,
                               script.language, raw, shuffle_rng(script.id, p.index))
@@ -551,13 +555,169 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
     return render_recording(script, library, voice)
 
 
+class MissingRawError(FileNotFoundError):
+    """Some (not necessarily all) raw takes of a recording are missing."""
+
+    def __init__(self, message: str, missing: list[str]):
+        super().__init__(message)
+        self.missing = missing
+
+
 def _require_raw(script: Script, d: Path) -> None:
     missing = [raw_passage_file(p.index) for p in script.passages
                if not (d / raw_passage_file(p.index)).exists()]
     if missing:
-        raise FileNotFoundError(
+        raise MissingRawError(
             f"{script.id}: raw takes missing in {d}: {', '.join(missing)} "
-            "(run `sleepmix esoterica voice` first)")
+            "(run `sleepmix esoterica voice` first)", missing)
+
+
+# --- stale-script guard ------------------------------------------------------------
+#
+# Each raw take has a sidecar `pNN.raw.json`: {index, text_sha256, provider, model,
+# voice_id, backfilled}. text_sha256 is the sha256 of the passage's neutral text as
+# the script holds it (`Passage.text`: cues included, the intensity comment not),
+# i.e. exactly what voicing chunked and sent (before each provider's cue
+# translation, which is code, not script). It is written before the take is voiced.
+# `voice` and `render` refuse while any take no longer matches the script.
+
+def take_sidecar_file(index: int) -> str:
+    """0 -> 'p01.raw.json'."""
+    return f"p{index + 1:02d}.raw.json"
+
+
+def text_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _write_json_atomic(obj: dict, out: Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=out.parent, prefix=f".{out.stem}-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, out)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _take_record(p, voice: Voice, backfilled: bool = False) -> dict:
+    return {"index": p.index, "text_sha256": text_sha256(p.text),
+            **_voice_record(voice), "backfilled": backfilled}
+
+
+class StaleTakesError(ValueError):
+    """Raw takes that no longer match the script (edited, shifted or removed passages)."""
+
+    def __init__(self, script_id: str, stale: dict[str, str]):
+        self.script_id, self.stale = script_id, stale
+        names = " ".join(f"--revoice {n}" for n in stale)
+        files = ", ".join(f"{n}.raw.wav" for n in stale)
+        super().__init__(
+            f"{script_id}: raw takes no longer match the script: "
+            + "; ".join(f"{n} ({why})" for n, why in stale.items())
+            + f". Re-voice them with `sleepmix esoterica voice {script_id} {names}` "
+            "(prints the estimate; deletes only those takes, and only with --yes), "
+            f"or delete {files} and their .raw.json yourself.")
+
+
+def check_takes(script: Script, library: Path) -> tuple[dict[str, str], list]:
+    """Compare the raw takes on disk with the script. Pure: writes nothing.
+
+    Returns (stale, backfill). `stale` maps 'pNN' to why its take no longer
+    matches: the passage's text changed (or a passage was inserted or removed
+    before it, shifting indexes), or the script has no passage NN any more.
+    `backfill` lists passages whose take has no sidecar but whose text in
+    `recording.json` equals the current spoken text: the one-off path for
+    recordings voiced before sidecars existed (spoken text has cues stripped,
+    so a cue-only edit made before the backfill would go unseen).
+    """
+    d = Path(library) / script.id
+    stale: dict[str, str] = {}
+    backfill = []
+    manifest_text: dict[int, str] = {}
+    mf = d / "recording.json"
+    if mf.exists():
+        try:
+            manifest_text = {e.index: e.text for e in read_manifest(mf).passages}
+        except ValueError:
+            pass
+    for p in script.passages:
+        if not (d / raw_passage_file(p.index)).exists():
+            continue
+        name = f"p{p.index + 1:02d}"
+        side = d / take_sidecar_file(p.index)
+        if side.exists():
+            try:
+                rec = json.loads(side.read_text(encoding="utf-8"))
+                ok = (isinstance(rec, dict) and rec.get("index") == p.index
+                      and rec.get("text_sha256") == text_sha256(p.text))
+            except ValueError:
+                ok = False
+            if not ok:
+                stale[name] = "its text changed since it was voiced"
+        elif manifest_text.get(p.index) == spoken_text(p):
+            backfill.append(p)
+        else:
+            stale[name] = "no record of the text it was voiced from"
+    n = len(script.passages)
+    for raw in raw_takes(d):
+        k = int(_RAW.match(raw.name)["n"])
+        if k > n:
+            stale[f"p{k:02d}"] = f"the script has no passage {k} any more"
+    return dict(sorted(stale.items())), backfill
+
+
+def _recorded_voice(d: Path) -> Voice | None:
+    vf, mf = d / VOICE_FILE, d / "recording.json"
+    try:
+        if vf.exists():
+            r = json.loads(vf.read_text(encoding="utf-8"))
+            return Voice(r["provider"], r["model"], r["voice_id"])
+        if mf.exists():
+            m = read_manifest(mf)
+            return Voice(m.provider, m.model, m.voice_id)
+    except (ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def write_backfill(script: Script, library: Path, backfill: list) -> None:
+    """Write the sidecars of takes `check_takes` found backfillable (free,
+    metadata only), marked `backfilled: true`."""
+    if not backfill:
+        return
+    d = Path(library) / script.id
+    voice = _recorded_voice(d)
+    if voice is None:
+        raise StaleTakesError(script.id, {f"p{p.index + 1:02d}":
+                                          "no record of the voice it was made with"
+                                          for p in backfill})
+    for p in backfill:
+        _write_json_atomic(_take_record(p, voice, backfilled=True),
+                           d / take_sidecar_file(p.index))
+
+
+def ensure_current(script: Script, library: Path) -> None:
+    """Raise StaleTakesError if any take no longer matches the script; otherwise
+    backfill the sidecars of takes voiced before sidecars existed."""
+    stale, backfill = check_takes(script, library)
+    if stale:
+        raise StaleTakesError(script.id, stale)
+    write_backfill(script, library, backfill)
+
+
+def revoice_files(d: Path, name: str) -> list[Path]:
+    """Everything `--revoice pNN` deletes: the raw take, its sidecar, its piece
+    caches and the rendered file made from it (all that exist)."""
+    d = Path(d)
+    files = [d / f"{name}.raw.wav", d / f"{name}.raw.json", d / f"{name}.wav"]
+    return [f for f in files if f.exists()] + segment_caches(d, name)
 
 
 def render_character(script: Script, library: Path) -> list[PassageEntry]:
@@ -569,6 +729,7 @@ def render_character(script: Script, library: Path) -> list[PassageEntry]:
     """
     d = Path(library) / script.id
     _require_raw(script, d)
+    ensure_current(script, library)
     rendered: list[tuple[Path, np.ndarray]] = []
     for p in script.passages:  # all in memory first: a crash never leaves a mixed set
         x, sr = sf.read(str(d / raw_passage_file(p.index)), dtype="float32")

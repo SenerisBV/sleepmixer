@@ -343,3 +343,127 @@ def test_remaining_counts_raw_files_not_rendered(tmp_path):
     full = ecli._remaining(s, tmp_path, v, cfg)
     sf.write(d / "p01.raw.wav", np.zeros(10, np.float32), 44100, subtype="FLOAT")
     assert ecli._remaining(s, tmp_path, v, cfg) < full
+
+
+# --- final review: partial voicing, stale scripts, --revoice ------------------------
+
+def _copy_scripts(tmp_path, only=("the-corridors",)):
+    import shutil
+    root = tmp_path / "scripts"
+    for s in load_all(REAL):
+        if s.id in only:
+            (root / s.show).mkdir(parents=True, exist_ok=True)
+            shutil.copy(s.path, root / s.show / s.path.name)
+    return root
+
+
+def _edit_passage(root, id, n, new_text):
+    """Replace passage n (1-based) of `id` with new_text (keeps the rest)."""
+    path = next(root.glob(f"*/{id}.md"))
+    head, body = path.read_text().split("\n---\n", 1)
+    parts = body.split("\n[passage]\n")
+    parts[n - 1] = f"\n{new_text}\n"
+    path.write_text(head + "\n---\n" + "\n[passage]\n".join(parts))
+
+
+def test_render_all_partial_with_a_two_passage_script(fakes, no_keys, tmp_path):
+    root = tmp_path / "scripts" / "testimonies"
+    root.mkdir(parents=True)
+    (root / "two.md").write_text("---\nid: two\nshow: testimonies\ntitle: T\nlanguage: en\n"
+                                 "speaker: x\nsource_character: tape\nvoice:\n---\n"
+                                 "One.\n\n[passage]\n\nTwo.\n")
+    lib = tmp_path / "library"
+    (lib / "two").mkdir(parents=True)
+    sf.write(lib / "two" / "p01.raw.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
+    r = run(["render", "--all", "--scripts", str(tmp_path / "scripts"), "--library", str(lib)])
+    assert r.exit_code == 0, r.output
+    assert "two: skipped, partially voiced (missing p02.raw.wav)" in r.output
+    r2 = CliRunner().invoke(main, ["esoterica", "render", "two", "--scripts",
+                                   str(tmp_path / "scripts"), "--library", str(lib)])
+    assert r2.exit_code != 0 and "p02.raw.wav" in r2.output
+
+
+def test_voice_and_render_refuse_a_stale_script(fakes, no_keys, tmp_path):
+    root = _copy_scripts(tmp_path)
+    v = all_chosen(tmp_path)
+    lib = tmp_path / "library"
+    CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--yes", "--scripts",
+                              str(root), "--voices", str(v), "--library", str(lib)],
+                       catch_exceptions=False)
+    _edit_passage(root, "the-corridors", 2, "An entirely new second passage.")
+    before = calls(fakes)
+    r = CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--scripts",
+                                  str(root), "--voices", str(v), "--library", str(lib)])
+    assert r.exit_code != 0
+    assert "p02" in r.output and "--revoice p02" in r.output
+    r = CliRunner().invoke(main, ["esoterica", "render", "the-corridors", "--scripts",
+                                  str(root), "--library", str(lib)])
+    assert r.exit_code != 0 and "p02" in r.output
+    r = CliRunner().invoke(main, ["esoterica", "render", "--all", "--scripts",
+                                  str(root), "--library", str(lib)])
+    assert r.exit_code != 0 and "p02" in r.output
+    assert calls(fakes) == before
+
+
+def test_revoice_prints_estimate_then_deletes_only_named_stale_takes_with_yes(
+        fakes, monkeypatch, tmp_path):
+    root = _copy_scripts(tmp_path)
+    v = all_chosen(tmp_path)
+    lib = tmp_path / "library"
+    args = ["--scripts", str(root), "--voices", str(v), "--library", str(lib)]
+    CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--yes", *args],
+                       catch_exceptions=False)
+    d = lib / "the-corridors"
+    raws = {p.name: p.read_bytes() for p in d.glob("*.raw.wav")}
+    _edit_passage(root, "the-corridors", 2, "An entirely new second passage.")
+
+    # without --yes: estimate only, nothing deleted, nothing spent, no key read
+    def boom(*a, **k):
+        raise AssertionError("an API key was read without --yes")
+    monkeypatch.setattr(ecli, "api_key", boom)
+    before = calls(fakes)
+    r = CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--revoice", "p02",
+                                  *args])
+    assert r.exit_code == 0, r.output
+    n = len(ElevenLabs.translate_cues("An entirely new second passage."))
+    assert re.search(rf"elevenlabs .*\b{n} characters", r.output)
+    assert "p02.raw.wav" in r.output and "re-run with --yes" in r.output
+    assert {p.name: p.read_bytes() for p in d.glob("*.raw.wav")} == raws
+    assert calls(fakes) == before
+
+    # naming a passage that is not stale is refused
+    r = CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--revoice", "p01",
+                                  "--revoice", "p02", "--yes", *args])
+    assert r.exit_code != 0 and "p01" in r.output and "not stale" in r.output
+    assert {p.name: p.read_bytes() for p in d.glob("*.raw.wav")} == raws
+
+    # with --yes: only p02 is re-voiced; every other take is byte-identical
+    r = CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--revoice", "p02",
+                                  "--yes", *args], catch_exceptions=False)
+    assert r.exit_code == 0, r.output
+    sent = [c[0] for p in fakes for c in p.calls][before:]
+    assert sent == ["An entirely new second passage."]
+    after = {p.name: p.read_bytes() for p in d.glob("*.raw.wav")}
+    assert after.keys() == raws.keys()
+    assert {k for k in raws if raws[k] != after[k]} == {"p02.raw.wav"}
+    m = __import__("json").loads((d / "recording.json").read_text())
+    assert m["passages"][1]["text"] == "An entirely new second passage."
+    r = CliRunner().invoke(main, ["esoterica", "render", "the-corridors", "--scripts",
+                                  str(root), "--library", str(lib)])
+    assert r.exit_code == 0, r.output
+
+
+def test_revoice_must_name_every_stale_passage_and_needs_one_id(fakes, tmp_path):
+    root = _copy_scripts(tmp_path)
+    v = all_chosen(tmp_path)
+    lib = tmp_path / "library"
+    args = ["--scripts", str(root), "--voices", str(v), "--library", str(lib)]
+    CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--yes", *args],
+                       catch_exceptions=False)
+    _edit_passage(root, "the-corridors", 1, "New first.")
+    _edit_passage(root, "the-corridors", 2, "New second.")
+    r = CliRunner().invoke(main, ["esoterica", "voice", "the-corridors", "--revoice", "p01",
+                                  "--yes", *args])
+    assert r.exit_code != 0 and "p02" in r.output
+    r = CliRunner().invoke(main, ["esoterica", "voice", "--all", "--revoice", "p01", *args])
+    assert r.exit_code != 0

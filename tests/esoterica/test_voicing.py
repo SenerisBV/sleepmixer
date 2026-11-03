@@ -171,8 +171,8 @@ def test_voice_recording_writes_passages_and_manifest(tmp_path):
     assert m is not None
     d = lib / "rec"
     assert sorted(p.name for p in d.iterdir()) == [
-        "p01.raw.wav", "p01.wav", "p02.raw.wav", "p02.wav", "p03.raw.wav", "p03.wav",
-        "recording.json", "voice.json"]
+        "p01.raw.json", "p01.raw.wav", "p01.wav", "p02.raw.json", "p02.raw.wav", "p02.wav",
+        "p03.raw.json", "p03.raw.wav", "p03.wav", "recording.json", "voice.json"]
     back = read_manifest(d / "recording.json")
     assert back == m
     assert [e.file for e in m.passages] == ["p01.wav", "p02.wav", "p03.wav"]
@@ -201,7 +201,11 @@ def test_mid_run_failure_keeps_done_passages_and_no_manifest(tmp_path):
     bad = FakeProvider(fail_when=lambda t: "Three" in t)
     assert voice_recording(s, bad, V, lib) is None
     d = lib / "rec"
-    assert sorted(p.name for p in d.iterdir()) == ["p01.raw.wav", "p02.raw.wav", "voice.json"]
+    # the failed passage's sidecar is written before its first request; no caches
+    # (its one piece failed), no manifest
+    assert sorted(p.name for p in d.iterdir()) == [
+        "p01.raw.json", "p01.raw.wav", "p02.raw.json", "p02.raw.wav", "p03.raw.json",
+        "voice.json"]
     good = FakeProvider()
     m = voice_recording(s, good, V, lib)
     assert m is not None
@@ -410,7 +414,8 @@ def test_render_is_free_overwrites_render_and_keeps_raw_byte_identical(tmp_path)
     assert sf.info(str(d / "p01.wav")).frames > 0
     assert read_manifest(d / "recording.json") == m
     assert sorted(p.name for p in d.iterdir()) == [
-        "p01.raw.wav", "p01.wav", "p02.raw.wav", "p02.wav", "recording.json", "voice.json"]
+        "p01.raw.json", "p01.raw.wav", "p01.wav", "p02.raw.json", "p02.raw.wav", "p02.wav",
+        "recording.json", "voice.json"]
 
 
 def test_render_follows_a_changed_character(tmp_path):
@@ -618,3 +623,115 @@ def test_voice_json_with_only_a_piece_cache_binds(tmp_path):
     assert voicing.raw_takes(lib / "rec") == [] and voicing.paid_audio(lib / "rec")
     with pytest.raises(VoiceMismatchError):
         check_resume_voice(s, Voice("fake", "m", "v2"), lib)
+
+
+# --- final review: stale-script guard --------------------------------------------
+
+from sleepmix.esoterica.voicing import StaleTakesError, check_takes, take_sidecar_file  # noqa: E402
+
+
+def _voiced(tmp_path, passages, id="rec"):
+    s = write_script(tmp_path / "scripts", "testimonies", id, passages)
+    lib = tmp_path / "lib"
+    assert voice_recording(s, FakeProvider(), V, lib) is not None
+    return s, lib
+
+
+def test_voicing_writes_a_sidecar_per_take(tmp_path):
+    s, lib = _voiced(tmp_path, ["One. [pause] Two.", "Three."])
+    assert take_sidecar_file(0) == "p01.raw.json"
+    side = json.loads((lib / "rec" / "p01.raw.json").read_text())
+    import hashlib
+    assert side["index"] == 0
+    assert side["text_sha256"] == hashlib.sha256("One. [pause] Two.".encode()).hexdigest()
+    assert (side["provider"], side["model"], side["voice_id"]) == ("fake", "m", "v1")
+    assert (lib / "rec" / "p02.raw.json").exists()
+
+
+def test_unchanged_script_is_current(tmp_path):
+    s, lib = _voiced(tmp_path, ["One.", "Two."])
+    assert check_takes(s, lib) == ({}, [])
+    render_recording(s, lib)  # no raise
+    fp = FakeProvider()
+    voice_recording(s, fp, V, lib)
+    assert fp.calls == []
+
+
+def test_edited_passage_is_refused_by_name(tmp_path):
+    s, lib = _voiced(tmp_path, ["One.", "Two.", "Three."])
+    edited = write_script(tmp_path / "scripts", "testimonies", "rec",
+                          ["One.", "Two, changed.", "Three."])
+    stale, _ = check_takes(edited, lib)
+    assert list(stale) == ["p02"]
+    before = (lib / "rec" / "recording.json").read_bytes()
+    with pytest.raises(StaleTakesError, match=r"rec.*p02.*--revoice p02"):
+        render_recording(edited, lib)
+    assert (lib / "rec" / "recording.json").read_bytes() == before
+    fp = FakeProvider()
+    with pytest.raises(StaleTakesError, match="p02"):
+        voice_recording(edited, fp, V, lib)
+    assert fp.calls == []
+
+
+def test_a_cue_only_edit_is_stale_too(tmp_path):
+    s, lib = _voiced(tmp_path, ["One. Two."])
+    edited = write_script(tmp_path / "scripts", "testimonies", "rec", ["One. [pause] Two."])
+    assert list(check_takes(edited, lib)[0]) == ["p01"]
+
+
+def test_inserted_passage_shifts_indexes_and_is_refused(tmp_path):
+    s, lib = _voiced(tmp_path, ["One.", "Two."])
+    edited = write_script(tmp_path / "scripts", "testimonies", "rec",
+                          ["One.", "New.", "Two."])
+    stale, _ = check_takes(edited, lib)
+    assert list(stale) == ["p02"]  # p03 has no take yet; p02's take is "Two."
+    with pytest.raises(StaleTakesError, match="p02"):
+        voice_recording(edited, FakeProvider(), V, lib)
+
+
+def test_removed_passage_leaves_an_orphan_take_that_is_refused(tmp_path):
+    s, lib = _voiced(tmp_path, ["One.", "Two.", "Three."])
+    edited = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two."])
+    stale, _ = check_takes(edited, lib)
+    assert list(stale) == ["p03"] and "no passage 3" in stale["p03"]
+    with pytest.raises(StaleTakesError, match="p03"):
+        render_recording(edited, lib)
+
+
+def test_backfill_from_a_matching_manifest(tmp_path):
+    s, lib = _voiced(tmp_path, ["One. [pause] Two.", "Three."])
+    d = lib / "rec"
+    for f in d.glob("*.raw.json"):
+        f.unlink()  # a recording voiced before sidecars existed
+    stale, backfill = check_takes(s, lib)
+    assert stale == {} and [p.index for p in backfill] == [0, 1]
+    raws = {p.name: p.read_bytes() for p in d.glob("*.raw.wav")}
+    render_recording(s, lib)
+    side = json.loads((d / "p01.raw.json").read_text())
+    assert side["backfilled"] is True and side["voice_id"] == "v1"
+    assert check_takes(s, lib) == ({}, [])
+    assert {p.name: p.read_bytes() for p in d.glob("*.raw.wav")} == raws
+
+
+def test_no_sidecar_and_a_mismatched_manifest_is_stale(tmp_path):
+    s, lib = _voiced(tmp_path, ["One.", "Two."])
+    d = lib / "rec"
+    for f in d.glob("*.raw.json"):
+        f.unlink()
+    edited = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two again."])
+    stale, backfill = check_takes(edited, lib)
+    assert list(stale) == ["p02"] and [p.index for p in backfill] == [0]
+    with pytest.raises(StaleTakesError):
+        render_recording(edited, lib)
+    assert not (d / "p01.raw.json").exists()  # a refused render writes nothing
+
+
+def test_missing_raw_error_names_the_files(tmp_path):
+    from sleepmix.esoterica.voicing import MissingRawError
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two."])
+    d = tmp_path / "lib" / "rec"
+    d.mkdir(parents=True)
+    sf.write(d / "p01.raw.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
+    with pytest.raises(MissingRawError) as e:
+        render_recording(s, tmp_path / "lib")
+    assert e.value.missing == ["p02.raw.wav"]
