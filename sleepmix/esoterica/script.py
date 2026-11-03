@@ -1,0 +1,147 @@
+"""Parse Esoterica scripts (format documented in esoterica/README.md)."""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+SHOWS = frozenset({"testimonies", "sideline", "addresses", "stations",
+                   "lessons", "meditations", "shuffles"})
+CUES = frozenset({"[pause]", "[long pause]", "[breath]", "[softly]",
+                  "[whisper]", "[laughs quietly]"})
+SOURCE_CHARACTERS = frozenset({"tape", "room", "oldmic", "hum", "clean"})
+LANGUAGES = frozenset({"en", "fr", "en+invented"})
+INTENSITIES = frozenset({"low", "medium", "high"})
+
+_REQUIRED = ("id", "show", "title", "language", "speaker", "source_character", "voice")
+_OPTIONAL = ("voice_profile",)
+_BRACKET = re.compile(r"\[[^\]\n]*\]")
+_INTENSITY = re.compile(r"^<!--\s*intensity:\s*(\S+?)\s*-->$")
+_COMMENT = re.compile(r"<!--.*?-->")
+
+
+class ScriptError(ValueError):
+    """A malformed script. The message always names the file."""
+
+
+@dataclass(frozen=True)
+class Passage:
+    index: int
+    text: str
+    intensity: str  # "low" | "medium" | "high"
+
+
+@dataclass(frozen=True)
+class Script:
+    id: str
+    show: str
+    title: str
+    language: str
+    speaker: str
+    source_character: str
+    voice_profile: str | None
+    voice: dict | None
+    passages: tuple[Passage, ...]
+    path: Path
+
+
+def spoken_text(p: Passage) -> str:
+    """The passage text with cues and comments removed (use for character counts)."""
+    t = _COMMENT.sub("", p.text)
+    t = _BRACKET.sub("", t)
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in t.split("\n")]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def load_script(path: Path) -> Script:
+    path = Path(path)
+
+    def fail(msg: str, line: int | None = None):
+        where = f"{path.name}" + (f", line {line}" if line else "")
+        raise ScriptError(f"{where}: {msg}")
+
+    lines = path.read_text(encoding="utf-8").split("\n")
+    if not lines or lines[0] != "---":
+        fail("missing front matter (file must start with a '---' line)", 1)
+    try:
+        end = lines.index("---", 1)
+    except ValueError:
+        fail("front matter is not closed with a '---' line", 1)
+    try:
+        meta = yaml.safe_load("\n".join(lines[1:end]))
+    except yaml.YAMLError as e:
+        fail(f"front matter is not valid YAML ({e})", 1)
+    if not isinstance(meta, dict):
+        fail("front matter must be a YAML mapping", 1)
+
+    for key in meta:
+        if key not in _REQUIRED and key not in _OPTIONAL:
+            fail(f"unknown front matter key '{key}'", 1)
+    for key in _REQUIRED:
+        if key not in meta:
+            fail(f"missing front matter key '{key}'", 1)
+    for key in ("id", "show", "title", "language", "speaker", "source_character"):
+        if not isinstance(meta[key], str) or not meta[key].strip():
+            fail(f"front matter '{key}' must be a non-empty string", 1)
+    if meta["id"] != path.stem:
+        fail(f"id '{meta['id']}' does not match the filename '{path.stem}'", 1)
+    if meta["show"] not in SHOWS:
+        fail(f"unknown show '{meta['show']}'", 1)
+    if meta["language"] not in LANGUAGES:
+        fail(f"unknown language '{meta['language']}'", 1)
+    if meta["source_character"] not in SOURCE_CHARACTERS:
+        fail(f"unknown source_character '{meta['source_character']}'", 1)
+    vp = meta.get("voice_profile")
+    if vp is not None and not isinstance(vp, str):
+        fail("voice_profile must be a string", 1)
+    voice = meta["voice"]
+    if voice is not None and not isinstance(voice, dict):
+        fail("voice must be empty or a mapping", 1)
+
+    # Split the body into raw passages of (file line number, text) pairs.
+    raw: list[list[tuple[int, str]]] = [[]]
+    for i in range(end + 1, len(lines)):
+        if lines[i] == "[passage]":
+            raw.append([])
+        else:
+            raw[-1].append((i + 1, lines[i]))
+
+    passages = []
+    for idx, chunk in enumerate(raw):
+        while chunk and not chunk[0][1].strip():
+            chunk.pop(0)
+        while chunk and not chunk[-1][1].strip():
+            chunk.pop()
+        intensity = "medium"
+        if chunk:
+            m = _INTENSITY.match(chunk[0][1].strip())
+            if m:
+                intensity = m.group(1)
+                if intensity not in INTENSITIES:
+                    fail(f"unknown intensity '{intensity}'", chunk[0][0])
+                chunk.pop(0)
+        for ln, text in chunk:
+            if "<!--" in text:
+                fail("HTML comments are only allowed as a passage's "
+                     "'<!-- intensity: ... -->' first line", ln)
+            for cue in _BRACKET.findall(text):
+                if cue not in CUES:
+                    fail(f"unknown cue {cue}", ln)
+        body = "\n".join(t for _, t in chunk).strip()
+        p = Passage(idx, body, intensity)
+        if not spoken_text(p):
+            fail(f"passage {idx + 1} is empty (no spoken text)",
+                 chunk[0][0] if chunk else None)
+        passages.append(p)
+
+    return Script(id=meta["id"], show=meta["show"], title=meta["title"],
+                  language=meta["language"], speaker=meta["speaker"],
+                  source_character=meta["source_character"], voice_profile=vp,
+                  voice=voice, passages=tuple(passages), path=path)
+
+
+def load_all(root: Path) -> list[Script]:
+    """Parse every `<show>/<id>.md` under root, sorted by show then id."""
+    return [load_script(p) for p in sorted(Path(root).glob("*/*.md"))]
