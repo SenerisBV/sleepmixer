@@ -445,3 +445,56 @@ def test_rendered_files_alone_do_not_imply_a_paid_voice(tmp_path):
     d.mkdir(parents=True)
     sf.write(d / "p01.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
     check_resume_voice(s, V, tmp_path / "lib")  # no raise
+
+
+# --- final review: render edges and character_params ---------------------------
+
+def test_rendered_file_starts_and_ends_at_silence(tmp_path):
+    """Tape hiss would otherwise stop dead on the file's last sample."""
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])  # tape
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    y, sr = sf.read(lib / "rec" / "p01.wav", dtype="float32")
+    assert y[-1] == 0.0 and y[0] == 0.0
+    hiss = 10 ** (-52 / 20)
+    # the last and first ~2 ms ramp from the hiss floor to nothing
+    assert np.abs(y[-20:]).max() < hiss * 0.5
+    assert np.abs(y[:20]).max() < hiss * 0.5
+    assert np.abs(np.diff(y[-200:])).max() < 4 * hiss
+
+
+def test_manifest_records_character_params(tmp_path):
+    from sleepmix.esoterica import character
+    from sleepmix.esoterica.character import character_params
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    lib = tmp_path / "lib"
+    m = voice_recording(s, FakeProvider(), V, lib)
+    assert m.character_params["kind"] == "tape"
+    assert m.character_params["TAPE_HISS_DB"] == character.TAPE_HISS_DB
+    assert m.character_params["render_edge_s"] == voicing.RENDER_EDGE_S
+    assert {k: v for k, v in m.character_params.items() if k != "render_edge_s"} \
+        == character_params("tape")
+    assert read_manifest(lib / "rec" / "recording.json").character_params == m.character_params
+
+
+def test_retuned_character_rewrites_the_manifest(tmp_path, monkeypatch):
+    from sleepmix.esoterica import character
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    lib = tmp_path / "lib"
+    first = voice_recording(s, FakeProvider(), V, lib)
+    monkeypatch.setattr(character, "TAPE_HISS_DB", -60.0)
+    again = render_recording(s, lib)
+    assert again.character_params["TAPE_HISS_DB"] == -60.0
+    assert again.made_at == first.made_at
+    assert read_manifest(lib / "rec" / "recording.json").character_params["TAPE_HISS_DB"] == -60.0
+
+
+def test_manifest_without_character_params_still_reads(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    path = lib / "rec" / "recording.json"
+    data = json.loads(path.read_text())
+    del data["character_params"]
+    path.write_text(json.dumps(data))
+    assert read_manifest(path).character_params == {}

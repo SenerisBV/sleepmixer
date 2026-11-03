@@ -31,7 +31,7 @@ import yaml
 from scipy.ndimage import minimum_filter1d
 from scipy.signal import resample_poly
 
-from .character import apply_character
+from .character import apply_character, character_params
 from .manifest import Manifest, PassageEntry, read_manifest, write_manifest
 from .providers import Provider, ProviderError
 from .script import Script, spoken_text
@@ -51,6 +51,8 @@ GATE_DB = -50.0            # a frame above this is speech-active
 PEAK_DB = -3.0             # peak ceiling
 FRAME_S = 0.02             # loudness frame length
 LIMIT_WINDOW_S = 0.005     # limiter gain-smoothing window
+RENDER_EDGE_S = 0.010      # raised-cosine fade at both ends of a rendered file, after the
+                           # character (tape hiss / hum would otherwise start or stop dead)
 
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"'”’)]*\s+")
 _TOKEN = re.compile(r"<[^>]*>|\[[^\]]*\]|\S+")
@@ -192,8 +194,8 @@ def _to_sr(x: np.ndarray, sr: int) -> np.ndarray:
     return x
 
 
-def _edges(x: np.ndarray) -> np.ndarray:
-    n = min(int(EDGE_S * SR), len(x) // 2)
+def _edges(x: np.ndarray, seconds: float = EDGE_S) -> np.ndarray:
+    n = min(int(seconds * SR), len(x) // 2)
     if n < 1:
         return x
     ramp = (0.5 * (1 - np.cos(np.pi * np.arange(n) / n))).astype(np.float32)
@@ -470,8 +472,9 @@ def render_character(script: Script, library: Path) -> list[PassageEntry]:
     for p in script.passages:  # all in memory first: a crash never leaves a mixed set
         x, sr = sf.read(str(d / raw_passage_file(p.index)), dtype="float32")
         x = _to_sr(x, sr)
-        y = normalise(apply_character(x, SR, script.source_character,
-                                      character_seed(script.id, p.index)))
+        y = apply_character(x, SR, script.source_character,
+                            character_seed(script.id, p.index))
+        y = normalise(_edges(y, RENDER_EDGE_S))  # gain keeps the zeroed ends at zero
         rendered.append((d / passage_file(p.index), y))
     entries: list[PassageEntry] = []
     for p, (out, y) in zip(script.passages, rendered):
@@ -480,6 +483,11 @@ def render_character(script: Script, library: Path) -> list[PassageEntry]:
                                     duration_s=round(len(y) / SR, 3),
                                     text=spoken_text(p), intensity=p.intensity))
     return entries
+
+
+def render_params(kind: str) -> dict:
+    """What the manifest records as `character_params`."""
+    return {**character_params(kind), "render_edge_s": RENDER_EDGE_S}
 
 
 def render_recording(script: Script, library: Path, voice: Voice | None = None) -> Manifest:
@@ -508,14 +516,16 @@ def render_recording(script: Script, library: Path, voice: Voice | None = None) 
             raise FileNotFoundError(f"{script.id}: no {VOICE_FILE} in {d} "
                                     "(run `sleepmix esoterica voice` first)")
     entries = render_character(script, library)
+    params = render_params(script.source_character)
     if (existing is not None and existing.passages == entries
-            and existing.source_character == script.source_character):
+            and existing.source_character == script.source_character
+            and existing.character_params == params):
         return existing
     m = Manifest(id=script.id, show=script.show, title=script.title,
                  language=script.language, source_character=script.source_character,
                  provider=voice.provider, model=voice.model, voice_id=voice.voice_id,
                  made_at=(existing.made_at if existing else
                           datetime.now(timezone.utc).isoformat(timespec="seconds")),
-                 passages=entries)
+                 passages=entries, character_params=params)
     write_manifest(m, d)
     return m

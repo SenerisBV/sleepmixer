@@ -120,3 +120,17 @@ def test_room_level_stays_near_input_without_rms_matching():
 def test_hum_has_no_step_at_sample_zero():
     y = apply_character(np.zeros(SR, np.float32), SR, "hum", 5)
     assert abs(y[0]) < 1e-9 and np.abs(np.diff(y)).max() < 10 ** (-55 / 20) * 0.1
+
+
+def test_character_params_name_the_recipe_constants():
+    from sleepmix.esoterica import character
+    from sleepmix.esoterica.character import character_params
+    p = character_params("tape")
+    assert p["kind"] == "tape"
+    assert p["TAPE_HISS_DB"] == character.TAPE_HISS_DB
+    assert p["TAPE_LOWPASS_HZ"] == character.TAPE_LOWPASS_HZ
+    assert not any(k.startswith("ROOM_") for k in p)
+    assert character_params("room")["ROOM_VOICE_BAND_HZ"] == list(character.ROOM_VOICE_BAND_HZ)
+    assert character_params("clean") == {"kind": "clean"}
+    with pytest.raises(ValueError):
+        character_params("vinyl")

@@ -36,6 +36,10 @@ class Manifest:
     voice_id: str
     made_at: str
     passages: list[PassageEntry] = field(default_factory=list)
+    # The source-character tuning that made the pNN.wav files (character.character_params
+    # plus the render edge fade). Defaulted so a manifest written before it existed
+    # still reads; FORMAT_VERSION is unchanged because nothing reads it but Python.
+    character_params: dict = field(default_factory=dict)
 
 
 def write_manifest(m: Manifest, dir: Path) -> Path:

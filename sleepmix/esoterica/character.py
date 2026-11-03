@@ -103,6 +103,23 @@ def _hum(x, sr, rng):
 
 
 _RECIPES = {"tape": _tape, "room": _room, "oldmic": _oldmic, "hum": _hum}
+_PREFIX = {"tape": "TAPE_", "room": "ROOM_", "oldmic": "OLDMIC_", "hum": "HUM_"}
+
+
+def character_params(kind: str) -> dict:
+    """The recipe constants `kind` uses right now, by name (tuples as lists so
+    the dict round-trips through JSON). Recorded in each manifest, so a
+    rendered file says exactly which tuning made it."""
+    if kind == "clean":
+        return {"kind": "clean"}
+    if kind not in _RECIPES:
+        raise ValueError(f"unknown source character '{kind}' (one of {', '.join(KINDS)})")
+    g = globals()
+    out: dict = {"kind": kind}
+    for name in sorted(n for n in g if n.startswith(_PREFIX[kind]) and n.isupper()):
+        v = g[name]
+        out[name] = list(v) if isinstance(v, tuple) else v
+    return out
 
 
 def apply_character(x: np.ndarray, sr: int, kind: str, seed: int) -> np.ndarray:
