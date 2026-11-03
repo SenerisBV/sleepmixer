@@ -26,6 +26,8 @@ They did not know... if it would come back.
 
 [pause]
 
+[segment]
+
 Think of that. Think of it... plainly. They did not know. The almanacs said one thing and the sky said another... and the sky was winning. And in Harrowmere and in Vell and in the salt towns, and in the high farms above Tessary where my own grandmother's grandmother kept bees... the people did the only thing that anyone has ever known to do in the dark. They lit a lamp... And they put it in the window.
 
 Not for themselves. I want the young ones to understand this. A lamp in a room is for the room... A lamp in a window is for the road.
@@ -44,6 +46,8 @@ And they wrote the Accords. By lamplight... On the backs of grain tallies, becau
 You will hear the articles read later tonight, in full, as they are every Long Evening, and I will not take that from the reader. But I want to speak of three of them... Only three.
 
 The fourth article: that no window facing a road shall be dark on the Long Evening, so long as there is oil anywhere on the Nine Shores. [pause] Anywhere. Not in your house... Anywhere. Your window is lit by every jar on every shore, and every jar on every shore... is lit by your window.
+
+[segment]
 
 The seventh article: that there shall be, in every town, a house of listening. Where anyone may come in out of the dark and sit... and say what is on them, and be heard, and not be answered unless they ask to be. We have kept that one... Some of you have sat in those rooms. Some of you have been the one who listens. You know that it is the hardest work there is... and the quietest.
 
@@ -66,6 +70,8 @@ And the lock-keeper from Senn looked round at all those faces in the lamplight..
 
 [pause]
 
+[segment]
+
 So we allow it. On this night of all nights. You may begin a thing... and leave it. You may set it down in the middle like a jar on a step, and someone will come along and carry it the rest of the way... Or no one will, and it will sit there in the lamplight being half of something, and that will be enough... That will be, on this night... exactly enough.
 
 [breath]
@@ -84,6 +90,8 @@ And then we will come home. And we will sit by our windows... And we will not fi
 I want to tell you about my grandmother's grandmother, the one with the bees... She kept a lamp in her window that whole first Long Evening, and on the second night a man came up the hill road carrying a jar on his back and a hive under his arm... He had brought it all the way from Orrin because he was afraid his bees would think the world had ended... And she took him in, and she put his hive next to hers in the warm by the stove... and the two hives hummed at each other all night through the wall of their boxes, a low hum... the two of them, as though they were [softly] comparing notes.
 
 [long pause]
+
+[segment]
 
 And in the morning the sun was still not up... And the hives were still humming. And the lamp was still in the window... And the man said, I think, I think they've decided, and my grandmother's grandmother said, decided what. And he looked at the window, at the road, at all the other windows down the hill, lit, one after another, all the way to the square... and he said
 

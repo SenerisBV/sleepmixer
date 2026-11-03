@@ -20,6 +20,8 @@ not yellow. Everybody wants it to be yellow, because of the apples, I suppose, a
 
 I was pruning. Late in the summer, which is wrong by the book, you prune in the cold, but the old Pellbrook trees at the bottom of the slope had got away from me and I thought I'll just take the water shoots off before they go any further. So I had the long saw and the little saw and the ladder, the three-legged one, and I was up in the fourth tree of the sixth row. I know that because I've counted it since. Fourth tree, sixth row. [pause] I go and stand under it.
 
+[segment]
+
 And the sun had gone. I want to be accurate. The sun had been down maybe ten minutes, the sky was that flat colour it goes, and I was thinking I'd do one more cut and pack it in. And I put my hand up into the branches for the next shoot, and there was an apple in my hand, and it was lit.
 
 [breath]
@@ -70,6 +72,8 @@ But I don't mind. I want to say that. I don't mind. Because I know it's there no
 [breath]
 
 The grass was long and wet. The bark gone silver. And the apples that were a bit long, a bit like a pear. And whoever it was with the basket, a long way ahead, not hurrying.
+
+[segment]
 
 I left the saw in the tree. I still don't know why. I think about it more than I think about anything. I've never left a tool out in my life. And I think, maybe I wanted something of mine to stay there. Just for the night. Something to say, he was here, he'll be back. Like leaving your coat on a chair.
 
