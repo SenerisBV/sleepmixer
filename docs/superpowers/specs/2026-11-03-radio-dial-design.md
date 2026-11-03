@@ -1,7 +1,16 @@
-# Plan 9: the radio dial — the first iPhone night
+# Plan 9: Esoterica DM — the radio dial, the first iPhone night
 
-**Status:** design written 2026-11-03 from the operator's answers, builder-checked;
-awaiting the operator's review. Not yet planned.
+**Status:** approved 2026-11-03. The operator: "I don't want to listen anymore -
+I want to listen on the phone and get a big-picture sense of how this is going.
+Take your best guesses and we'll refine later. Let's not play on the mac." Every
+*Claude's call* below stands as a best guess, to be refined by ear on the phone.
+
+**The name (Claude's pick, the operator open to alternatives):** the app is
+**Esoterica**, and its band is **DM** ("dream modulation"), printed on the dial
+the way AM and FM are on a radio. The operator offered their own name, or
+"esoterica ... or some other word that signals lost recordings", and "AM radio,
+or maybe some other *M - EM radio? SM?". Runners-up offered: Lethe AM,
+Ephemera EM, Esoterica SM.
 
 **Builds on** `2026-11-02-am-night-design.md` (Plan 7: the scenes, the AM
 channel, the warping, the shape of the night) and
@@ -327,20 +336,21 @@ little of the others. Tuned by ear, recorded as placeholders.
   long as they still age with the drift and the result is not an audio
   track on a loop
 
-## Order of work (suggested)
+## Order of work
 
-Each milestone is something the operator can hear.
+The operator wants the phone, not checkpoints: no Mac playback milestone and
+no listening checks before the first night on the phone. Tests stay.
 
-1. **Segments.** The marker, Claude's marks in the three scripts, the cuts,
-   per-segment renders. The operator listens to the cuts.
-2. **A station's night on the Mac.** The planner with the dial's clock, the
-   segment schedule and spacing, the bed, the drift; `nightctl` renders a
-   station's night from any minute and simulates a turn.
-3. **Real time.** The engine runs live (Mac first), with the real-time
-   hazards fixed and memory measured.
-4. **The dial on the phone.** The app, the three stations, static, off/on,
-   the reset, background audio and route rules. **First night in bed.**
-5. **Sleep on it.** Tune the placeholders by ear over a few nights.
+1. **Segments.** The marker, Claude's marks in the three scripts, the cuts
+   (automatic, with the never-in-a-word test), per-segment renders, a bundle
+   for the app.
+2. **The planner.** The dial's clock, the drift curves, the broadcast
+   schedule per station, the reset. Pure and tested by jumping to any minute.
+3. **Real time.** The scenes, the warp and the channel running live, with
+   the real-time hazards fixed.
+4. **The app on the phone.** The dial, three stations, static, off/on, the
+   reset, background audio, route rules. Installed on the operator's iPhone.
+   **First night in bed.**
+5. **Refine by ear**, from the operator's nights.
 
-Plan 7's memory layer (fragments of earlier in the night returning) comes
-after milestone 5, once the operator has heard a night without it.
+Plan 7's memory layer comes after the operator has slept with it.
