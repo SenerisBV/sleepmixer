@@ -252,7 +252,16 @@ The placement is in the piece-cache key and in each sidecar
 show as stale ("its delivery tag was placed once per request"). Estimate for
 the re-voice: Lantern 7,886, Northern 11,682 characters (before any ellipses
 are added to the scripts). Not spent yet; waiting for the operator's go.
-ElevenLabs total now about 81,386 of 265,000.
+
+**Ellipses probe (2026-11-03, 1,227 characters).** The first four worded
+paragraphs of Lantern p01 with ellipses added by hand and the tag before each
+paragraph, Harriet, one request. Speaking rate against the full p01 takes
+(same voice, same kind of text): speech only (silence removed) 3.88 words/s vs
+4.00-4.14 for every earlier take (~3-6% slower); overall 2.66 vs 2.73-2.78
+words/s (~4%). The numbers say the levers are small on this voice; the
+operator's ear decides. File: scratchpad `ellipses/lantern-e-paragraph-ellipses.wav`
+(rendered with room character and pause_stretch 2.2; `.raw.wav` beside it).
+ElevenLabs total now about 82,613 of 265,000.
 
 **Placeholders** (Claude's, tune by ear):
 
