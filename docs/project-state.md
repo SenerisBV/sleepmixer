@@ -208,7 +208,11 @@ recorded voice and needs a full re-voice. Samples for the operator:
 slow tag, v2 at 0.7, or the current takes with longer pauses only.
 
 **Spend.** The re-voice 17,398 characters plus the speed and tag tests 768:
-ElevenLabs total now about 59,983 of 265,000 credits.
+ElevenLabs total now about 59,983 of 265,000 credits. Then a tag test in the two real voices
+(Harriet, Bill; one sentence each, 1,308 characters): plain / `[slowly]` /
+`[languidly]` / `[slowly, languidly, like molasses]` / `[very slowly, sleepy,
+drawn out]` gave Lantern 8.16 / 10.00 / 9.04 / 10.16 / 10.48 s and Northern
+7.04 / 8.24 / 7.44 / 8.24 / 8.32 s (scratchpad `molasses/`). Total about 61,291.
 
 **Placeholders** (Claude's, tune by ear):
 
