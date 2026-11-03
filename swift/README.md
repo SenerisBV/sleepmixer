@@ -40,7 +40,7 @@ swift test -c release
 
 **Always test with `-c release`.** Per-sample DSP in debug is 10 to 50 times
 slower and the suite renders minutes of audio. The tests are pure unit tests;
-there is no database. The suite currently has 104 tests.
+there is no database. The suite currently has 129 tests.
 
 ## Audition
 
@@ -53,6 +53,8 @@ swift run -c release nightctl audition waves --distance 1 --slowness 1 \
 swift run -c release nightctl audition chimes --no-channel
 swift run -c release nightctl audition chimes --ring 1 --softness 1 --vibrato 0.5
 swift run -c release nightctl audition warmth --seconds 60 --play
+swift run -c release nightctl audition voice --file ../esoterica/library/the-orchard-light/p01.wav \
+    --seconds 90 --distance 0.6 --fragmentation 0.3 --play
 ```
 
 Options: `--seconds` (above 0, up to 3600, default 60), `--at` (start second within the
@@ -65,6 +67,19 @@ ignore them), `--no-channel`,
 `--play` (afplay). It prints the path, RMS, peak and spectral centroid. Bad
 input exits with code 64 and writes no file. The tool builds sound only through
 `NightFactory.audition`; it can override the named fields and nothing else.
+
+## Playing a voice file (Plan 8a)
+
+`nightctl audition voice --file <wav>` plays a WAV (mono or stereo; PCM 16/24/32
+or float32; any sample rate, resampled) through the same Fragmenter, Distance and
+channel chain as the scenes. `--seconds`, `--at`, `--seed`, `--distance`,
+`--fragmentation`, `--proportion`, `--no-channel` and `--play` work as above;
+`--slowness`, `--ring`, `--softness` and `--vibrato` must be 0 for a voice
+(a clear error otherwise); `--file` is only valid with `voice`. A file shorter
+than `--seconds` ends in a 50 ms fade, then silence; it starts with a 5 ms
+fade-in. The WAV is decoded once and a bad one fails before any output is
+written. The Esoterica library and `esoterica/listening.sh` live in
+`esoterica/` (see its README).
 
 ## The listening set
 

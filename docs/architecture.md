@@ -2044,3 +2044,59 @@ per-sample `pow` and hashing in the channel), and these are recorded in
 settings are constants for the length of an audition (`Curve.constant`);
 the components accept curves, but only a little of that is exercised (there is
 no seek test with a time-varying warp), and no planner exists to write one.
+
+## Esoterica: from script to a file the engine can play (Plan 8a)
+
+Esoterica is the spoken-word layer: generated "found recordings" that the night
+engine warps like any scene. Its pipeline crosses the repo's two engines at one
+seam, a WAV file plus a JSON manifest.
+
+```
+esoterica/scripts/<show>/<id>.md       committed; parsed by sleepmix/esoterica/script.py
+   | sleepmix esoterica voice <id> --yes        PAID: ElevenLabs / Cartesia, one request per chunk
+   v
+esoterica/library/<id>/pNN.raw.wav     the provider's take, loudness-normalised; never overwritten
+   | sleepmix esoterica render <id>|--all       FREE, deterministic, re-runnable
+   v
+esoterica/library/<id>/pNN.wav         + source character (tape|room|oldmic|hum|clean), re-normalised
+esoterica/library/<id>/recording.json  the manifest: id, show, voice, source_character, passages
+   | Swift: WAVReader -> VoiceClip -> FileSource -> Fragmenter -> Distance -> AMChannel
+   v
+nightctl audition voice --file pNN.wav ...
+```
+
+**The raw/render split is the load-bearing decision.** A paid take is money; a
+source-character recipe is a placeholder that will change when someone listens.
+If the effect were baked into the paid file, every tweak would mean re-paying.
+So `voice` writes only raw takes (and `voice.json`, so a resume can never mix
+voices), and `render` is a pure function of raw takes, script and seed
+(crc32 of id and passage index). Resumability, the cost estimate and the "is this
+voiced?" test all look at raw files only; a rendered file alone never implies a
+paid voice. `render --all` skips recordings with no raw takes; `render <id>`
+for one fails clearly.
+
+**Cost guard.** Every command that can spend prints per-provider character
+counts and estimated cost first, and spends only with `--yes`; without it, no
+key is read and no provider is built. A passage already on disk is never
+re-voiced. A provider error part-way leaves the finished passages and writes no
+manifest (a manifest means the recording is complete). Keys come only from the
+git-ignored `.env` or the environment and never appear in an error message
+(tested with a fake key echoed back in a 401 body).
+
+**Test isolation from the network and from credits.** Providers take an injected
+HTTP session. An autouse fixture in `tests/esoterica/conftest.py` makes any real
+`requests` call raise, tests use fake sessions with canned PCM, and every test
+writes only under `tmp_path`, never into `esoterica/library/` or
+`esoterica/audition/`. The suite can therefore never spend a credit, and the only
+tests that touch the real scripts only parse them.
+
+**The Swift side** stays Foundation-only. `WAVReader` decodes PCM 16/24/32 and
+float32, mono or stereo (mixed to mono), tolerating extra chunks and truncated
+data; `VoiceClip` holds the decoded samples once. `FileSource` resamples linearly
+and is a pure function of absolute time, so seeking is as exact as for the
+scenes, with a 5 ms fade-in and a 50 ms fade-out so a clip never starts or stops
+on a click. `NightFactory` runs voice and scenes through one shared chain, so the
+seeds and the 6 s lead-in are identical. The factory does no file I/O: the CLI
+decodes the WAV once and fails clearly (before writing any output) on a bad file.
+What is deliberately absent: no planner decides which recording plays when, and
+no relative levels are set between a voice and the scenes.

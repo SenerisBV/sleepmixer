@@ -38,3 +38,6 @@ swift/listening/measurements.txt
 # Esoterica: voiced audio, manifests and audition excerpts (scripts are committed)
 esoterica/library/
 esoterica/audition/
+
+# Esoterica: listening set made by esoterica/listening.sh
+esoterica/listening/

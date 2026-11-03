@@ -385,6 +385,16 @@ scenes heard through an AM-radio channel, with a Mac command-line tool
 (`nightctl`) to audition them. It is not part of the Python pipeline above and
 isn't an app yet. See [`swift/README.md`](swift/README.md).
 
+## Esoterica (in progress)
+
+`esoterica/` is the spoken-word layer: scripts for generated "found recordings"
+(strange, sincere, never concluding), voiced by ElevenLabs through
+`sleepmix esoterica estimate | audition | voice | render` (everything that spends
+prints an estimate first and needs `--yes`; keys go in a git-ignored `.env`),
+then played by the Swift engine with `nightctl audition voice --file`. Four
+recordings are voiced; `esoterica/listening.sh` makes the listening set. See
+[`esoterica/README.md`](esoterica/README.md).
+
 ## Notes & caveats
 
 - **Binaural beats need headphones** (each ear gets a different carrier; the

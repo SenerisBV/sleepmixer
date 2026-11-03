@@ -17,6 +17,9 @@ esoterica/
                          <id>/pNN.raw.wav (paid takes), pNN.wav (with source
                          character), voice.json, recording.json
   audition/              audition excerpts (git-ignored)
+  listening/             the listening set from listening.sh (git-ignored)
+  listening.sh           makes the listening set (see "The listening set")
+  voices.yaml            providers, candidates, and the chosen voice per slot
 ```
 
 ## The script format
@@ -107,9 +110,14 @@ intensity comment is still allowed.
 turns scripts into audio. Every command prints the characters and estimated
 cost per provider first and spends nothing without `--yes`.
 
+- **Commands** (all print the characters and estimated cost first):
+  `sleepmix esoterica estimate`; `audition --slot S | --show SHOW | --all [--yes]`;
+  `voice <id> | --all [--yes]` (paid); `render <id> | --all` (free; `--all` skips
+  recordings with no raw takes, printing "skipped, not voiced"). Never pass `--yes`
+  without reading the estimate. Keys live only in the repo-root `.env`.
 - **Voices** come from `esoterica/voices.yaml`: per-provider model, price and
   limits under `providers:`, 2–3 candidates per slot per provider under
-  `candidates:`, and the pick per slot under `chosen:` (empty until STOP 2).
+  `candidates:`, and the pick per slot under `chosen:`.
 - **Audition:** `sleepmix esoterica audition --slot <slot> | --show <show> | --all [--yes]`
   voices about 120 spoken words of the first passage of the first script (by
   id) in each slot (shuffles: the first 16 images) with every candidate, into
@@ -136,6 +144,25 @@ cost per provider first and spends nothing without `--yes`.
   seeded from the recording id. A line that opens with a French article
   (`le`, `la`, `les`, `un`, `une`, `des`, `du`, `au`, `aux`, `l'`) is sent as
   French.
+
+## The listening set
+
+`esoterica/listening.sh` (free, no provider) writes, for passage 1 of every
+recording that has a `recording.json`, into `esoterica/listening/`:
+`<id>-plain.wav` (as voiced), `<id>-near.wav` (`nightctl audition voice
+--distance 0`) and `<id>-far.wav` (`--distance 0.6 --fragmentation 0.3`), and
+prints RMS, peak and centroid. The near and far files are the first 90 s;
+`SECONDS_PER_FILE=150 esoterica/listening.sh` changes that. It builds `nightctl`
+in release first.
+
+## Playing a recording through the engine
+
+```
+cd swift
+swift run -c release nightctl audition voice \
+    --file ../esoterica/library/the-orchard-light/p01.wav \
+    --seconds 90 --distance 0.6 --fragmentation 0.3 --play
+```
 
 ## The shows
 

@@ -10,19 +10,26 @@ someone upstairs practicing), which **warp across the night into their own
 descendants**: further away, slower, in pieces, out of proportion, "like
 dreams replay experience incompletely and with different proportions, and
 likewise, a warm memory the further you get from it." The operator's own
-contribution is a **spoken-word voice from a pasted link** (podcast feeds,
-audiobooks, speeches) that starts clear and drifts to a murmur. Their
-"number 1 sleep request", a late-night call-in show with a soothing overnight
-DJ, is deferred until they've thought about how; the voice layer is built
-so it can grow into it.
+contribution was to be a **spoken-word voice from a pasted link** (podcast feeds,
+audiobooks, speeches) that starts clear and drifts to a murmur. **Since
+2026-11-02 the voice layer is Esoterica instead:** generated found-recording
+spoken word (testimonies, a made-up sport's commentary, speeches from histories
+that didn't happen, news radio from somewhere else, clinical lessons in a
+"language" that isn't one, French meditations, bursts of images), voiced by
+text-to-speech and warped by the same channel as the scenes. Link import is
+still a door, now left ajar (see "Plan 8a" below). Their "number 1 sleep
+request", a late-night call-in show with a soothing overnight DJ, is deferred
+until they've thought about how; the voice layer is built so it can grow into it.
 
 - **Design:** `docs/superpowers/specs/2026-11-02-am-night-design.md`,
   approved 2026-11-02, on branch `feat/am-night`. **Plan 7a (two scenes through
   the channel, a Mac audition tool) is built and tested; the operator has not
   listened yet.** Plan 7b (soft-mallet chimes, three tone dials, a low-warmth
   scene, after the operator's first listen) is built too; the new set awaits
-  them (section "Plan 7b"). Everything after that (more scenes, the planner, the
-  voice layer, the app) is not planned or built.
+  them (section "Plan 7b"). **Plan 8a (the Esoterica starter set: scripts, voicing, a file source in the
+  engine) is built; four recordings are voiced and the listening judgement is
+  outstanding** (section "Plan 8a" below). More scenes, the planner and the app
+  are not planned or built.
 - **Superseded, never built:** Plan 6 (`2026-10-25-ios-night-design.md`)
   except the sections Plan 7 keeps by name (steering by movement, the
   morning lift, audio-session rules, the night log, the builder-check
@@ -38,15 +45,176 @@ so it can grow into it.
   and 7b's are copied here, by name and value, in their sections; later plans
   add theirs.
 
-Everything below the Plan 7a section describes the Python engine and the web
-mixer as built through Plan 5, Phase 3.
+Below Plan 8a come the Plan 7a and 7b sections (the Swift engine); after them,
+the Python engine and the web mixer as built through Plan 5, Phase 3.
 
-## Esoterica (Plan 8a, in progress on `feat/esoterica`): the deferred doors
+## Plan 8a: the Esoterica starter set (2026-11-03, branch `feat/esoterica`)
 
-- **Animal-language lessons are parked** (STOP 1, 2026-11-03). The operator offered an animal as one direction for the lesson language: birds, whales, or "a non-specific animal that just growls, roars, and makes other guttural inarticulate noises" (not a dog or cat). Text-to-speech can't make those sounds convincingly. Building it means generating calls with ElevenLabs' sound-effects endpoint and placing each one after the teacher's line, a new step in the voicing pipeline. Of the operator's other two directions, reversed English and a repeated nonsense word became `lessons/backward-lesson-one.md` and `lessons/mubba-lesson-one.md`.
-- **Link import** (podcasts and other URLs) remains a later door, as the spec says.
+**What this is, in the operator's spirit.** Esoterica is a collection of found
+recordings that prime the mind for dreams: strange, sincere, long-form spoken
+word, delivered intimately (never customer service), never ironic about
+spirituality, never frightening (the "is this person OK?" flicker is wanted),
+never concluding (the last passage trails off mid-thought) and never
+introducing itself (every recording starts in medias res, as if the tape was
+already running). Inspiration is Storm-style found recordings. It is generated,
+not recorded: Claude writes the scripts, text-to-speech voices them once, a
+light "where was this found" texture is added, and the night engine then warps
+each recording like the scenes: clear, then on an old radio, then from the next
+room, then fragments, then just the shape of a voice. Design:
+`docs/superpowers/specs/2026-11-02-esoterica-design.md` (read "What this is, and
+where it came from" first; the STOP 1 amendments at its end record the
+operator's changes to the lessons and to who speaks).
 
-## Esoterica source character (Plan 8a Task 4, 2026-11-03): built
+### What shipped
+
+| Piece | Where | State |
+|---|---|---|
+| Nine scripts (eleven thousand words), seven shows | `esoterica/scripts/<show>/<id>.md` | written; operator read them at STOP 1 and kept all but Aurish |
+| Script parser, manifest, cost estimate, `.env` reader | `sleepmix/esoterica/{script,manifest,cost,env}.py` | built, tested |
+| Providers (ElevenLabs, Cartesia), voicing, CLI | `sleepmix/esoterica/{providers,voicing,cli}.py`, `esoterica/voices.yaml` | built; `estimate`, `audition`, `voice`, `render` |
+| Source character (tape, room, oldmic, hum, clean) | `sleepmix/esoterica/character.py` | built; free, re-renderable |
+| Engine file source and `nightctl audition voice --file` | `swift/Sources/NightDSP/Sources/FileSource.swift`, `Primitives/WAVReader.swift`, `NightCLI` | built, tested |
+| The listening set | `esoterica/listening.sh` -> `esoterica/listening/` | made; **not yet listened to** |
+
+Pipeline: script -> voice (`sleepmix esoterica voice`, paid) -> raw takes
+`esoterica/library/<id>/pNN.raw.wav` (never overwritten) -> free `render` applies
+the source character and normalises -> `pNN.wav` + `recording.json` (the manifest)
+-> the Swift engine plays `pNN.wav` as a `VoiceClip` through the same
+Fragmenter -> Distance -> AM channel chain as the scenes.
+
+**There is no planner or app wiring.** Nothing yet decides which recording plays
+when in a night; `nightctl audition voice` is the only consumer of the library.
+
+### Scope change at STOP 2: only four recordings are voiced
+
+At STOP 2 the operator said "Let's just do a few to start". Voiced:
+
+| Recording | Show | Voice (ElevenLabs `eleven_v4`) | Character |
+|---|---|---|---|
+| `the-lantern-accords` | addresses | Harriet | room |
+| `backward-lesson-one` | lessons | Peter | clean |
+| `the-orchard-light` | testimonies | Julian | oldmic |
+| `northern-tide-final` | sideline | Bill | hum |
+
+**Unvoiced, pending the operator's listening:** `the-corridors`,
+`la-maison-sous-la-mer`, `mubba-lesson-one`, `qvel-the-far-shore`,
+`shuffles-one`. Their voices are already picked in `voices.yaml` `chosen:`, so
+once the operator is happy, `sleepmix esoterica voice --all` (it prints the
+estimate and needs `--yes`) finishes the set. `sleepmix esoterica render --all`
+skips them with a "skipped, not voiced" line; `render <id>` for one of them
+still fails with "raw takes missing".
+
+### The voices chosen, and why
+
+Chosen by Claude, from each script's `voice_profile` (the operator's words) and
+the candidates' library descriptions, **not by ear**; the operator accepted the
+picks at STOP 2 after hearing the audition. All eight are ElevenLabs
+`eleven_v4` (Cartesia was audition-only and won no slot):
+the-corridors = Blue (older, low, gritty), the-orchard-light = Julian (old
+British man, deep, a little rough), the-lantern-accords = Harriet (older,
+refined, commanding), sideline = Bill (old man, friendly, comforting),
+stations = Daniel (clear, authoritative news voice), lessons = Peter
+(middle-aged, even, the clinical teacher), meditations = Mila (native French,
+made for meditation), shuffles = Matilda (alto, clinical, verified French).
+Reasons for each are in `voices.yaml` beside `chosen:`.
+
+**Who speaks (operator's rule from STOP 1).** One voice per show for sideline,
+stations, lessons, meditations and shuffles ("we should keep one voice for the
+language"). Testimonies and addresses are different people, so each recording
+gets its own voice, and a test enforces that none repeats (addresses were
+Claude's extension of the operator's testimony rule). As the library grows the
+testimony voice pool has to grow with it.
+
+### Characters and credits spent
+
+| What | Provider | Characters |
+|---|---|---|
+| Audition (40 files, 8 slots) | ElevenLabs `eleven_v4` | 14,703 |
+| Audition (same files, other candidates) | Cartesia `sonic-3.6` | 10,394 |
+| The four recordings | ElevenLabs `eleven_v4` | 27,114 |
+
+ElevenLabs total about 41,817 of the operator's 265,000 credits (1 credit per
+character for v4). The whole starter set is estimated at 57,134 characters, so
+the five unvoiced recordings need roughly 30k more. Shared-library ElevenLabs
+voices worked by id without being added to the account.
+
+### Provider facts (read from live docs and free APIs, 2026-11-03)
+
+- **ElevenLabs:** `POST /v1/text-to-speech/{voice_id}`, header `xi-api-key`; model
+  `eleven_v4` ("most emotive"; 10,000-char request limit; French; no style or
+  speaker boost; no SSML breaks, pauses come from ellipses); inline audio tags
+  like `[whispers]`, `[exhales]`; `pcm_44100` output needs the Pro tier, so
+  `pcm_24000` is requested and resampled; $0.08 per 1,000 characters.
+- **Cartesia:** `POST /tts/bytes`, `Cartesia-Version: 2026-08-14`; model
+  `sonic-3.6`; `generation_config` speed 0.6-1.5, emotion (English only);
+  inline `<break time="1s"/>`; no whisper or breath control; native
+  `pcm_f32le` at 44.1 kHz; the docs give ~1 credit per character and no USD
+  rate; no documented per-request limit.
+- The full source list is in `.superpowers/sdd/2026-11-03-esoterica-8a-starter-set/task-3-report.md`.
+
+### Every placeholder, by name and value
+
+All Claude's choices, none heard yet beyond the audition; tune by ear. The
+characters can be re-tuned for free because the raw takes are kept.
+
+| Name | Value | Where |
+|---|---|---|
+| Loudness target | -24 dBFS RMS over 20 ms frames above -50 dBFS | `voicing.py` `TARGET_RMS_DB`, `GATE_DB`, `FRAME_S` |
+| Peak ceiling | -3 dBFS, smooth limiter (5 ms window) | `voicing.py` `PEAK_DB`, `LIMIT_WINDOW_S` |
+| Chunk join | 250 ms silence, 10 ms raised-cosine edges | `voicing.py` `CHUNK_GAP_S`, `EDGE_S` |
+| `[long pause]` | 3.0 s of real silence (split, never sent) | `voicing.py` `LONG_PAUSE_S` |
+| Shuffle gaps | uniform 2-3 s, seeded `default_rng([crc32(id), passage_index])` | `voicing.py` `SHUFFLE_GAP_S` |
+| ElevenLabs settings | stability 0.5, similarity_boost 0.75, speed 0.85; `pcm_24000` resampled to 44.1 kHz | `voices.yaml`, `providers.py` |
+| Cartesia settings | speed 0.8, emotion `calm` (English only); price $0.00005/char (unverified); `max_chars` 1000 (docs state none) | `voices.yaml` |
+| Request timeout | connect 10 s, read 300 s | `providers.py` `TIMEOUT` |
+| Audition excerpt | ~120 spoken words cut at a sentence end (91-145 in practice); shuffles 16 images | `cli.py` `AUDITION_WORDS`, `AUDITION_SHUFFLE_LINES` |
+| Cue translation | see the voicing table below | `providers.py` |
+| Character recipes | tape, room, oldmic, hum, clean: see the character table below (room: custom IR, -60 dB at ~0.38 s, ~15% wet; oldmic: 150-5000 Hz, tanh 1.3, RMS matched; hum: 50 Hz + harmonics at -55 dBFS, 5 ms fade-in) | `character.py` |
+| Character seed | crc32(script id), passage index | `voicing.py` |
+| FileSource fades | 50 ms raised-cosine fade-out over the file's last 50 ms (silence after); 5 ms raised-cosine fade-in at sample 0 (the 5 ms is invented) | `FileSource.swift` `fadeSeconds`, `fadeInSeconds` |
+
+### Known follow-ups
+
+- **Chimes should sit quieter under a voice.** A spoken word is more
+  attention-grabbing than the scenes; mixing the scene levels under it is the
+  planner's job, which does not exist yet. Nothing in 8a sets relative levels.
+- **The link-import door is open.** `nightctl audition voice --file` plays any
+  mono/stereo WAV, and a manifest can describe any audio, so a pasted-link
+  import (podcasts, audiobooks, speeches) only needs a downloader and a manifest
+  writer. Not built; the spec still calls it a later door.
+- **Animal-language lessons are parked** (STOP 1, 2026-11-03). The operator
+  offered an animal as one direction for the lesson language: birds, whales, or
+  "a non-specific animal that just growls, roars, and makes other guttural
+  inarticulate noises" (not a dog or cat). Text-to-speech can't make those
+  sounds convincingly; building it means ElevenLabs' sound-effects endpoint and a
+  new pipeline step that places each generated call after the teacher's line. Of
+  the three directions, reversed English and a repeated nonsense word became
+  `lessons/backward-lesson-one.md` and `lessons/mubba-lesson-one.md`.
+- **`cost.estimate` in `cost.py` still counts cue-stripped text.** The CLI no
+  longer uses it (it counts what is actually sent, after each provider's cue
+  translation, with `[long pause]` excluded), so it is dead-ish code that would
+  under-count Cartesia's longer `<break>` tags if reused.
+- **The listening judgement is outstanding.** The operator has heard the
+  audition (the voices) but not the voiced recordings with their characters,
+  nor them through the engine. `esoterica/listening.sh` makes that set (see
+  below). Everything in the tables above, the characters especially, was
+  chosen by measurement and reasoning, not by ear.
+
+### The listening set
+
+`esoterica/listening.sh` (free: no provider, no key) takes passage 1 of every
+recording that has a `recording.json` (unvoiced ones are skipped) and writes
+into the git-ignored `esoterica/listening/`: `<id>-plain.wav` (the passage as
+voiced), `<id>-near.wav` (`nightctl audition voice --distance 0`, clear through
+the AM channel) and `<id>-far.wav` (`--distance 0.6 --fragmentation 0.3`). The
+near and far files are the first 90 s (`SECONDS_PER_FILE` overrides). Its
+output includes RMS, peak and spectral centroid for each file; the plain files
+read below -24 dB because that figure is over the whole file, silences included,
+while the -24 target is over speech frames only. Listen near and far and ask:
+does the voice still carry? does the character read as "found"? is the far
+version a dream or just an annoyance?
+
+### Source character (Plan 8a Task 4): built
 
 `sleepmix/esoterica/character.py`: `apply_character(x, sr, kind, seed)`. Each script's
 `source_character` is a light "where was this found" texture.
@@ -72,16 +240,16 @@ no raws) would need re-voicing; none exists yet.
 | hum | 50 Hz + 2nd + 3rd harmonics, each -55 dBFS, random phase, 5 ms fade-in |
 | clean | identity |
 
-## Esoterica voicing (Plan 8a Task 3, 2026-11-03): built, audition not yet run
+### Voicing (Plan 8a Task 3): built and run
 
 `sleepmix esoterica estimate | audition | voice` in `sleepmix/esoterica/`
 (`providers.py`, `voicing.py`, `cli.py`) with `esoterica/voices.yaml`. Provider
 facts were read from the live docs and the providers' free listing APIs on
 2026-11-03 (sources in `.superpowers/sdd/2026-11-03-esoterica-8a-starter-set/task-3-report.md`).
-The audition (STOP 2) has not run; `voices.yaml` `chosen:` is empty, so
-`voice` refuses to run until it is filled.
+The audition ran at STOP 2 and `voices.yaml` `chosen:` is filled (see above);
+`voice` refuses to run for a slot with no chosen voice.
 
-**Every placeholder, by name and value** (Claude's choices, to tune by ear):
+**Voicing placeholders and cue translation** (Claude's choices, to tune by ear; the summary table above lists them too):
 
 | Name | Value | Where |
 |---|---|---|
@@ -110,9 +278,8 @@ The audition (STOP 2) has not run; `voices.yaml` `chosen:` is empty, so
 
 **Known gaps:**
 - Library (shared) ElevenLabs voices among the candidates do not appear in
-  `GET /v1/voices/{id}` for this account. The docs say paid tiers can use them
-  by id; if the audition reports `voice_not_found`, add them (free) with
-  `POST /v1/voices/add/{library_owner_id}/{voice_id}` (ids in voices.yaml).
+  `GET /v1/voices/{id}` for this account, but the audition and the voicing
+  worked with them by id (no add needed).
 - The API key lacks `user_read`, so the subscription tier could not be read.
 - A shuffle passage that fails part-way is re-voiced whole on rerun (a few
   short lines are paid twice); every other passage is resumable exactly.
