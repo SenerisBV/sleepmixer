@@ -107,10 +107,10 @@ intensity comment is still allowed.
 ## Voicing
 
 `sleepmix esoterica estimate | audition | voice | render` (in
-`sleepmix/esoterica/cli.py`) turns scripts into audio. The three commands that
-can spend (`estimate` only counts, `audition` and `voice` pay) print the
-characters and estimated cost per provider first and spend nothing without
-`--yes`; `render` is free and prints no cost.
+`sleepmix/esoterica/cli.py`) turns scripts into audio. `estimate` only counts. The two commands that
+can spend, `audition` and `voice`, print the characters and estimated cost per
+provider first and spend nothing without `--yes`. `render` is free and prints
+no cost.
 
 - **Commands:** `sleepmix esoterica estimate` (counts only);
   `audition --slot S | --show SHOW | --all [--yes]` (paid);
