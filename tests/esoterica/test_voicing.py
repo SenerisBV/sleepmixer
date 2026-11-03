@@ -14,8 +14,8 @@ import logging
 
 from sleepmix.esoterica.voicing import (
     PER_RECORDING_SHOWS, Voice, VoiceMismatchError, billed_chars, check_distinct_voices,
-    check_resume_voice, chunk, load_voices, normalise, voice_passage, voice_recording,
-    voice_slot,
+    check_resume_voice, chunk, load_voices, normalise, raw_passage_file, render_character,
+    render_recording, voice_passage, voice_recording, voice_slot,
 )
 
 from .fakes import FakeProvider, FakeResponse, FakeSession, pcm_f32, pcm_s16, tone
@@ -167,8 +167,9 @@ def test_voice_recording_writes_passages_and_manifest(tmp_path):
     m = voice_recording(s, FakeProvider(), V, lib)
     assert m is not None
     d = lib / "rec"
-    assert sorted(p.name for p in d.iterdir()) == ["p01.wav", "p02.wav", "p03.wav",
-                                                    "recording.json", "voice.json"]
+    assert sorted(p.name for p in d.iterdir()) == [
+        "p01.raw.wav", "p01.wav", "p02.raw.wav", "p02.wav", "p03.raw.wav", "p03.wav",
+        "recording.json", "voice.json"]
     back = read_manifest(d / "recording.json")
     assert back == m
     assert [e.file for e in m.passages] == ["p01.wav", "p02.wav", "p03.wav"]
@@ -197,7 +198,7 @@ def test_mid_run_failure_keeps_done_passages_and_no_manifest(tmp_path):
     bad = FakeProvider(fail_when=lambda t: "Three" in t)
     assert voice_recording(s, bad, V, lib) is None
     d = lib / "rec"
-    assert sorted(p.name for p in d.iterdir()) == ["p01.wav", "p02.wav", "voice.json"]
+    assert sorted(p.name for p in d.iterdir()) == ["p01.raw.wav", "p02.raw.wav", "voice.json"]
     good = FakeProvider()
     m = voice_recording(s, good, V, lib)
     assert m is not None
@@ -213,7 +214,7 @@ def test_shuffles_voice_one_image_per_call_with_seeded_gaps(tmp_path):
     m = voice_recording(s, fp, V, lib)
     assert [c[0] for c in fp.calls] == lines
     assert [c[3] for c in fp.calls] == ["en", "en", "fr", "en"]
-    x, sr = sf.read(lib / "shuf" / "p01.wav", dtype="float32")
+    x, sr = sf.read(lib / "shuf" / "p01.raw.wav", dtype="float32")
     silent = np.abs(x) < 1e-6
     edges = np.flatnonzero(np.diff(np.concatenate([[0], silent.astype(int), [0]])))
     gaps = (edges[1::2] - edges[::2]) / sr
@@ -222,7 +223,7 @@ def test_shuffles_voice_one_image_per_call_with_seeded_gaps(tmp_path):
     # same id -> same gaps
     lib2 = tmp_path / "lib2"
     voice_recording(s, FakeProvider(), V, lib2)
-    y, _ = sf.read(lib2 / "shuf" / "p01.wav", dtype="float32")
+    y, _ = sf.read(lib2 / "shuf" / "p01.raw.wav", dtype="float32")
     assert len(y) == len(x)
     assert m.passages[0].text.split("\n") == lines
 
@@ -347,7 +348,7 @@ def test_resume_refused_for_passages_with_no_voice_record(tmp_path):
     s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two."])
     d = tmp_path / "lib" / "rec"
     d.mkdir(parents=True)
-    sf.write(d / "p01.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
+    sf.write(d / "p01.raw.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
     fp = FakeProvider()
     with pytest.raises(VoiceMismatchError, match="no record"):
         voice_recording(s, fp, V, tmp_path / "lib")
@@ -366,3 +367,81 @@ def test_normalise_quiet_when_on_target(caplog):
     with caplog.at_level(logging.WARNING, logger="sleepmix.esoterica.voicing"):
         normalise(tone(1.0) * 0.1)
     assert "misses" not in caplog.text
+
+
+# --- source character: raw / render split -----------------------------------------
+
+def test_raw_passage_file_name():
+    assert raw_passage_file(0) == "p01.raw.wav"
+    assert raw_passage_file(11) == "p12.raw.wav"
+
+
+def test_manifest_records_source_character_and_rendered_file(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two."])
+    m = voice_recording(s, FakeProvider(), V, tmp_path / "lib")
+    assert m.source_character == "tape"
+    assert read_manifest(tmp_path / "lib" / "rec" / "recording.json").source_character == "tape"
+    assert [e.file for e in m.passages] == ["p01.wav", "p02.wav"]
+
+
+def test_rendered_differs_from_raw_and_is_normalised(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    raw, _ = sf.read(lib / "rec" / "p01.raw.wav", dtype="float32")
+    out, _ = sf.read(lib / "rec" / "p01.wav", dtype="float32")
+    assert len(raw) == len(out) and not np.array_equal(raw, out)
+    assert abs(speech_rms_db(out) + 24.0) < 0.5 and np.abs(out).max() <= 10 ** (-3 / 20) + 1e-6
+
+
+def test_render_is_free_overwrites_render_and_keeps_raw_byte_identical(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two."])
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    d = lib / "rec"
+    raw_bytes = {n: (d / n).read_bytes() for n in ("p01.raw.wav", "p02.raw.wav")}
+    (d / "p01.wav").write_bytes(b"stale")
+    m = render_recording(s, lib)
+    assert {n: (d / n).read_bytes() for n in raw_bytes} == raw_bytes
+    assert (d / "p01.wav").read_bytes() != b"stale"
+    assert sf.info(str(d / "p01.wav")).frames > 0
+    assert read_manifest(d / "recording.json") == m
+    assert sorted(p.name for p in d.iterdir()) == [
+        "p01.raw.wav", "p01.wav", "p02.raw.wav", "p02.wav", "recording.json", "voice.json"]
+
+
+def test_render_follows_a_changed_character(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    before = (lib / "rec" / "p01.wav").read_bytes()
+    from dataclasses import replace
+    m = render_recording(replace(s, source_character="room"), lib)
+    assert m.source_character == "room"
+    assert (lib / "rec" / "p01.wav").read_bytes() != before
+
+
+def test_render_deterministic(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    a = (lib / "rec" / "p01.wav").read_bytes()
+    render_character(s, lib)
+    assert (lib / "rec" / "p01.wav").read_bytes() == a
+
+
+def test_render_fails_clearly_without_raw_files(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two."])
+    d = tmp_path / "lib" / "rec"
+    d.mkdir(parents=True)
+    sf.write(d / "p01.raw.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
+    with pytest.raises(FileNotFoundError, match="p02.raw.wav"):
+        render_character(s, tmp_path / "lib")
+
+
+def test_rendered_files_alone_do_not_imply_a_paid_voice(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    d = tmp_path / "lib" / "rec"
+    d.mkdir(parents=True)
+    sf.write(d / "p01.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
+    check_resume_voice(s, V, tmp_path / "lib")  # no raise

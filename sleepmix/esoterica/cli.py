@@ -18,7 +18,7 @@ from .providers import Cartesia, ElevenLabs, ProviderError
 from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
     Voice, VoiceMismatchError, VoicesConfig, billed_chars, check_distinct_voices,
-    check_resume_voice, load_voices, passage_file, shuffle_billed_chars, shuffle_lines,
+    check_resume_voice, load_voices, raw_passage_file, render_recording, shuffle_billed_chars, shuffle_lines,
     shuffle_rng, split_sentences, voice_passage, voice_recording, voice_shuffle, voice_slot,
 )
 
@@ -137,7 +137,7 @@ def estimate(scripts_root, voices_path, env_path):
 def _remaining(script: Script, library: Path, provider: str) -> int:
     d = library / script.id
     return sum(passage_chars(script, p, provider) for p in script.passages
-               if not (d / passage_file(p.index)).exists())
+               if not (d / raw_passage_file(p.index)).exists())
 
 
 @esoterica.command()
@@ -193,6 +193,35 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
         click.echo(f"{len(failed)} recording(s) incomplete: {', '.join(failed)}. "
                    "Re-run to finish; finished passages are kept.", err=True)
         raise SystemExit(1)
+
+
+# --- render (free) --------------------------------------------------------------
+
+@esoterica.command()
+@click.argument("script_id", required=False)
+@click.option("--all", "all_", is_flag=True, help="Every script.")
+@click.option("--library", type=click.Path(path_type=Path), default=LIBRARY,
+              show_default=True)
+@click.option("--scripts", "scripts_root", type=click.Path(path_type=Path),
+              default=SCRIPTS, show_default=True)
+def render(script_id, all_, library, scripts_root):
+    """Re-render source character from the raw takes. Free: no provider, no key."""
+    if bool(script_id) == bool(all_):
+        raise click.UsageError("give one script id or --all")
+    try:
+        scripts = load_all(scripts_root)
+    except (ValueError, OSError) as e:
+        raise click.ClickException(str(e)) from None
+    if script_id:
+        scripts = [s for s in scripts if s.id == script_id]
+        if not scripts:
+            raise click.ClickException(f"no script with id '{script_id}'")
+    for s in scripts:
+        try:
+            m = render_recording(s, library)
+        except (FileNotFoundError, ValueError) as e:
+            raise click.ClickException(str(e)) from None
+        click.echo(f"  {s.id}: {len(m.passages)} passages rendered ({m.source_character})")
 
 
 # --- audition -------------------------------------------------------------------

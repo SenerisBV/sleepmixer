@@ -13,7 +13,9 @@ It is the brief.
 esoterica/
   README.md              this file: the script format and the content rules
   scripts/<show>/<id>.md the scripts (committed)
-  library/               voiced audio and manifests (git-ignored)
+  library/               voiced audio and manifests (git-ignored):
+                         <id>/pNN.raw.wav (paid takes), pNN.wav (with source
+                         character), voice.json, recording.json
   audition/              audition excerpts (git-ignored)
 ```
 
@@ -115,6 +117,10 @@ cost per provider first and spends nothing without `--yes`.
   `esoterica/audition/index.md`.
 - **Voicing:** `sleepmix esoterica voice <id> | --all [--yes]` uses the slot's
   `chosen:` voice and writes `esoterica/library/<id>/`.
+- **Raw and rendered:** `pNN.raw.wav` is the provider's take (loudness-normalised) and is
+  never overwritten. `pNN.wav` is the raw take with the script's `source_character`
+  applied and loudness re-normalised; `sleepmix esoterica render <id> | --all` re-makes
+  it for free (no provider, no key, no `--yes`) and rewrites `recording.json`.
 - **Passage files** are named from the passage's 0-based `index`, 1-based on
   disk: index 0 is `p01.wav`, index 1 is `p02.wav`. The manifest's `file` field
   holds that name. Each is mono float32 WAV at 44100 Hz, normalised to

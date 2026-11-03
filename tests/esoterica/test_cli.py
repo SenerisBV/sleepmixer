@@ -279,3 +279,39 @@ def test_voice_refuses_to_resume_with_a_different_voice(fakes, tmp_path):
     assert r.exit_code != 0
     assert "someone-else" in r.output and "v-the-corridors" in r.output
     assert fakes == []
+
+
+def test_render_needs_no_key_no_provider_and_keeps_raw(fakes, no_keys, tmp_path):
+    v = all_chosen(tmp_path)
+    lib = tmp_path / "library"
+    run(["voice", "the-corridors", "--yes", "--scripts", str(REAL), "--voices", str(v),
+         "--library", str(lib)])
+    d = lib / "the-corridors"
+    raws = {p.name: p.read_bytes() for p in d.glob("*.raw.wav")}
+    assert raws
+    (d / "p01.wav").write_bytes(b"stale")
+    before = calls(fakes)
+    r = run(["render", "the-corridors", "--scripts", str(REAL), "--library", str(lib)])
+    assert r.exit_code == 0, r.output
+    assert calls(fakes) == before
+    assert {p.name: p.read_bytes() for p in d.glob("*.raw.wav")} == raws
+    assert (d / "p01.wav").read_bytes() != b"stale"
+    assert (d / "recording.json").exists()
+
+
+def test_render_fails_clearly_when_raw_is_missing(fakes, no_keys, tmp_path):
+    r = CliRunner().invoke(main, ["esoterica", "render", "the-corridors", "--scripts",
+                                  str(REAL), "--library", str(tmp_path / "library")])
+    assert r.exit_code != 0
+    assert "raw" in r.output and "voice" in r.output
+
+
+def test_remaining_counts_raw_files_not_rendered(tmp_path):
+    s = [x for x in load_all(REAL) if x.id == "the-corridors"][0]
+    d = tmp_path / s.id
+    d.mkdir()
+    import numpy as np, soundfile as sf
+    sf.write(d / "p01.wav", np.zeros(10, np.float32), 44100, subtype="FLOAT")
+    full = ecli._remaining(s, tmp_path, "elevenlabs")
+    sf.write(d / "p01.raw.wav", np.zeros(10, np.float32), 44100, subtype="FLOAT")
+    assert ecli._remaining(s, tmp_path, "elevenlabs") < full

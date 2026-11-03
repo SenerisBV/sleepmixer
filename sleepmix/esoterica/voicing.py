@@ -1,11 +1,13 @@
 """Voice Esoterica scripts: chunk, synthesize, join, normalise, write WAVs.
 
-On disk a recording is `<library>/<id>/p01.wav, p02.wav, …` (1-based, from
-the passage's 0-based `index`) plus `recording.json`, written only once every
-passage exists. Every passage is mono float32 at 44100 Hz, normalised to
+On disk a recording is `<library>/<id>/p01.raw.wav, …` (the paid provider takes,
+loudness-normalised, never modified again), `p01.wav, …` (1-based, from the
+passage's 0-based `index`: the raw take with the script's source character
+applied and loudness re-normalised; free to re-render) plus `recording.json`,
+written only once every passage is rendered. Every passage is mono float32 at 44100 Hz, normalised to
 -24 dBFS RMS over speech frames with peaks limited to -3 dBFS (placeholders).
 
-Resumable by construction: a passage whose WAV exists is never sent again, and
+Resumable by construction: a passage whose RAW WAV exists is never sent again, and
 each WAV is written to a temp file and renamed, so an interrupted write never
 leaves a file that a rerun would mistake for finished work.
 """
@@ -29,6 +31,7 @@ import yaml
 from scipy.ndimage import minimum_filter1d
 from scipy.signal import resample_poly
 
+from .character import apply_character
 from .manifest import Manifest, PassageEntry, read_manifest, write_manifest
 from .providers import Provider, ProviderError
 from .script import Script, spoken_text
@@ -357,6 +360,16 @@ def passage_file(index: int) -> str:
     return f"p{index + 1:02d}.wav"
 
 
+def raw_passage_file(index: int) -> str:
+    """The provider take before source character: 0 -> 'p01.raw.wav'."""
+    return f"p{index + 1:02d}.raw.wav"
+
+
+def character_seed(script_id: str, passage_index: int) -> list[int]:
+    """Deterministic per (script id, passage) like shuffle_rng (crc32, not hash())."""
+    return [zlib.crc32(script_id.encode("utf-8")), passage_index, 1]
+
+
 class VoiceMismatchError(ValueError):
     """Resuming a recording with a different voice than its passages were made with."""
 
@@ -374,8 +387,9 @@ def check_resume_voice(script: Script, voice: Voice, library: Path) -> None:
 
     The recording directory's `voice.json` (written before the first request)
     says which voice made its passages; a finished `recording.json` says the
-    same. Passages on disk with neither record are refused too: their voice
-    is unknown.
+    same. Raw takes on disk with neither record are refused too: their voice
+    is unknown. (Rendered `pNN.wav` files alone imply nothing: they can be
+    re-made free from raws, so they are not a paid voice.)
     """
     d = Path(library) / script.id
     want = _voice_record(voice)
@@ -390,7 +404,7 @@ def check_resume_voice(script: Script, voice: Voice, library: Path) -> None:
     elif mf.exists():
         m = read_manifest(mf)
         have = {"provider": m.provider, "model": m.model, "voice_id": m.voice_id}
-    elif d.is_dir() and any(d.glob("p*.wav")):
+    elif d.is_dir() and any(d.glob("p*.raw.wav")):
         raise VoiceMismatchError(f"{script.id}: passages exist in {d} with no record "
                                  "of their voice; delete them to re-voice")
     if have is not None and {k: have.get(k) for k in want} != want:
@@ -415,35 +429,91 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
         d.mkdir(parents=True, exist_ok=True)
         (d / VOICE_FILE).write_text(json.dumps(_voice_record(voice), indent=2) + "\n",
                                     encoding="utf-8")
-    entries: list[PassageEntry] = []
+    done = 0
     try:
         for p in script.passages:
-            out = d / passage_file(p.index)
+            raw = d / raw_passage_file(p.index)
             if script.show == "shuffles":
-                dur = voice_shuffle(provider, shuffle_lines(p.text), voice,
-                                    script.language, out, shuffle_rng(script.id, p.index))
+                voice_shuffle(provider, shuffle_lines(p.text), voice,
+                              script.language, raw, shuffle_rng(script.id, p.index))
             else:
-                dur = voice_passage(provider, p.text, voice, script.language, out)
-            entries.append(PassageEntry(index=p.index, file=out.name,
-                                        duration_s=round(dur, 3),
-                                        text=spoken_text(p), intensity=p.intensity))
+                voice_passage(provider, p.text, voice, script.language, raw)
+            done += 1
     except ProviderError as e:
-        msg = f"{script.id}: stopped at passage {len(entries) + 1}: {e}"
+        msg = f"{script.id}: stopped at passage {done + 1}: {e}"
         log.warning("%s", msg)
         if on_error:
             on_error(msg)
         return None
+    return render_recording(script, library, voice)
+
+
+def _require_raw(script: Script, d: Path) -> None:
+    missing = [raw_passage_file(p.index) for p in script.passages
+               if not (d / raw_passage_file(p.index)).exists()]
+    if missing:
+        raise FileNotFoundError(
+            f"{script.id}: raw takes missing in {d}: {', '.join(missing)} "
+            "(run `sleepmix esoterica voice` first)")
+
+
+def render_character(script: Script, library: Path) -> list[PassageEntry]:
+    """Free, re-runnable: apply the script's source character to every raw take.
+
+    Reads `pNN.raw.wav`, applies the character, re-normalises loudness and
+    atomically overwrites `pNN.wav`. Raw files are never touched. Raises
+    FileNotFoundError (naming the missing raw files) before writing anything.
+    """
+    d = Path(library) / script.id
+    _require_raw(script, d)
+    entries: list[PassageEntry] = []
+    for p in script.passages:
+        x, sr = sf.read(str(d / raw_passage_file(p.index)), dtype="float32")
+        x = _to_sr(x, sr)
+        y = normalise(apply_character(x, SR, script.source_character,
+                                      character_seed(script.id, p.index)))
+        out = d / passage_file(p.index)
+        _write_atomic(y, out)
+        entries.append(PassageEntry(index=p.index, file=out.name,
+                                    duration_s=round(len(y) / SR, 3),
+                                    text=spoken_text(p), intensity=p.intensity))
+    return entries
+
+
+def render_recording(script: Script, library: Path, voice: Voice | None = None) -> Manifest:
+    """render_character, then (re)write `recording.json`. `voice` defaults to
+    the one in `voice.json` (or an existing manifest)."""
+    d = Path(library) / script.id
+    manifest_path = d / "recording.json"
+    _require_raw(script, d)
+    existing = None
     if manifest_path.exists():
         try:
             existing = read_manifest(manifest_path)
-            if existing.passages == entries:
-                return existing
         except ValueError:
             pass
+    if voice is None:
+        vf = d / VOICE_FILE
+        if vf.exists():
+            try:
+                rec = json.loads(vf.read_text(encoding="utf-8"))
+                voice = Voice(rec["provider"], rec["model"], rec["voice_id"])
+            except (ValueError, KeyError):
+                raise ValueError(f"{script.id}: {vf} is unreadable") from None
+        elif existing is not None:
+            voice = Voice(existing.provider, existing.model, existing.voice_id)
+        else:
+            raise FileNotFoundError(f"{script.id}: no {VOICE_FILE} in {d} "
+                                    "(run `sleepmix esoterica voice` first)")
+    entries = render_character(script, library)
+    if (existing is not None and existing.passages == entries
+            and existing.source_character == script.source_character):
+        return existing
     m = Manifest(id=script.id, show=script.show, title=script.title,
                  language=script.language, source_character=script.source_character,
                  provider=voice.provider, model=voice.model, voice_id=voice.voice_id,
-                 made_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 made_at=(existing.made_at if existing else
+                          datetime.now(timezone.utc).isoformat(timespec="seconds")),
                  passages=entries)
     write_manifest(m, d)
     return m

@@ -46,6 +46,32 @@ mixer as built through Plan 5, Phase 3.
 - **Animal-language lessons are parked** (STOP 1, 2026-11-03). The operator offered an animal as one direction for the lesson language: birds, whales, or "a non-specific animal that just growls, roars, and makes other guttural inarticulate noises" (not a dog or cat). Text-to-speech can't make those sounds convincingly. Building it means generating calls with ElevenLabs' sound-effects endpoint and placing each one after the teacher's line, a new step in the voicing pipeline. Of the operator's other two directions, reversed English and a repeated nonsense word became `lessons/backward-lesson-one.md` and `lessons/mubba-lesson-one.md`.
 - **Link import** (podcasts and other URLs) remains a later door, as the spec says.
 
+## Esoterica source character (Plan 8a Task 4, 2026-11-03): built
+
+`sleepmix/esoterica/character.py`: `apply_character(x, sr, kind, seed)`. Each script's
+`source_character` is a light "where was this found" texture.
+
+**Raw / render split, and why.** Paid takes must never be overwritten by a placeholder
+effect. `voice` writes each provider take (loudness-normalised) to `pNN.raw.wav` and
+never touches it again; resumability, `voice.json`, the resume guard and the cost
+estimate (`_remaining`) all look at raw files only. A free, re-runnable step
+(`voicing.render_character`, CLI `sleepmix esoterica render <id>|--all`) applies the
+character, re-normalises to -24 dBFS speech RMS / -3 dBFS peak and atomically rewrites
+`pNN.wav` (what the manifest points at). Seed is crc32 of (script id, passage index), so a
+render is deterministic. Character can therefore be re-tuned by ear at no cost. Rendered
+files alone never imply a paid voice. A library voiced before this split (bare `pNN.wav`,
+no raws) would need re-voicing; none exists yet.
+
+**Placeholders (all in `character.py`, tune by ear):**
+
+| Kind | Recipe |
+|---|---|
+| tape | wow 0.4 Hz +-3 cents; flutter 7 Hz +-1 cent; hiss -52 dBFS RMS; 2nd-order 7 kHz lowpass |
+| room | `sleepmix.effects` reverb: room_size 0.3 (~0.4 s decay), damping 0.6, wet 0.15 / dry 0.85, no pre-delay; RMS matched to input |
+| oldmic | tanh drive 1.3 (`tanh(1.3x)/1.3`), 2nd-order 150-5000 Hz bandpass; RMS matched to input |
+| hum | 50 Hz + 2nd + 3rd harmonics, each -55 dBFS, random phase |
+| clean | identity |
+
 ## Esoterica voicing (Plan 8a Task 3, 2026-11-03): built, audition not yet run
 
 `sleepmix esoterica estimate | audition | voice` in `sleepmix/esoterica/`
