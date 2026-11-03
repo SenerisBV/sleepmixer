@@ -62,3 +62,59 @@ import NightPlan
         #expect(!FileManager.default.fileExists(atPath: tmp))
     }
 }
+
+@Suite struct NightCtlVoiceTests {
+    func tmp(_ name: String) -> URL {
+        URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("nightctl-\(UUID().uuidString)-\(name)")
+    }
+
+    @Test func parsesVoice() throws {
+        let a = try NightCtl.Audition.parse(["voice", "--file", "/x/p01.wav", "--distance", "0.5"])
+        let r = a.request()
+        #expect(r.voiceFile == URL(fileURLWithPath: "/x/p01.wav"))
+        #expect(r.warp == WarpDepth(distance: 0.5))
+        let s = try NightCtl.Audition.parse(["chimes"])
+        #expect(s.request().voiceFile == nil)
+    }
+
+    @Test func voiceNeedsAFile() {
+        #expect(throws: (any Error).self) { try NightCtl.Audition.parse(["voice"]) }
+    }
+
+    @Test(arguments: ["slowness", "ring", "softness", "vibrato"])
+    func voiceRejectsToneDials(dial: String) {
+        do {
+            _ = try NightCtl.Audition.parse(["voice", "--file", "x.wav", "--\(dial)", "0.5"])
+            Issue.record("--\(dial) accepted for voice")
+        } catch {
+            let message = NightCtl.Audition.message(for: error)
+            #expect(message.contains("must be 0 for voice"), "\(message)")
+            #expect(message.contains(dial), "\(message)")
+        }
+    }
+
+    @Test func unsupportedWAVGivesAClearErrorAndNoOutput() throws {
+        let bad = tmp("bad.wav")
+        try Data("RIFF....WAVEfmt ".utf8).write(to: bad)
+        let out = tmp("out.wav")
+        var cmd = try NightCtl.parseAsRoot(["audition", "voice", "--file", bad.path, "--out", out.path])
+        do {
+            try cmd.run()
+            Issue.record("run succeeded on a bad WAV")
+        } catch {
+            #expect(!NightCtl.message(for: error).isEmpty)
+        }
+        #expect(!FileManager.default.fileExists(atPath: out.path))
+    }
+
+    @Test func rendersAVoiceFile() throws {
+        let src = tmp("in.wav"), out = tmp("out.wav")
+        let tone = (0..<44100).map { Float(0.3 * sin(2 * Double.pi * 220 * Double($0) / 44100)) }
+        try WAVWriter.write(tone, sampleRate: 44100, to: src)
+        var cmd = try NightCtl.parseAsRoot(["audition", "voice", "--file", src.path, "--seconds", "1", "--out", out.path])
+        try cmd.run()
+        let back = try WAVReader.read(url: out)
+        #expect(back.samples.count == 44100)
+        #expect(back.samples.allSatisfy { $0.isFinite })
+    }
+}

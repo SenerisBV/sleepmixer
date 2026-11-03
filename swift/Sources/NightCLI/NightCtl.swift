@@ -24,7 +24,8 @@ public struct NightCtl: ParsableCommand {
     public struct Audition: ParsableCommand {
         public static let configuration = CommandConfiguration(abstract: "Render a scene to a WAV file.")
 
-        @Argument(help: "chimes, waves or warmth") public var scene: SceneKind
+        @Argument(help: "chimes, waves, warmth, or voice (with --file)") public var scene: String
+        @Option(help: "WAV file to play (required for voice, ignored otherwise).") public var file: String?
         @Option(help: "Length in seconds (0 to 3600).") public var seconds: Double = 60
         @Option(name: .customLong("at"), help: "Start second within the night.") public var at: Double = 0
         @Option public var seed: UInt64 = 1
@@ -42,7 +43,20 @@ public struct NightCtl: ParsableCommand {
 
         public init() {}
 
+        public var sceneKind: SceneKind? { SceneKind(rawValue: scene) }
+        public var isVoice: Bool { scene == "voice" }
+
         public func validate() throws {
+            guard isVoice || sceneKind != nil else {
+                throw ValidationError("unknown scene '\(scene)' (chimes, waves, warmth or voice).")
+            }
+            if isVoice {
+                guard file != nil else { throw ValidationError("voice needs --file <path-to-wav>.") }
+                for (name, v) in [("slowness", slowness), ("ring", ring), ("softness", softness), ("vibrato", vibrato)]
+                where v != 0 {
+                    throw ValidationError("--\(name) must be 0 for voice (got \(v)).")
+                }
+            }
             for (name, v) in [("distance", distance), ("slowness", slowness),
                               ("fragmentation", fragmentation), ("proportion", proportion),
                               ("ring", ring), ("softness", softness), ("vibrato", vibrato)] {
@@ -63,16 +77,18 @@ public struct NightCtl: ParsableCommand {
 
         public func request() -> AuditionRequest {
             AuditionRequest(
-                scene: scene, seconds: seconds, startSecond: at, seed: seed,
+                scene: sceneKind ?? .chimes, seconds: seconds, startSecond: at, seed: seed,
                 warp: WarpDepth(distance: distance, slowness: slowness,
                                 fragmentation: fragmentation, proportion: proportion,
                                 ring: ring, softness: softness, vibrato: vibrato),
-                channel: !noChannel, sampleRate: sampleRate)
+                channel: !noChannel, sampleRate: sampleRate,
+                voiceFile: isVoice ? file.map { URL(fileURLWithPath: $0) } : nil)
         }
 
         public func run() throws {
-            let path = out ?? "./\(scene.rawValue)-\(seed).wav"
+            let path = out ?? "./\(scene)-\(seed).wav"
             let r = request()
+            if let v = r.voiceFile { _ = try WAVReader.read(url: v) }   // clear error before any output
             let samples = NightFactory.audition(r)
             try WAVWriter.write(samples, sampleRate: Int(r.sampleRate), to: URL(fileURLWithPath: path))
             let rms = Analysis.rmsDB(samples[...])

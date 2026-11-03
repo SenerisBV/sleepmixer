@@ -10,10 +10,13 @@ public struct AuditionRequest: Equatable, Sendable {
     public var channel: Bool
     public var channelSettings: ChannelSettings
     public var sampleRate: Double
+    /// When set, plays this WAV through the same warps and channel and `scene` is ignored.
+    public var voiceFile: URL?
 
     public init(scene: SceneKind, seconds: Double = 60, startSecond: Double = 0, seed: UInt64 = 1,
                 warp: WarpDepth = .plain, channel: Bool = true,
-                channelSettings: ChannelSettings = .early, sampleRate: Double = 44100) {
+                channelSettings: ChannelSettings = .early, sampleRate: Double = 44100,
+                voiceFile: URL? = nil) {
         self.scene = scene
         self.seconds = seconds
         self.startSecond = startSecond
@@ -22,6 +25,7 @@ public struct AuditionRequest: Equatable, Sendable {
         self.channel = channel
         self.channelSettings = channelSettings
         self.sampleRate = sampleRate
+        self.voiceFile = voiceFile
     }
 }
 
@@ -46,7 +50,17 @@ public enum NightFactory {
         return x < 0 ? -y : y
     }
 
+    /// An unreadable voice file renders as an empty result; callers that need the reason (the CLI)
+    /// call `WAVReader.read` first.
     public static func audition(_ r: AuditionRequest) -> [Float] {
+        if let url = r.voiceFile {
+            guard let (samples, fileRate) = try? WAVReader.read(url: url) else { return [] }
+            let sr = r.sampleRate
+            let start = max(0, (r.startSecond.isFinite ? max(0, r.startSecond) : 0) - leadInSeconds)
+            return run(r, start: start) {
+                FileSource(samples: samples, fileSampleRate: fileRate, sampleRate: sr, startSecond: start)
+            }
+        }
         switch r.scene {
         case .chimes: return build(ChimesScene.self, r)
         case .waves: return build(WavesScene.self, r)
@@ -55,14 +69,24 @@ public enum NightFactory {
     }
 
     private static func build<S: Scene>(_ type: S.Type, _ r: AuditionRequest) -> [Float] {
-        let sr = r.sampleRate
         let startSecond = r.startSecond.isFinite ? max(0, r.startSecond) : 0
         let start = max(0, startSecond - leadInSeconds)
+        let warp = Curve<WarpDepth>.constant(r.warp)
+        return run(r, start: start) {
+            S(seed: NightRandom.hash(r.seed, 0, 0), sampleRate: r.sampleRate, warp: warp, startSecond: start)
+        }
+    }
+
+    /// Source -> Fragmenter -> Distance -> AMChannel (optional) -> master guard. `start` is the
+    /// absolute second the (cold) chain begins at; the lead-in before the requested start is dropped.
+    private static func run<S: SoundSource>(_ r: AuditionRequest, start: Double, _ makeSource: () -> S) -> [Float] {
+        let sr = r.sampleRate
+        let startSecond = r.startSecond.isFinite ? max(0, r.startSecond) : 0
         let lead = Int(((startSecond - start) * sr).rounded())
         let wanted = max(0, Int((r.seconds * sr).rounded()))
         let warp = Curve<WarpDepth>.constant(r.warp)
 
-        var scene = S(seed: NightRandom.hash(r.seed, 0, 0), sampleRate: sr, warp: warp, startSecond: start)
+        var scene = makeSource()
         var fragmenter = Fragmenter(sampleRate: sr, seed: NightRandom.hash(r.seed, 1, 0), warp: warp, startSecond: start)
         var distance = Distance(sampleRate: sr, seed: NightRandom.hash(r.seed, 2, 0), warp: warp, startSecond: start)
         var channel: AMChannel? = r.channel
