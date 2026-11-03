@@ -41,3 +41,6 @@ esoterica/audition/
 
 # Esoterica: listening set made by esoterica/listening.sh
 esoterica/listening/
+
+# Esoterica: station bundles made by `make stations`
+ios/Esoterica/Stations/

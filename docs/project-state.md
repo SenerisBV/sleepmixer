@@ -4752,3 +4752,18 @@ rendering or measuring it.*
      once per stem, which is the reason it lives above the rows at all;
      splitting it was rejected because the two halves are one thought. The
      heading is asserted by a view test and verified by deletion.
+
+## Plan 9 (Esoterica DM Radio), segments and station bundles
+
+`sleepmix esoterica bundle <id>... --out <dir>` (free) cuts each passage's raw
+take into segments at pause midpoints and writes `<dir>/<id>/sNN.wav` (22050 Hz
+mono PCM_16, numbered across the recording) plus `station.json`. Code:
+`sleepmix/esoterica/segments.py`. Refuses stale takes. Flags segments under
+20 s or over 150 s but still exports them. `make stations` bundles the three
+launch stations; output `ios/Esoterica/Stations/` is gitignored.
+
+**Placeholders (tune by ear):** `CUT_MIN_PAUSE_S` 0.25 s, `CUT_WINDOW` +-20% of
+the take, `CUT_DISTANCE_PENALTY` 0.02 (`segments.py`); `BUNDLE_MIN_S` 20 and
+`BUNDLE_MAX_S` 150 (`cli.py`). Cuts are a pause midpoint nearest where the
+paragraph-character share predicts the `[segment]` marker falls; if no pause
+is left after the previous cut, a segment is silently not cut (fewer segments).

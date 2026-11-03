@@ -20,7 +20,7 @@ from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
     NO_DELIVERY_TAGS, MissingRawError, delivery_chars, StaleTakesError, Voice, VoiceMismatchError, VoicesConfig, billed_chars,
     check_distinct_voices, check_delivery, check_resume_voice, check_takes, load_voices, passage_pieces,
-    raw_passage_file, raw_takes, recording_pieces, revoice_files,
+    raw_passage_file, raw_takes, _require_raw as _require_takes, recording_pieces, revoice_files,
     render_recording, shuffle_billed_chars, shuffle_lines, shuffle_pieces, shuffle_rng,
     split_sentences,
     uncached_chars, voice_passage, voice_recording, voice_shuffle, voice_slot, write_backfill,
@@ -336,6 +336,53 @@ def render(script_id, all_, library, scripts_root):
         click.echo(f"{len(refused)} recording(s) not rendered, their script changed since "
                    f"voicing: {', '.join(refused)}", err=True)
         raise SystemExit(1)
+
+
+# --- bundle (free) ----------------------------------------------------------------
+
+BUNDLE_MIN_S = 20.0    # PLACEHOLDER: a segment shorter than this is flagged
+BUNDLE_MAX_S = 150.0   # PLACEHOLDER: a segment longer than this is flagged
+
+
+@esoterica.command()
+@click.argument("script_ids", nargs=-1, required=True)
+@click.option("--out", "out", type=click.Path(path_type=Path), required=True,
+              help="Directory that receives one folder per station.")
+@click.option("--library", type=click.Path(path_type=Path), default=LIBRARY,
+              show_default=True)
+@click.option("--scripts", "scripts_root", type=click.Path(path_type=Path),
+              default=SCRIPTS, show_default=True)
+def bundle(script_ids, out, library, scripts_root):
+    """Cut recordings into segments and export station bundles. Free: no provider."""
+    from .segments import export_station
+    try:
+        scripts = {s.id: s for s in load_all(scripts_root)}
+    except (ValueError, OSError) as e:
+        raise click.ClickException(str(e)) from None
+    chosen = []
+    for sid in script_ids:
+        if sid not in scripts:
+            raise click.ClickException(f"no script with id '{sid}'")
+        s = scripts[sid]
+        stale, _ = check_takes(s, library)
+        if stale:
+            raise click.ClickException(StaleTakesError(sid, stale).args[0])
+        try:
+            _require_takes(s, Path(library) / sid)
+        except MissingRawError as e:
+            raise click.ClickException(str(e)) from None
+        chosen.append(s)
+    for s in chosen:
+        try:
+            st = export_station(s, library, out)
+        except (OSError, ValueError) as e:
+            raise click.ClickException(f"{s.id}: {e}") from None
+        click.echo(f"{s.id}: {len(st['segments'])} segments")
+        for seg in st["segments"]:
+            t = seg["seconds"]
+            flag = ("  <- under %gs" % BUNDLE_MIN_S if t < BUNDLE_MIN_S
+                    else "  <- over %gs" % BUNDLE_MAX_S if t > BUNDLE_MAX_S else "")
+            click.echo(f"  {seg['file']}  {t:7.1f} s{flag}")
 
 
 # --- audition -------------------------------------------------------------------

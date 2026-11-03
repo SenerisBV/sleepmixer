@@ -10,7 +10,7 @@
 # would decline to refresh whenever someone edited the copy instead of the
 # original.
 
-.PHONY: ui ui-dev test
+.PHONY: ui ui-dev test stations
 
 ui:
 	cd ui && elm make src/Main.elm --optimize --output=../sleepmix/static/app.js
@@ -23,3 +23,6 @@ ui-dev:
 
 test:
 	pipenv run pytest -q
+
+stations:
+	pipenv run sleepmix esoterica bundle the-lantern-accords backward-lesson-one the-orchard-light --out ios/Esoterica/Stations
