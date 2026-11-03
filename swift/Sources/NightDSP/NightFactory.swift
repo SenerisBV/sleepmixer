@@ -10,13 +10,13 @@ public struct AuditionRequest: Equatable, Sendable {
     public var channel: Bool
     public var channelSettings: ChannelSettings
     public var sampleRate: Double
-    /// When set, plays this WAV through the same warps and channel and `scene` is ignored.
-    public var voiceFile: URL?
+    /// When set, plays this decoded clip through the same warps and channel and `scene` is ignored.
+    public var voice: VoiceClip?
 
     public init(scene: SceneKind, seconds: Double = 60, startSecond: Double = 0, seed: UInt64 = 1,
                 warp: WarpDepth = .plain, channel: Bool = true,
                 channelSettings: ChannelSettings = .early, sampleRate: Double = 44100,
-                voiceFile: URL? = nil) {
+                voice: VoiceClip? = nil) {
         self.scene = scene
         self.seconds = seconds
         self.startSecond = startSecond
@@ -25,7 +25,7 @@ public struct AuditionRequest: Equatable, Sendable {
         self.channel = channel
         self.channelSettings = channelSettings
         self.sampleRate = sampleRate
-        self.voiceFile = voiceFile
+        self.voice = voice
     }
 }
 
@@ -50,15 +50,12 @@ public enum NightFactory {
         return x < 0 ? -y : y
     }
 
-    /// An unreadable voice file renders as an empty result; callers that need the reason (the CLI)
-    /// call `WAVReader.read` first.
     public static func audition(_ r: AuditionRequest) -> [Float] {
-        if let url = r.voiceFile {
-            guard let (samples, fileRate) = try? WAVReader.read(url: url) else { return [] }
+        if let clip = r.voice {
             let sr = r.sampleRate
             let start = max(0, (r.startSecond.isFinite ? max(0, r.startSecond) : 0) - leadInSeconds)
             return run(r, start: start) {
-                FileSource(samples: samples, fileSampleRate: fileRate, sampleRate: sr, startSecond: start)
+                FileSource(samples: clip.samples, fileSampleRate: clip.sampleRate, sampleRate: sr, startSecond: start)
             }
         }
         switch r.scene {

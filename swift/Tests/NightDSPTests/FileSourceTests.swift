@@ -98,7 +98,7 @@ func int16Payload(_ xs: [Int16]) -> Data {
         // The tone survives resampling at the right pitch: compare to a direct 44.1 kHz sine.
         let ref = tone(200, seconds: 0.9, rate: 44100)
         var worst: Float = 0
-        for i in 0..<ref.count { worst = max(worst, abs(out[i] - ref[i])) }
+        for i in 300..<ref.count { worst = max(worst, abs(out[i] - ref[i])) }
         #expect(worst < 0.01, "worst error \(worst)")
     }
 
@@ -121,40 +121,102 @@ func int16Payload(_ xs: [Int16]) -> Data {
         src.render(into: &out, count: out.count)
         let fade = Int(0.05 * rate)
         let n = x.count
-        // Tapered: the last 50 ms of the file shrink to zero and never exceed the original.
         for i in (n - fade)..<n { #expect(abs(out[i]) <= abs(x[i]) + 1e-6) }
-        func peak(_ s: ArraySlice<Float>) -> Float { s.reduce(0) { max($0, abs($1)) } }
-        #expect(peak(out[(n - fade)..<(n - fade + 220)]) > 0.4)
-        #expect(peak(out[(n - 220)..<n]) < 0.01)
         #expect(out[n...].allSatisfy { $0 == 0 })
         func maxJump(_ s: ArraySlice<Float>) -> Float {
             zip(s, s.dropFirst()).reduce(0) { max($0, abs($1.1 - $1.0)) }
         }
         #expect(maxJump(out[(n - fade - 1)..<out.count]) <= maxJump(x[...]))
     }
+
+    /// A constant file makes the gain readable straight off the output.
+    @Test func fadeShapeIsRaisedCosine() {
+        let rate = 44100.0
+        let x = [Float](repeating: 0.5, count: 44100)
+        var src = FileSource(samples: x, fileSampleRate: rate, sampleRate: rate, startSecond: 0)
+        var out = [Float](repeating: 0, count: 44100 + 100)
+        src.render(into: &out, count: out.count)
+        let n = x.count
+        #expect(abs(out[n - 1103] - 0.25) < 0.005, "midpoint of the fade: \(out[n - 1103])")
+        #expect(abs(out[n - 1] / 0.5) < 1e-5, "last file sample \(out[n - 1])")
+        #expect(out[n - 2205] == 0.5)      // just before the fade starts
+        // Fade-in: 5 ms raised cosine from silence.
+        #expect(out[0] == 0)
+        #expect(abs(out[110] - 0.25) < 0.01, "midpoint of the fade-in: \(out[110])")
+        #expect(out[221] == 0.5 && out[1000] == 0.5)
+    }
+
+    @Test func fadeIsClampedToAVeryShortFile() {
+        let rate = 44100.0
+        let x = [Float](repeating: 0.5, count: 882)   // 20 ms, shorter than the 50 ms fade
+        var src = FileSource(samples: x, fileSampleRate: rate, sampleRate: rate, startSecond: 0)
+        var out = [Float](repeating: 0, count: 2000)
+        src.render(into: &out, count: out.count)
+        #expect(out.allSatisfy { $0.isFinite && abs($0) <= 0.5 })
+        #expect(abs(out[881]) < 1e-3)
+        #expect(out[882...].allSatisfy { $0 == 0 })
+        #expect(out[..<882].contains { abs($0) > 0.1 })
+    }
+
+    @Test func fadeInOnlyAtFileStart() {
+        let rate = 44100.0
+        let x = [Float](repeating: 0.5, count: 44100)
+        var mid = FileSource(samples: x, fileSampleRate: rate, sampleRate: rate, startSecond: 0.5)
+        var out = [Float](repeating: 0, count: 10)
+        mid.render(into: &out, count: 10)
+        #expect(out.allSatisfy { $0 == 0.5 })
+    }
+
+    @Test func startingPastTheEndIsSilence() {
+        let x = tone(220, seconds: 1, rate: 44100)
+        var src = FileSource(samples: x, fileSampleRate: 44100, sampleRate: 44100, startSecond: 5)
+        var out = [Float](repeating: 1, count: 4096)
+        src.render(into: &out, count: out.count)
+        #expect(out.allSatisfy { $0 == 0 })
+    }
+
+    @Test func truncatedDataChunkIsClamped() throws {
+        let url = fixtureURL("trunc.wav")
+        var d = wavData(format: 1, channels: 1, rate: 44100, bits: 16, payload: int16Payload([8192, -8192, 16384]))
+        // Declare a data size far larger than the file; the reader must take what is there.
+        let dataSizeOffset = d.count - 6 - 4
+        d.replaceSubrange(dataSizeOffset..<(dataSizeOffset + 4), with: [0x00, 0x00, 0x10, 0x00])
+        try d.write(to: url)
+        #expect(try WAVReader.read(url: url).samples == [0.25, -0.25, 0.5])
+    }
+
+    /// Decision: a data chunk before fmt is handled (the scan continues until fmt is found).
+    @Test func dataBeforeFmtIsHandled() throws {
+        let url = fixtureURL("datafirst.wav")
+        let ordered = wavData(format: 1, channels: 1, rate: 44100, bits: 16, payload: int16Payload([8192, 16384]))
+        // ordered = RIFF hdr (12) + fmt chunk (8+16) + data chunk (8+4)
+        var d = ordered.prefix(12)
+        d.append(ordered.suffix(12))            // data chunk
+        d.append(ordered[12..<36])              // fmt chunk
+        try d.write(to: url)
+        let r = try WAVReader.read(url: url)
+        #expect(r.samples == [0.25, 0.5] && r.sampleRate == 44100)
+    }
 }
 
 @Suite struct VoiceFactoryTests {
-    func voiceFile(seconds: Double = 40) throws -> URL {
-        var rng = UInt64(0)
+    /// Non-periodic (a chirp with a slow envelope), so a position error cannot hide.
+    func clip(seconds: Double = 40) -> VoiceClip {
         let x: [Float] = (0..<Int(seconds * 44100)).map { i in
             let t = Double(i) / 44100
             let env = 0.5 + 0.5 * sin(2 * Double.pi * 0.7 * t)
-            rng += 1
-            return Float(0.4 * env * (sin(2 * Double.pi * 140 * t) + 0.5 * sin(2 * Double.pi * 910 * t)))
-                + Float(0.02 * NightRandom.signed(3, 0, rng))
+            return Float(0.4 * env * sin(2 * Double.pi * (120 * t + 15 * t * t)))
+                + Float(0.02 * NightRandom.signed(3, 0, UInt64(i)))
         }
-        let url = fixtureURL("voice.wav")
-        try WAVWriter.write(x, sampleRate: 44100, to: url)
-        return url
+        return VoiceClip(samples: x, sampleRate: 44100)
     }
 
-    @Test func voiceThroughTheChannelIsFiniteAndGuarded() throws {
-        let url = try voiceFile()
+    @Test func voiceThroughTheChannelIsFiniteAndGuarded() {
+        let v = clip()
         for channel in [true, false] {
             let out = NightFactory.audition(AuditionRequest(
                 scene: .chimes, seconds: 20, startSecond: 3, warp: WarpDepth(distance: 0.5, fragmentation: 0.3),
-                channel: channel, voiceFile: url))
+                channel: channel, voice: v))
             #expect(out.count == 20 * 44100)
             #expect(out.allSatisfy { $0.isFinite })
             let peak = out.reduce(Float(0)) { max($0, abs($1)) }
@@ -163,33 +225,31 @@ func int16Payload(_ xs: [Int16]) -> Data {
         }
     }
 
-    @Test func voiceSeekingMatchesALongerRender() throws {
-        let url = try voiceFile()
+    @Test func voiceSeekingMatchesALongerRender() {
+        let v = clip()
         let sr = 44100
         let warp = WarpDepth(distance: 0.5, fragmentation: 0.3)
-        let a = NightFactory.audition(AuditionRequest(scene: .chimes, seconds: 40, seed: 7, warp: warp, voiceFile: url))
-        let b = NightFactory.audition(AuditionRequest(scene: .chimes, seconds: 20, startSecond: 20, seed: 7, warp: warp, voiceFile: url))
+        let a = NightFactory.audition(AuditionRequest(scene: .chimes, seconds: 40, seed: 7, warp: warp, voice: v))
+        let b = NightFactory.audition(AuditionRequest(scene: .chimes, seconds: 20, startSecond: 20, seed: 7, warp: warp, voice: v))
         #expect(b.count == 20 * sr)
-        let tail = Array(a[(20 * sr)..<(40 * sr)])
-        let head = Array(a[0..<(20 * sr)])
         func residualDB(_ x: [Float], _ y: [Float]) -> Double {
             Analysis.rmsDB(zip(x, y).map { $0 - $1 }[...]) - Analysis.rmsDB(y[...])
         }
-        #expect(residualDB(b, tail) <= -90, "seeked voice is only \(residualDB(b, tail)) dB under the tail")
-        #expect(residualDB(b, head) >= -10)
+        #expect(residualDB(b, Array(a[(20 * sr)..<(40 * sr)])) <= -90)
+        // A one-second position error must be audible as a large residual.
+        #expect(residualDB(b, Array(a[(19 * sr)..<(39 * sr)])) >= -10)
+        #expect(residualDB(b, Array(a[0..<(20 * sr)])) >= -10)
     }
 
-    @Test func aFileShorterThanTheRenderEndsInSilence() throws {
-        let url = try voiceFile(seconds: 5)
+    @Test func aFileShorterThanTheRenderEndsInSilence() {
         let out = NightFactory.audition(AuditionRequest(
-            scene: .chimes, seconds: 12, seed: 2, channel: false, voiceFile: url))
+            scene: .chimes, seconds: 12, seed: 2, channel: false, voice: clip(seconds: 5)))
         #expect(out.count == 12 * 44100)
         #expect(out.allSatisfy { $0.isFinite })
         #expect(Analysis.rmsDB(out[(8 * 44100)...]) < -100)
     }
 
-    @Test func unreadableFileRendersNothing() {
-        let out = NightFactory.audition(AuditionRequest(scene: .chimes, voiceFile: fixtureURL("nope.wav")))
-        #expect(out.isEmpty)
+    @Test func clipLoadThrowsOnAMissingFile() {
+        #expect(throws: WAVReader.Error.self) { try VoiceClip.load(url: fixtureURL("nope.wav")) }
     }
 }

@@ -70,11 +70,35 @@ import NightPlan
 
     @Test func parsesVoice() throws {
         let a = try NightCtl.Audition.parse(["voice", "--file", "/x/p01.wav", "--distance", "0.5"])
-        let r = a.request()
-        #expect(r.voiceFile == URL(fileURLWithPath: "/x/p01.wav"))
-        #expect(r.warp == WarpDepth(distance: 0.5))
-        let s = try NightCtl.Audition.parse(["chimes"])
-        #expect(s.request().voiceFile == nil)
+        #expect(a.isVoice && a.file == "/x/p01.wav")
+        #expect(a.request().warp == WarpDepth(distance: 0.5))
+        #expect(a.request().voice == nil)   // the clip is attached by loadedRequest(), which reads the file
+        #expect(try NightCtl.Audition.parse(["chimes"]).request().voice == nil)
+    }
+
+    @Test func loadedRequestCarriesTheDecodedClip() throws {
+        let src = tmp("clip.wav")
+        try WAVWriter.write([0.1, 0.2, 0.3], sampleRate: 22050, to: src)
+        let a = try NightCtl.Audition.parse(["voice", "--file", src.path])
+        #expect(try a.loadedRequest().voice == VoiceClip(samples: [0.1, 0.2, 0.3], sampleRate: 22050))
+    }
+
+    @Test func fileIsOnlyForVoice() {
+        do {
+            _ = try NightCtl.Audition.parse(["chimes", "--file", "x.wav"])
+            Issue.record("--file accepted for a scene")
+        } catch {
+            #expect(NightCtl.Audition.message(for: error).contains("--file is only for voice"))
+        }
+    }
+
+    @Test func unknownSceneNamesItself() {
+        do {
+            _ = try NightCtl.Audition.parse(["bells"])
+            Issue.record("unknown scene accepted")
+        } catch {
+            #expect(NightCtl.Audition.message(for: error).contains("unknown scene 'bells'"))
+        }
     }
 
     @Test func voiceNeedsAFile() {

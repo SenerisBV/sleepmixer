@@ -50,6 +50,9 @@ public struct NightCtl: ParsableCommand {
             guard isVoice || sceneKind != nil else {
                 throw ValidationError("unknown scene '\(scene)' (chimes, waves, warmth or voice).")
             }
+            if !isVoice, file != nil {
+                throw ValidationError("--file is only for voice (got scene '\(scene)').")
+            }
             if isVoice {
                 guard file != nil else { throw ValidationError("voice needs --file <path-to-wav>.") }
                 for (name, v) in [("slowness", slowness), ("ring", ring), ("softness", softness), ("vibrato", vibrato)]
@@ -81,14 +84,19 @@ public struct NightCtl: ParsableCommand {
                 warp: WarpDepth(distance: distance, slowness: slowness,
                                 fragmentation: fragmentation, proportion: proportion,
                                 ring: ring, softness: softness, vibrato: vibrato),
-                channel: !noChannel, sampleRate: sampleRate,
-                voiceFile: isVoice ? file.map { URL(fileURLWithPath: $0) } : nil)
+                channel: !noChannel, sampleRate: sampleRate)
+        }
+
+        /// `request()` plus the decoded voice clip: reads the WAV once, with a clear error.
+        public func loadedRequest() throws -> AuditionRequest {
+            var r = request()
+            if isVoice, let file { r.voice = try VoiceClip.load(url: URL(fileURLWithPath: file)) }
+            return r
         }
 
         public func run() throws {
             let path = out ?? "./\(scene)-\(seed).wav"
-            let r = request()
-            if let v = r.voiceFile { _ = try WAVReader.read(url: v) }   // clear error before any output
+            let r = try loadedRequest()   // a bad WAV fails here, before any output
             let samples = NightFactory.audition(r)
             try WAVWriter.write(samples, sampleRate: Int(r.sampleRate), to: URL(fileURLWithPath: path))
             let rms = Analysis.rmsDB(samples[...])
