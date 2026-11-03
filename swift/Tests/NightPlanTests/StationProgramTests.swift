@@ -93,7 +93,42 @@ private func walk(_ p: inout StationProgram, horizon: Double = eightHours) -> [S
     _ = p.upcoming(after: -100)
 }
 
+@Test func upcomingAcrossWrap() {
+    var p = StationProgram(segmentSeconds: [50, 60, 70], seed: 5, level: calm)
+    // Find a time inside the last segment (index 2).
+    var t = 0.0
+    while p.segment(at: t)?.index != 2 { t += 1 }
+    let up = p.upcoming(after: t)!
+    #expect(up.index == 0)
+    #expect(up.start > t)
+}
+
+@Test func resetMidGapShortensTheGap() {
+    let T = 300.0
+    let reset: @Sendable (Double) -> DriftLevel = { t in t < T ? DriftLevel(free: 1, ratchet: 1) : .zero }
+    var p = StationProgram(segmentSeconds: [100, 100, 100], seed: 3, level: reset)
+    let first = p.segment(at: 0)!
+    #expect(first.end < T)   // lands in a deep gap before T
+    var t = first.end
+    var next: ScheduledSegment?
+    while next == nil && t < 2000 { t += 1; next = p.segment(at: t) }
+    let n = try! #require(next)
+    #expect(n.start >= T - 1 && n.start <= T + 4)
+    #expect(n.start < first.end + 483)
+}
+
+@Test func nonFiniteInputIsSilent() {
+    var p = StationProgram(segmentSeconds: lens, seed: 1, level: calm)
+    #expect(p.segment(at: .infinity) == nil)
+    #expect(p.segment(at: .nan) == nil)
+    #expect(p.upcoming(after: .infinity) == nil)
+}
+
 @Test func recipesMatchTheDial() {
-    #expect(StationRecipe.all.map(\.id) == ["the-lantern-accords", "backward-lesson-one", "the-orchard-light"])
-    #expect(StationRecipe.all.map(\.dialPosition) == [0.25, 0.55, 0.85])
+    let got = StationRecipe.all.map { [$0.id, $0.title, "\($0.dialPosition)", "\($0.warmth)", "\($0.chimes)", "\($0.waves)"] }
+    #expect(got == [
+        ["the-lantern-accords", "The Lantern Accords", "0.25", "1.0", "0.25", "0.2"],
+        ["backward-lesson-one", "Backward Lesson One", "0.55", "0.3", "0.2", "1.0"],
+        ["the-orchard-light", "The Orchard Light", "0.85", "0.25", "1.0", "0.3"],
+    ])
 }
