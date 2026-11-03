@@ -72,6 +72,9 @@ def max_chars(cls):
 
 
 def sent_chars(cls):
+    """Independent of the CLI's counting: billed text, plus a script's delivery
+    tag before every request (ElevenLabs only; Cartesia refuses tags)."""
+    from sleepmix.esoterica.voicing import recording_pieces
     total = 0
     for s in load_all(REAL):
         for p in s.passages:
@@ -79,6 +82,9 @@ def sent_chars(cls):
                 total += shuffle_billed_chars(shuffle_lines(p.text), cls.translate_cues)
             else:
                 total += billed_chars(p.text, cls.translate_cues, max_chars(cls))
+            if s.delivery and cls is ElevenLabs:
+                n = len(recording_pieces(s, p, max_chars(cls), cls.translate_cues))
+                total += n * (len(s.delivery) + 1)
     return total
 
 

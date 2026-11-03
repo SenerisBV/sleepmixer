@@ -18,7 +18,7 @@ from .env import api_key
 from .providers import Cartesia, ElevenLabs, ProviderError
 from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
-    MissingRawError, StaleTakesError, Voice, VoiceMismatchError, VoicesConfig, billed_chars,
+    NO_DELIVERY_TAGS, MissingRawError, StaleTakesError, Voice, VoiceMismatchError, VoicesConfig, billed_chars,
     check_distinct_voices, check_delivery, check_resume_voice, check_takes, load_voices, passage_pieces,
     raw_passage_file, raw_takes, recording_pieces, revoice_files,
     render_recording, shuffle_billed_chars, shuffle_lines, shuffle_pieces, shuffle_rng,
@@ -76,8 +76,12 @@ def _max_chars(cfg: VoicesConfig, provider: str) -> int:
 
 
 def passage_chars(script: Script, p: Passage, provider: str, cfg: VoicesConfig) -> int:
+    """What voicing sends for passage `p`: every piece after cue translation,
+    plus the script's delivery tag before each (not for a provider that refuses it)."""
     t = PROVIDERS[provider].translate_cues
-    return sum(len(t(pc.text))
+    tag = (len(script.delivery) + 1
+           if script.delivery and provider not in NO_DELIVERY_TAGS else 0)
+    return sum(len(t(pc.text)) + tag
                for pc in recording_pieces(script, p, _max_chars(cfg, provider), t))
 
 
