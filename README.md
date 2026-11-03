@@ -388,7 +388,8 @@ isn't an app yet. See [`swift/README.md`](swift/README.md).
 ## Esoterica (in progress)
 
 `esoterica/` is the spoken-word layer: scripts for generated "found recordings"
-(strange, sincere, never concluding), voiced by ElevenLabs through
+(strange, sincere, never concluding), voiced by text-to-speech (ElevenLabs or
+Cartesia, chosen per voice slot; the four voiced so far are all ElevenLabs) through
 `sleepmix esoterica estimate | audition | voice | render` (everything that spends
 prints an estimate first and needs `--yes`; keys go in a git-ignored `.env`),
 then played by the Swift engine with `nightctl audition voice --file`. Four

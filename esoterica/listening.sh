@@ -4,7 +4,8 @@
 #
 # For each recording in esoterica/library/ that has a recording.json (unvoiced
 # ones are skipped) it writes, into the git-ignored esoterica/listening/:
-#   <id>-plain.wav       p01.wav as voiced, copied untouched
+#   <id>-plain.wav       the rendered p01.wav (source character applied), copied
+#                        untouched; not the raw provider take p01.raw.wav
 #   <id>-near.wav        nightctl audition voice, --distance 0 (clear, through the AM channel)
 #   <id>-far.wav         nightctl audition voice, --distance 0.6 --fragmentation 0.3
 # and prints RMS / peak / centroid for each. Free: no provider, no key.

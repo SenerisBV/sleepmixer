@@ -106,36 +106,66 @@ intensity comment is still allowed.
 
 ## Voicing
 
-`sleepmix esoterica estimate | audition | voice` (in `sleepmix/esoterica/cli.py`)
-turns scripts into audio. Every command prints the characters and estimated
-cost per provider first and spends nothing without `--yes`.
+`sleepmix esoterica estimate | audition | voice | render` (in
+`sleepmix/esoterica/cli.py`) turns scripts into audio. The three commands that
+can spend (`estimate` only counts, `audition` and `voice` pay) print the
+characters and estimated cost per provider first and spend nothing without
+`--yes`; `render` is free and prints no cost.
 
-- **Commands** (all print the characters and estimated cost first):
-  `sleepmix esoterica estimate`; `audition --slot S | --show SHOW | --all [--yes]`;
-  `voice <id> | --all [--yes]` (paid); `render <id> | --all` (free; `--all` skips
-  recordings with no raw takes, printing "skipped, not voiced"). Never pass `--yes`
-  without reading the estimate. Keys live only in the repo-root `.env`.
+- **Commands:** `sleepmix esoterica estimate` (counts only);
+  `audition --slot S | --show SHOW | --all [--yes]` (paid);
+  `voice <id> | --all [--yes] [--revoice pNN ...]` (paid); `render <id> | --all`
+  (free: no provider, no key, no estimate; `--all` skips recordings with no raw
+  takes, "skipped, not voiced", and partly voiced ones, "skipped, partially
+  voiced (missing …)"). Never pass `--yes` without reading the estimate. Keys
+  live only in the repo-root `.env`.
+- **Estimates are exact:** every count is the very requests voicing sends
+  (each `[long pause]` segment chunked to the provider's `max_chars`), each
+  counted after the provider's cue translation. Pieces and passages already on
+  disk are not counted.
 - **Voices** come from `esoterica/voices.yaml`: per-provider model, price and
   limits under `providers:`, 2–3 candidates per slot per provider under
   `candidates:`, and the pick per slot under `chosen:`.
 - **Audition:** `sleepmix esoterica audition --slot <slot> | --show <show> | --all [--yes]`
   voices about 120 spoken words of the first passage of the first script (by
   id) in each slot (shuffles: the first 16 images) with every candidate, into
-  `esoterica/audition/<slot>/<provider>-<voice>.wav`, and lists them in
-  `esoterica/audition/index.md`.
+  `esoterica/audition/<slot>/<provider>-<voice>.wav`, and lists them (with each
+  voice id) in `esoterica/audition/index.md`. Each file has a sidecar
+  `<provider>-<voice>.json` naming the provider, model and voice id it was made
+  with; if a candidate's voice id (or the model) changes in `voices.yaml`, the
+  next `audition` counts that file again and `--yes` replaces it. A file with
+  no sidecar counts as unknown and is re-made too.
 - **Voicing:** `sleepmix esoterica voice <id> | --all [--yes]` uses the slot's
   `chosen:` voice and writes `esoterica/library/<id>/`.
 - **Raw and rendered:** `pNN.raw.wav` is the provider's take (loudness-normalised) and is
   never overwritten. `pNN.wav` is the raw take with the script's `source_character`
-  applied and loudness re-normalised; `sleepmix esoterica render <id> | --all` re-makes
-  it for free (no provider, no key, no `--yes`) and rewrites `recording.json`.
+  applied, a 10 ms fade at each end and loudness re-normalised;
+  `sleepmix esoterica render <id> | --all` re-makes it for free and rewrites
+  `recording.json`, which records the character tuning used (`character_params`).
 - **Passage files** are named from the passage's 0-based `index`, 1-based on
   disk: index 0 is `p01.wav`, index 1 is `p02.wav`. The manifest's `file` field
   holds that name. Each is mono float32 WAV at 44100 Hz, normalised to
   -24 dBFS RMS over speech frames with peaks at most -3 dBFS.
-- **Resumable:** a passage (or audition file) already on disk is never voiced
-  again, and `recording.json` is written only when every passage exists. A
-  provider error mid-run keeps the finished passages; re-run to finish.
+- **Resumable to the request:** a passage is sent as pieces (its `[long pause]`
+  segments, chunked; a shuffle's images). Each piece is saved as
+  `pNN.sMM.<key>.seg.wav` the moment it is paid for, so a provider error at
+  piece N keeps pieces 1 to N-1 and a re-run sends only N onwards. When all
+  pieces are in, `pNN.raw.wav` is written and the piece files are deleted. A
+  passage (or audition file) already on disk is never voiced again, and
+  `recording.json` is written only when every passage exists.
+- **A changed script is caught.** Each take has a sidecar `pNN.raw.json` with
+  the sha256 of the passage text it was voiced from (the script's text with its
+  cues; the intensity comment is not part of it). If a passage is edited, or one
+  is inserted or removed so the numbering shifts, `voice` and `render` refuse
+  and name the stale passages. Fix it with
+  `sleepmix esoterica voice <id> --revoice p02` (repeatable, or `p02,p03`): it
+  prints the estimate and, only with `--yes`, deletes the named stale takes
+  (raw, sidecar, piece files, rendered file and the manifest) and voices them
+  again. Naming a passage that is not stale is refused; to re-voice a good take
+  anyway, delete its `pNN.raw.wav` and `pNN.raw.json` by hand. Recordings voiced
+  before sidecars existed are backfilled by `render`: a take with no sidecar
+  whose `recording.json` text equals the passage's current spoken text gets one
+  (marked `"backfilled": true`).
 - **Cues** are translated per provider (ElevenLabs v4 audio tags or ellipses;
   Cartesia `<break>` tags and `[laughter]`) or stripped where the provider has
   no equivalent. `[long pause]` is not sent at all: the tool splits there and
@@ -144,12 +174,18 @@ cost per provider first and spends nothing without `--yes`.
   seeded from the recording id. A line that opens with a French article
   (`le`, `la`, `les`, `un`, `une`, `des`, `du`, `au`, `aux`, `l'`) is sent as
   French.
+- **What is committed:** the scripts and `voices.yaml`. `esoterica/library/`
+  (audio, sidecars and the `recording.json` manifests), `esoterica/audition/`
+  and `esoterica/listening/` are git-ignored: the audio is large and the
+  manifests are derived (a free `render` re-makes them from the raw takes and
+  the scripts).
 
 ## The listening set
 
 `esoterica/listening.sh` (free, no provider) writes, for passage 1 of every
 recording that has a `recording.json`, into `esoterica/listening/`:
-`<id>-plain.wav` (as voiced), `<id>-near.wav` (`nightctl audition voice
+`<id>-plain.wav` (the rendered `p01.wav`, character included; not the raw
+take), `<id>-near.wav` (`nightctl audition voice
 --distance 0`) and `<id>-far.wav` (`--distance 0.6 --fragmentation 0.3`), and
 prints RMS, peak and centroid. The near and far files are the first 90 s;
 `SECONDS_PER_FILE=150 esoterica/listening.sh` changes that. It builds `nightctl`

@@ -2053,13 +2053,17 @@ seam, a WAV file plus a JSON manifest.
 
 ```
 esoterica/scripts/<show>/<id>.md       committed; parsed by sleepmix/esoterica/script.py
-   | sleepmix esoterica voice <id> --yes        PAID: ElevenLabs / Cartesia, one request per chunk
+   | sleepmix esoterica voice <id> --yes        PAID: ElevenLabs / Cartesia, one request per piece
    v
+esoterica/library/<id>/voice.json      the recording's voice (binding once any paid audio exists)
+esoterica/library/<id>/pNN.raw.json    per take: sha256 of the passage text it was voiced from
+esoterica/library/<id>/pNN.sMM.<key>.seg.wav   each paid piece, cached until the take is whole
 esoterica/library/<id>/pNN.raw.wav     the provider's take, loudness-normalised; never overwritten
    | sleepmix esoterica render <id>|--all       FREE, deterministic, re-runnable
    v
-esoterica/library/<id>/pNN.wav         + source character (tape|room|oldmic|hum|clean), re-normalised
-esoterica/library/<id>/recording.json  the manifest: id, show, voice, source_character, passages
+esoterica/library/<id>/pNN.wav         + source character, 10 ms end fades, re-normalised
+esoterica/library/<id>/recording.json  the manifest: id, show, voice, source_character,
+                                       character_params, passages
    | Swift: WAVReader -> VoiceClip -> FileSource -> Fragmenter -> Distance -> AMChannel
    v
 nightctl audition voice --file pNN.wav ...
@@ -2072,13 +2076,33 @@ So `voice` writes only raw takes (and `voice.json`, so a resume can never mix
 voices), and `render` is a pure function of raw takes, script and seed
 (crc32 of id and passage index). Resumability, the cost estimate and the "is this
 voiced?" test all look at raw files only; a rendered file alone never implies a
-paid voice. `render --all` skips recordings with no raw takes; `render <id>`
-for one fails clearly.
+paid voice. `render --all` skips recordings with no raw takes, or only some;
+`render <id>` for one fails clearly.
+
+**Money is spent per request, and kept per request.** A passage is a list of
+pieces (`passage_pieces`: its `[long pause]` segments, chunked to the provider's
+`max_chars`; `shuffle_pieces`: one per image). Each response is written to
+`pNN.sMM.<key>.seg.wav` before the next request, the key hashing provider, model,
+voice, language and text so a cache only ever answers its own request. The raw
+take is assembled once every piece exists and the caches are dropped. The same
+planner feeds every estimate, so `estimate`, `voice` and `audition` print the
+exact characters that will be sent, minus what is cached.
+
+**The script and the takes cannot drift apart silently.** Each take's sidecar
+`pNN.raw.json` holds the sha256 of `Passage.text` (cues included) it was voiced
+from. `check_takes` (pure) compares them with the current script; `voice` and
+`render` refuse on any mismatch, inserted/removed passage or orphan take, and
+name the passages. The only way through is explicit: `voice <id> --revoice pNN`,
+which prints the estimate and deletes only the named stale takes with `--yes`.
+Recordings voiced before sidecars are backfilled once, free, when their
+manifest text still equals the script's spoken text. Audition files carry a
+similar sidecar (`<provider>-<voice>.json`) so a changed candidate voice id is
+re-auditioned rather than silently kept.
 
 **Cost guard.** Every command that can spend prints per-provider character
 counts and estimated cost first, and spends only with `--yes`; without it, no
-key is read and no provider is built. A passage already on disk is never
-re-voiced. A provider error part-way leaves the finished passages and writes no
+key is read and no provider is built. A take or paid piece already on disk is never
+re-sent. A provider error part-way leaves the finished passages and writes no
 manifest (a manifest means the recording is complete). Keys come only from the
 git-ignored `.env` or the environment and never appear in an error message
 (tested with a fake key echoed back in a 401 body).
@@ -2100,3 +2124,8 @@ seeds and the 6 s lead-in are identical. The factory does no file I/O: the CLI
 decodes the WAV once and fails clearly (before writing any output) on a bad file.
 What is deliberately absent: no planner decides which recording plays when, and
 no relative levels are set between a voice and the scenes.
+
+**Where things live.** Scripts and `voices.yaml` are committed. Everything under
+`esoterica/library/` (audio, take sidecars, `voice.json`, `recording.json`) and
+`esoterica/audition/` is git-ignored: audio is large, and the manifests are
+derived, re-made by a free `render`. Only the raw takes are irreplaceable.

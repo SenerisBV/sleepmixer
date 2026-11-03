@@ -70,7 +70,7 @@ operator's changes to the lessons and to who speaks).
 | Piece | Where | State |
 |---|---|---|
 | Nine scripts (eleven thousand words), seven shows | `esoterica/scripts/<show>/<id>.md` | written; operator read them at STOP 1 and kept all but Aurish |
-| Script parser, manifest, cost estimate, `.env` reader | `sleepmix/esoterica/{script,manifest,cost,env}.py` | built, tested |
+| Script parser, manifest, `.env` reader | `sleepmix/esoterica/{script,manifest,env}.py` | built, tested (the separate `cost.py` estimator was deleted in the final review: the CLI's billed-character count is the only estimator) |
 | Providers (ElevenLabs, Cartesia), voicing, CLI | `sleepmix/esoterica/{providers,voicing,cli}.py`, `esoterica/voices.yaml` | built; `estimate`, `audition`, `voice`, `render` |
 | Source character (tape, room, oldmic, hum, clean) | `sleepmix/esoterica/character.py` | built; free, re-renderable |
 | Engine file source and `nightctl audition voice --file` | `swift/Sources/NightDSP/Sources/FileSource.swift`, `Primitives/WAVReader.swift`, `NightCLI` | built, tested |
@@ -171,6 +171,8 @@ characters can be re-tuned for free because the raw takes are kept.
 | Cue translation | see the voicing table below | `providers.py` |
 | Character recipes | tape, room, oldmic, hum, clean: see the character table below (room: custom IR, -60 dB at ~0.38 s, ~15% wet; oldmic: 150-5000 Hz, tanh 1.3, RMS matched; hum: 50 Hz + harmonics at -55 dBFS, 5 ms fade-in) | `character.py` |
 | Character seed | crc32(script id), passage index | `voicing.py` |
+| Render edge fade | 10 ms raised cosine at both ends of every rendered `pNN.wav`, after the character, before normalising (tape hiss and hum would otherwise start/stop dead) | `voicing.py` `RENDER_EDGE_S` |
+| Piece cache key | first 10 hex of sha256(provider, model, voice_id, language, piece text) in `pNN.sMM.<key>.seg.wav` | `voicing.py` `piece_cache` |
 | FileSource fades | 50 ms raised-cosine fade-out over the file's last 50 ms (silence after); 5 ms raised-cosine fade-in at sample 0 (the 5 ms is invented) | `FileSource.swift` `fadeSeconds`, `fadeInSeconds` |
 
 ### Known follow-ups
@@ -190,22 +192,95 @@ characters can be re-tuned for free because the raw takes are kept.
   new pipeline step that places each generated call after the teacher's line. Of
   the three directions, reversed English and a repeated nonsense word became
   `lessons/backward-lesson-one.md` and `lessons/mubba-lesson-one.md`.
-- **`cost.estimate` in `cost.py` still counts cue-stripped text.** The CLI no
-  longer uses it (it counts what is actually sent, after each provider's cue
-  translation, with `[long pause]` excluded), so it is dead-ish code that would
-  under-count Cartesia's longer `<break>` tags if reused.
 - **The listening judgement is outstanding.** The operator has heard the
   audition (the voices) but not the voiced recordings with their characters,
   nor them through the engine. `esoterica/listening.sh` makes that set (see
   below). Everything in the tables above, the characters especially, was
   chosen by measurement and reasoning, not by ear.
 
+### Final review fixes (2026-11-03)
+
+The whole-branch review found the voicing safe for money in the happy path but
+not around the edges. What changed, and why it matters:
+
+- **Resume at the request.** `voicing._voice_pieces` caches every provider
+  response as `pNN.sMM.<key>.seg.wav` (atomic, dot-prefixed temp, then rename)
+  before the next request; MM is the 1-based piece number, `<key>` 10 hex of
+  sha256(provider, model, voice_id, language, piece text), so a cache can only
+  be reused for exactly the request it answered. When every piece is cached the
+  raw take is assembled (byte-identical to an uninterrupted run, tested), written,
+  and that passage's caches are deleted. A complete `pNN.raw.wav` stays
+  authoritative and is never re-sent. One planner (`passage_pieces`,
+  `shuffle_pieces`) drives voicing, `estimate`, `voice`'s remaining count and the
+  audition count, so the estimate is the exact request list, and pieces already
+  cached are not counted.
+- **Stale-script guard.** Each raw take has a sidecar `pNN.raw.json`: index,
+  `text_sha256`, provider, model, voice_id, `backfilled`. The hash is of the
+  passage's neutral text as the script holds it (`Passage.text`: cues included,
+  intensity comment not), the text voicing chunks and sends; cue translation is
+  code, so it is not hashed. The sidecar is written just before the take's first
+  request. `voice` (before any estimate or spend) and `render` (before writing
+  anything) compare every take with the current script and refuse, naming the
+  passages, when its text changed, when an inserted or removed passage shifted
+  the numbering, or when a take has no passage any more. The fix is
+  `sleepmix esoterica voice <id> --revoice p02` (one script id only; repeatable
+  or comma-separated): it prints the estimate and the files it would delete, and
+  only with `--yes` deletes the named takes' raw, sidecar, piece caches, rendered
+  file and `recording.json` (which describes the old takes; `made_at` is lost),
+  then voices them. Naming a passage that is not stale is refused, so a good paid
+  take cannot be thrown away by a typo. `render --all` refuses a stale recording
+  with a message, carries on with the rest and exits 1 at the end.
+- **Backfill (one-off, free).** The four voiced recordings predate sidecars. A
+  take with no sidecar whose `recording.json` `text` equals the passage's current
+  `spoken_text` counts as current, and `render` (or `voice`) writes its sidecar
+  with `"backfilled": true` and the voice from `voice.json`. Weakness, accepted
+  because it only applies once: manifest text has cues stripped, so a cue-only
+  edit made before the backfill would go unseen. Run on the real library on
+  2026-11-03 after checking all four manifests equal the current scripts: 17
+  sidecars written, all 17 `*.raw.wav` byte-identical before and after (sha256).
+- **`render --all` on a partly voiced recording** prints "skipped, partially
+  voiced (missing p02.raw.wav, …)" and carries on; `render <id>` still fails
+  clearly.
+- **An unused `voice.json` binds nothing.** If a recording directory has a
+  `voice.json` but no paid audio (no raw take, no piece cache: the first request
+  never succeeded), the next `voice` rewrites it instead of refusing a different
+  voice. Raw takes and caches are found by exact-name helpers (`raw_takes`,
+  `segment_caches`), never a `p*.raw.wav` glob.
+- **Rendered files fade at both ends.** `render_character` applies a 10 ms
+  raised-cosine fade (`RENDER_EDGE_S`) after the character and before
+  normalising; tape hiss had stopped dead on the last sample. Tested on the
+  file's last samples.
+- **The manifest records the character tuning.** `recording.json` gains
+  `character_params`: the recipe constants of the script's kind by name (from
+  `character.character_params`) plus `render_edge_s`. A retune rewrites the
+  manifest (keeping `made_at`). The field is defaulted, so `format_version` stays
+  1 and older manifests still read (nothing outside Python reads the manifest).
+- **Audition files know their voice.** Each `esoterica/audition/<slot>/<provider>-<voice>.wav`
+  has a sidecar `<provider>-<voice>.json` (provider, model, voice_id, name),
+  written before its request. A file whose sidecar is missing or names another
+  voice id or model is counted again and replaced with `--yes`; `index.md` shows
+  each voice id and marks such files stale. Filenames did not change, so the 40
+  paid audition files kept their names; their sidecars were backfilled once from
+  `voices.yaml` (the `candidates:` block is unchanged since c72a1a5, the commit
+  before the audition ran), all 40 WAVs byte-identical.
+- **One estimator.** `cost.py` (`estimate`, `CostEstimate`) counted cue-stripped
+  text and only its tests used it; deleted.
+- **Tests never see a key.** The autouse fixture also unsets
+  `ELEVENLABS_API_KEY` and `CARTESIA_API_KEY` (pipenv loads `.env` into the
+  environment, so this mattered).
+- **Decision: manifests live with the audio, git-ignored.** `recording.json`,
+  the take sidecars and all audio sit in `esoterica/library/`, which is
+  git-ignored. The audio is large and binary; the manifest is derived (a free
+  `render` re-makes it from the raw takes and the committed scripts), so
+  committing it would only add churn. The cost: the library exists on one
+  machine; a lost disk means re-voicing (only the paid takes are irreplaceable).
+
 ### The listening set
 
 `esoterica/listening.sh` (free: no provider, no key) takes passage 1 of every
 recording that has a `recording.json` (unvoiced ones are skipped) and writes
-into the git-ignored `esoterica/listening/`: `<id>-plain.wav` (the passage as
-voiced), `<id>-near.wav` (`nightctl audition voice --distance 0`, clear through
+into the git-ignored `esoterica/listening/`: `<id>-plain.wav` (the rendered
+`p01.wav`, source character included; not the raw provider take), `<id>-near.wav` (`nightctl audition voice --distance 0`, clear through
 the AM channel) and `<id>-far.wav` (`--distance 0.6 --fragmentation 0.3`). The
 near and far files are the first 90 s (`SECONDS_PER_FILE` overrides). Its
 output includes RMS, peak and spectral centroid for each file; the plain files
@@ -222,7 +297,8 @@ version a dream or just an annoyance?
 **Raw / render split, and why.** Paid takes must never be overwritten by a placeholder
 effect. `voice` writes each provider take (loudness-normalised) to `pNN.raw.wav` and
 never touches it again; resumability, `voice.json`, the resume guard and the cost
-estimate (`_remaining`) all look at raw files only. A free, re-runnable step
+estimate (`_remaining`) all look at raw takes and piece caches only (see "Final
+review fixes" below). A free, re-runnable step
 (`voicing.render_character`, CLI `sleepmix esoterica render <id>|--all`) applies the
 character, re-normalises to -24 dBFS speech RMS / -3 dBFS peak and atomically rewrites
 `pNN.wav` (what the manifest points at). Seed is crc32 of (script id, passage index), so a
@@ -237,7 +313,7 @@ no raws) would need re-voicing; none exists yet.
 | tape | wow 0.4 Hz +-3 cents; flutter 7 Hz +-1 cent; hiss -52 dBFS RMS; 2nd-order 7 kHz lowpass |
 | room | dry voice plus a synthetic tail (own impulse response, not `sleepmix.effects`: pedalboard cannot go below ~0.6 s to -60 dB and its wet/dry gains are not energy-true): flat-spectrum random-phase noise, -60 dB at 0.4 s (measured 0.38 s), 5 kHz one-pole damping, tail = 15% of output energy across 100-4000 Hz (measured 14.8%); no RMS matching (mean +0.6 dB; `normalise` sets level) |
 | oldmic | tanh drive 1.3 (`tanh(1.3x)/1.3`), 2nd-order 150-5000 Hz bandpass; RMS matched to input (the band takes a few dB off broadband sound; `normalise` sets final level) |
-| hum | 50 Hz + 2nd + 3rd harmonics, each -55 dBFS, random phase, 5 ms fade-in |
+| hum | 50 Hz + 2nd + 3rd harmonics, each -55 dBFS, random phase, 5 ms fade-in (and, like every kind, the 10 ms render edge fade at both ends) |
 | clean | identity |
 
 ### Voicing (Plan 8a Task 3): built and run
@@ -281,8 +357,13 @@ The audition ran at STOP 2 and `voices.yaml` `chosen:` is filled (see above);
   `GET /v1/voices/{id}` for this account, but the audition and the voicing
   worked with them by id (no add needed).
 - The API key lacks `user_read`, so the subscription tier could not be read.
-- A shuffle passage that fails part-way is re-voiced whole on rerun (a few
-  short lines are paid twice); every other passage is resumable exactly.
+- **Resume is per request, not per passage** (final review). Earlier this
+  section said every passage was "resumable exactly"; that was false: a
+  passage's pieces were held in memory and written only when all succeeded, so
+  a failure re-billed the earlier pieces. Now each provider response is cached
+  as `pNN.sMM.<key>.seg.wav` the moment it arrives; a re-run sends only the
+  failed piece onwards. What is still paid twice: a request that timed out or
+  failed after the provider had already billed it (next bullet).
 - Shuffle French detection is an article heuristic, not a language model.
 - **A timed-out request may still be billed.** The read timeout is 300 s; if a
   provider finishes a generation after the client gave up, it may charge for
@@ -298,7 +379,8 @@ The audition ran at STOP 2 and `voices.yaml` `chosen:` is filled (see above);
 - **Resume never mixes voices:** each recording directory gets a `voice.json`
   (provider, model, voice_id) before its first request; `voice` refuses, before
   spending, to resume a recording with a different voice, or one whose
-  passages have no record of their voice.
+  passages have no record of their voice. A `voice.json` with no paid audio
+  beside it binds nothing (final review).
 - ElevenLabs `language_code` is sent only for French (the API reference says
   an unsupported code is ignored but lists no models that accept it).
 
