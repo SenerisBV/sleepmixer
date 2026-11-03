@@ -4,14 +4,14 @@ show: lessons
 title: Lesson One, From the Far End
 language: en+invented
 speaker: >
-  A woman in middle age reading a language course for tape, in a small dead
-  room with a good microphone. Clinical, even, unhurried: the voice of
-  someone who has said these sentences thousands of times and finds nothing
-  strange in them. She never explains the language, never smiles at it,
-  never checks whether you are keeping up. She leaves real room for the
-  listener to answer.
+  The course's one teacher, the same voice in every lesson whatever the
+  language: middle-aged, reading for tape close to a good microphone in a
+  small dead room. Clinical, even, unhurried: someone who has said these
+  sentences thousands of times and finds nothing strange in them. Never
+  amused, never explains, never checks whether you are keeping up. Leaves
+  real room for the listener to answer.
 source_character: clean
-voice_profile: female, middle-aged, deep, clinical
+voice_profile: middle-aged, deep, clinical
 voice:
 ---
 

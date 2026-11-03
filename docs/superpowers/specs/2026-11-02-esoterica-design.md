@@ -339,3 +339,5 @@ Both are taught clinically: the teacher is never amused and never checks on you.
 **Parked:** the animal lesson. A voice model can't growl or sing a whale call convincingly. It would need ElevenLabs' sound-effects generation (a different endpoint), with the teacher's line followed by a generated call. That is a pipeline change, so it is recorded in `docs/project-state.md` as a later door.
 
 **Also added at STOP 1:** the operator added a `voice_profile` front-matter field to each script, a few words describing the voice as they imagined it. STOP 2 picks voices against it.
+
+**Who speaks (operator, STOP 1).** A show with a recurring host keeps one voice: "we should keep one voice for the language" (one teacher across all lessons), and the same holds for the commentator, newsreader, meditation guide and shuffler. But "testimonies should actually change and not be the same person repeated": every testimony is a different person with a different voice. *Claude's call:* addresses get the same treatment, since each is a different invented figure. As the library grows, the voice pool for testimonies has to grow with it, so that no two testimonies share a voice.

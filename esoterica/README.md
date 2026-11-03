@@ -38,6 +38,8 @@ first thing in the file.
 | `voice_profile` | no | a short comma-separated list of the voice as the operator imagines it (e.g. `female, older, slow, deep, scratchy`). The operator's words; STOP 2 picks voices against it before the `speaker` note |
 | `voice` | yes | present but empty (YAML null) until STOP 2 picks one |
 
+**Who speaks.** A show with a recurring host keeps one voice: the same commentator, newsreader, teacher, guide and shuffler every time, so all lessons share one teacher. Testimonies and addresses are different people, so every recording gets its own voice and none repeats. The voice comes from `esoterica/voices.yaml`, keyed by show or, for testimonies and addresses, by recording id.
+
 Example:
 
 ```yaml

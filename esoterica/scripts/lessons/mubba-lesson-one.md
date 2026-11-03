@@ -4,13 +4,14 @@ show: lessons
 title: Mubba, Lesson One
 language: en+invented
 speaker: >
-  A man in middle age reading a language course for tape, close to a good
-  microphone in a carpeted room. Clinical, precise, entirely serious: he
-  teaches a language built almost wholly from one soft word, and he hears
-  every distinction in it. Never amused, never impatient. He leaves real
-  room for the listener to answer.
+  The course's one teacher, the same voice in every lesson whatever the
+  language: middle-aged, reading for tape close to a good microphone in a
+  small dead room. Clinical, even, unhurried: someone who has said these
+  sentences thousands of times and finds nothing strange in them. Never
+  amused, never explains, never checks whether you are keeping up. Leaves
+  real room for the listener to answer.
 source_character: clean
-voice_profile: male, middle-aged, deep, clinical
+voice_profile: middle-aged, deep, clinical
 voice:
 ---
 

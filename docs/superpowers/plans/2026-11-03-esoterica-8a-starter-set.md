@@ -200,9 +200,10 @@ Total: about 15k words, roughly 90k characters, within budget.
   - **`cli.py`:** commands `sleepmix esoterica estimate`, `sleepmix esoterica audition --show <show>|--all [--yes]` and `sleepmix esoterica voice <id>|--all [--yes]`. Each prints the estimate and spends only with `--yes`.
   - **`esoterica/voices.yaml`:**
     - `providers:` gives per-provider `model`, `price_per_char` and `max_chars`, all from the current docs.
-    - `candidates:` gives, per script (keyed by script id; amended at STOP 1 because `voice_profile` is per script) per provider, 2–3 `{voice_id, name, why}` entries.
-    - `chosen:` gives, per script id, `{provider, model, voice_id}`. It stays empty until STOP 2.
-    - The audition excerpt is about 120 spoken words from the first passage of every script (45–60 s). Audition output goes to `esoterica/audition/<script-id>/<provider>-<voice-name>.wav`, plus `esoterica/audition/index.md` listing them.
+    - **Voice identity (amended at STOP 1, operator's rule):** a show with a recurring host keeps **one voice for the whole show**. That covers `sideline`, `stations`, `lessons` (one teacher for the language), `meditations` and `shuffles`. A show of different people gets **a different voice for every recording**: `testimonies` (the operator: "testimonies should actually change and not be the same person repeated") and, by Claude's extension, `addresses`. `PER_RECORDING_SHOWS = frozenset({"testimonies", "addresses"})` in `sleepmix/esoterica/voicing.py`.
+    - **`candidates:` and `chosen:` are keyed by voice slot.** A slot is the show name for a per-show show, or the script id for a per-recording show. `candidates:` gives, per slot per provider, 2–3 `{voice_id, name, why}` entries. `chosen:` gives, per slot, `{provider, model, voice_id}`, and stays empty until STOP 2.
+    - `def voice_slot(script: Script) -> str` returns `script.id` if `script.show in PER_RECORDING_SHOWS`, else `script.show`. Test: the two lessons share a slot, and the two testimonies have different slots. A validation test: the `chosen:` voice_ids of different testimony (and address) slots are pairwise distinct, so no testimony repeats a voice.
+    - The audition excerpt is about 120 spoken words from the first passage of the first script in each slot (45–60 s). Audition output goes to `esoterica/audition/<slot>/<provider>-<voice-name>.wav`, plus `esoterica/audition/index.md` listing them.
 
 - [ ] **Step 1: Read the current docs.** For each provider, record in the report:
   - the TTS endpoint and the most expressive model (ElevenLabs "v4" if it exists, as the operator flagged);
@@ -213,7 +214,7 @@ Total: about 15k words, roughly 90k characters, within budget.
   - price per character.
 
   Choose the intimacy settings per the spec recipe: lower energy and slower pace, close and conversational, variability over maximum stability.
-- [ ] **Step 2: List voices through each provider's voice-listing API.** These calls are free; run them outside tests, and write no key. Pick 2–3 candidates per script per provider, matching its `voice_profile` first, then warmth, age and intimacy, and for French-capable voices for `meditations` and the French shuffles. Write `voices.yaml`, with each candidate's `why`.
+- [ ] **Step 2: List voices through each provider's voice-listing API.** These calls are free; run them outside tests, and write no key. Pick 2–3 candidates per slot per provider, matching the `voice_profile` first (for a per-show slot, the profiles of its scripts agree), then warmth, age and intimacy, and for French-capable voices for `meditations` and the French shuffles. Write `voices.yaml`, with each candidate's `why`.
 - [ ] **Step 3: Write the failing tests.** Use fake sessions returning canned audio bytes, and never the network.
   - `chunk` keeps sentences intact and respects `max_chars`, and a 1,000-character single sentence hard-splits at word boundaries.
   - `voice_passage` joins chunks with no sample-to-sample jump greater than the jump inside the canned audio itself. Its RMS over speech frames is −24 ± 0.5 dBFS and its peak is ≤ −3 dBFS.
@@ -227,7 +228,7 @@ Total: about 15k words, roughly 90k characters, within budget.
 - [ ] **Step 6: Run** the esoterica tests and the full non-slow suite. Expected: all PASS.
 - [ ] **Step 7: Commit** `feat(esoterica): providers, voicing, cost guard, audition`.
 - [ ] **Step 8: Run the audition for real.** The spend is approved by the operator. Run `pipenv run sleepmix esoterica audition --all`, record the printed estimate in the report, then run it with `--yes`.
-- [ ] **Step 9: Measure each audition file** (duration, RMS, peak) and note Claude's pick per script in `voices.yaml` `chosen:`. Base the pick on the script's `voice_profile` (the operator's words, which come first), then the spec's recipe, the speaker note and any measurable proxies; don't describe sound qualities as heard. Commit `voices.yaml`.
+- [ ] **Step 9: Measure each audition file** (duration, RMS, peak) and note Claude's pick per slot in `voices.yaml` `chosen:`, with every testimony and address slot on a distinct voice. Base the pick on the script's `voice_profile` (the operator's words, which come first), then the spec's recipe, the speaker note and any measurable proxies; don't describe sound qualities as heard. Commit `voices.yaml`.
 - [ ] **Step 10: STOP 2.** The controller gives the operator `esoterica/audition/index.md`, the per-show picks, and any Cartesia spend estimate, and waits for go.
 
 ---
