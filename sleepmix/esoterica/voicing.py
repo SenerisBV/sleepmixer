@@ -342,12 +342,14 @@ def _base(out: Path) -> str:
 
 
 def piece_cache(out: Path, n: int, piece: Piece, voice: Voice,
-                speed: float | None = None) -> Path:
+                speed: float | None = None, delivery: str | None = None) -> Path:
     """Where piece `n` (0-based) of the file `out` is cached once paid for.
     A recording's own `speed` is part of the key (absent: the provider default)."""
     fields = (voice.provider, voice.model, voice.voice_id, piece.language, piece.text)
     if speed is not None:
         fields += (f"speed={speed!r}",)
+    if delivery:
+        fields += (f"delivery={delivery}",)
     key = hashlib.sha256("\n".join(fields).encode("utf-8"))
     return Path(out).parent / f"{_base(out)}.s{n + 1:02d}.{key.hexdigest()[:10]}.seg.wav"
 
@@ -371,13 +373,14 @@ def raw_takes(d: Path) -> list[Path]:
 
 def uncached_chars(pieces: list[Piece], out: Path, voice: Voice,
                    translate: Callable[[str], str], redo: bool = False,
-                   speed: float | None = None) -> int:
+                   speed: float | None = None, delivery: str | None = None) -> int:
     """Characters still to pay for to make `out` (0 if it exists, unless
     `redo`: it is about to be deleted and voiced again)."""
     if Path(out).exists() and not redo:
         return 0
-    return sum(len(translate(pc.text)) for n, pc in enumerate(pieces)
-               if not piece_cache(out, n, pc, voice, speed).exists())
+    extra = len(delivery) + 1 if delivery else 0
+    return sum(len(translate(pc.text)) + extra for n, pc in enumerate(pieces)
+               if not piece_cache(out, n, pc, voice, speed, delivery).exists())
 
 
 def _read_mono(path: Path) -> np.ndarray:
@@ -387,7 +390,7 @@ def _read_mono(path: Path) -> np.ndarray:
 
 def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Path,
                   rng: np.random.Generator | None = None,
-                  speed: float | None = None) -> float:
+                  speed: float | None = None, delivery: str | None = None) -> float:
     """Synthesize every uncached piece (caching each response at once), then
     assemble, normalise and write `out`, and drop the caches."""
     out = Path(out)
@@ -397,11 +400,12 @@ def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Pa
         raise ValueError(f"nothing to voice for {out.name}")
     audio: list[np.ndarray] = []
     for n, pc in enumerate(pieces):
-        cache = piece_cache(out, n, pc, voice, speed)
+        cache = piece_cache(out, n, pc, voice, speed, delivery)
         if cache.exists():
             audio.append(_read_mono(cache))
             continue
-        x, sr = provider.synthesize(pc.text, voice.voice_id, voice.model, pc.language)
+        text = f"{delivery} {pc.text}" if delivery else pc.text
+        x, sr = provider.synthesize(text, voice.voice_id, voice.model, pc.language)
         x = _to_sr(x, sr)
         _write_atomic(x, cache)  # paid for: keep it before anything else can fail
         audio.append(x)
@@ -419,7 +423,8 @@ def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Pa
 
 
 def voice_passage(provider: Provider, text: str, voice: Voice, language: str,
-                  out: Path, speed: float | None = None) -> float:
+                  out: Path, speed: float | None = None,
+                  delivery: str | None = None) -> float:
     """Voice one passage (neutral cues) to `out`; return its duration in seconds.
 
     A `[long pause]` is real silence (LONG_PAUSE_S) rather than a provider cue,
@@ -427,14 +432,15 @@ def voice_passage(provider: Provider, text: str, voice: Voice, language: str,
     exists; resumes from the piece caches if an earlier run failed part-way.
     """
     pieces = passage_pieces(text, provider.max_chars, provider.translate_cues, language)
-    return _voice_pieces(provider, pieces, voice, out, speed=speed)
+    return _voice_pieces(provider, pieces, voice, out, speed=speed, delivery=delivery)
 
 
 def voice_shuffle(provider: Provider, lines: list[str], voice: Voice, language: str,
-                  out: Path, rng: np.random.Generator, speed: float | None = None) -> float:
+                  out: Path, rng: np.random.Generator, speed: float | None = None,
+                  delivery: str | None = None) -> float:
     """One image per call, assembled with 2–3 s gaps from `rng`."""
     return _voice_pieces(provider, shuffle_pieces(lines, language), voice, out, rng,
-                         speed=speed)
+                         speed=speed, delivery=delivery)
 
 
 def recording_pieces(script: Script, p, max_chars: int,
@@ -525,6 +531,17 @@ def check_resume_voice(script: Script, voice: Voice, library: Path) -> None:
             f"{voice.model}/{voice.voice_id}; delete {d} to re-voice with the new voice")
 
 
+# Providers that would read a delivery tag aloud rather than act on it.
+NO_DELIVERY_TAGS = frozenset({"cartesia"})
+
+
+def check_delivery(script: Script, voice: Voice) -> None:
+    """Refuse a `delivery` tag for a provider that would speak it."""
+    if script.delivery and voice.provider in NO_DELIVERY_TAGS:
+        raise ValueError(f"{script.id}: delivery {script.delivery} is an ElevenLabs "
+                         f"v4 tag; {voice.provider} would read it aloud")
+
+
 def voice_recording(script: Script, provider: Provider, voice: Voice,
                     library: Path, on_error=None) -> Manifest | None:
     """Voice every passage of `script` into `<library>/<id>/`.
@@ -535,6 +552,7 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
     when that happens.
     """
     d = Path(library) / script.id
+    check_delivery(script, voice)
     check_resume_voice(script, voice, library)
     ensure_current(script, library)
     if not (d / VOICE_FILE).exists() or not paid_audio(d):
@@ -546,14 +564,16 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
         for p in script.passages:
             raw = d / raw_passage_file(p.index)
             if not raw.exists():  # record the text before paying for it
-                _write_json_atomic(_take_record(p, voice, speed=script.speed),
+                _write_json_atomic(_take_record(p, voice, speed=script.speed,
+                                                delivery=script.delivery),
                                    d / take_sidecar_file(p.index))
             if script.show == "shuffles":
                 voice_shuffle(provider, shuffle_lines(p.text), voice, script.language,
-                              raw, shuffle_rng(script.id, p.index), speed=script.speed)
+                              raw, shuffle_rng(script.id, p.index), speed=script.speed,
+                              delivery=script.delivery)
             else:
                 voice_passage(provider, p.text, voice, script.language, raw,
-                              speed=script.speed)
+                              speed=script.speed, delivery=script.delivery)
             done += 1
     except ProviderError as e:
         msg = f"{script.id}: stopped at passage {done + 1}: {e}"
@@ -616,11 +636,12 @@ def _write_json_atomic(obj: dict, out: Path) -> None:
 
 
 def _take_record(p, voice: Voice, backfilled: bool = False,
-                 speed: float | None = None) -> dict:
+                 speed: float | None = None, delivery: str | None = None) -> dict:
     """`speed` is the script's own speed (None: the provider default); a sidecar
     without the key predates it and means None."""
     return {"index": p.index, "text_sha256": text_sha256(p.text),
-            **_voice_record(voice), "speed": speed, "backfilled": backfilled}
+            **_voice_record(voice), "speed": speed, "delivery": delivery,
+            "backfilled": backfilled}
 
 
 class StaleTakesError(ValueError):
@@ -677,6 +698,9 @@ def check_takes(script: Script, library: Path) -> tuple[dict[str, str], list]:
                 was, now = (("default" if v is None else v)
                             for v in (rec.get("speed"), script.speed))
                 stale[name] = f"its speed changed since it was voiced ({was} -> {now})"
+            elif rec.get("delivery") != script.delivery:
+                stale[name] = (f"its delivery tag changed since it was voiced "
+                               f"({rec.get('delivery') or 'none'} -> {script.delivery or 'none'})")
         elif manifest_text.get(p.index) == spoken_text(p):
             backfill.append(p)
         else:

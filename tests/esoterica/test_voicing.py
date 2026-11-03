@@ -810,3 +810,41 @@ def test_render_applies_pause_stretch_and_records_it(tmp_path):
     assert m2.passages[0].duration_s > plain + 2.5  # the 3 s long pause roughly doubled
     assert m2.character_params["pause_stretch"] == 2.0
     assert (lib / "rec" / "p01.raw.wav").read_bytes() == raw
+
+
+def test_delivery_tag_prefixes_every_request_and_is_recorded(tmp_path):
+    s = _replace(write_script(tmp_path / "scripts", "testimonies", "rec",
+                              ["One. [long pause] Two.", "Three."]),
+                 delivery="[slowly]")
+    fp = FakeProvider()
+    lib = tmp_path / "lib"
+    voice_recording(s, fp, V, lib)
+    assert [c[0] for c in fp.calls] == ["[slowly] One.", "[slowly] Two.", "[slowly] Three."]
+    assert json.loads((lib / "rec" / "p01.raw.json").read_text())["delivery"] == "[slowly]"
+    assert check_takes(s, lib) == ({}, [])
+    stale, _ = check_takes(_replace(s, delivery=None), lib)
+    assert "delivery" in stale["p01"]
+
+
+def test_a_cache_with_another_delivery_is_not_reused(tmp_path):
+    from sleepmix.esoterica.voicing import Piece
+    pc = Piece("Alpha.", "en", 0.0)
+    out = tmp_path / "p01.raw.wav"
+    assert piece_cache(out, 0, pc, V, delivery="[slowly]") != piece_cache(out, 0, pc, V)
+
+
+def test_delivery_counts_in_the_estimate(tmp_path):
+    from sleepmix.esoterica.voicing import Piece, uncached_chars
+    pieces = [Piece("Alpha.", "en", 0.0), Piece("Bravo.", "en", 3.0)]
+    out = tmp_path / "p01.raw.wav"
+    plain = uncached_chars(pieces, out, V, lambda t: t)
+    assert uncached_chars(pieces, out, V, lambda t: t, delivery="[slowly]") == plain + 2 * 9
+
+
+def test_delivery_is_refused_for_a_provider_that_would_speak_it(tmp_path):
+    s = _replace(write_script(tmp_path / "scripts", "testimonies", "rec", ["One."]),
+                 delivery="[slowly]")
+    fp = FakeProvider()
+    with pytest.raises(ValueError, match="delivery"):
+        voice_recording(s, fp, Voice("cartesia", "sonic-3.6", "x"), tmp_path / "lib")
+    assert fp.calls == []

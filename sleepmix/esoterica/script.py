@@ -16,7 +16,10 @@ LANGUAGES = frozenset({"en", "fr", "en+invented"})
 INTENSITIES = frozenset({"low", "medium", "high"})
 
 _REQUIRED = ("id", "show", "title", "language", "speaker", "source_character", "voice")
-_OPTIONAL = ("voice_profile", "speed", "pause_stretch")
+_OPTIONAL = ("voice_profile", "speed", "pause_stretch", "delivery")
+# delivery: inline provider tags sent before every request, e.g. ElevenLabs v4
+# "[slowly, languidly, like molasses]" (v4 ignores `speed`; tags do slow it).
+_DELIVERY = re.compile(r"^\[[^\[\]\n]+\](\s*\[[^\[\]\n]+\])*$")
 # speed: the provider's speaking-rate setting for this recording (ElevenLabs
 # accepts 0.7-1.2, Cartesia 0.6-1.5); pause_stretch: render-time factor on the
 # silences between phrases (free to change, raw takes are not touched).
@@ -52,6 +55,7 @@ class Script:
     path: Path
     speed: float | None = None
     pause_stretch: float = 1.0
+    delivery: str | None = None
 
 
 def spoken_text(p: Passage) -> str:
@@ -124,6 +128,12 @@ def load_script(path: Path) -> Script:
 
     speed = number("speed", *SPEED_RANGE)
     pause_stretch = number("pause_stretch", *PAUSE_STRETCH_RANGE) or 1.0
+    delivery = meta.get("delivery")
+    if delivery is not None and (not isinstance(delivery, str)
+                                 or not _DELIVERY.match(delivery.strip())):
+        fail("delivery must be one or more [bracketed] tags, e.g. '[slowly]'",
+             key_line("delivery"))
+    delivery = delivery.strip() if delivery else None
     voice = meta["voice"]
     if voice is not None and not isinstance(voice, dict):
         fail("voice must be empty or a mapping", key_line("voice"))
@@ -172,7 +182,7 @@ def load_script(path: Path) -> Script:
                   language=meta["language"], speaker=meta["speaker"],
                   source_character=meta["source_character"], voice_profile=vp,
                   voice=voice, passages=tuple(passages), path=path,
-                  speed=speed, pause_stretch=pause_stretch)
+                  speed=speed, pause_stretch=pause_stretch, delivery=delivery)
 
 
 def load_all(root: Path) -> list[Script]:

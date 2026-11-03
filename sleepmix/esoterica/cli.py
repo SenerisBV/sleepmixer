@@ -19,7 +19,7 @@ from .providers import Cartesia, ElevenLabs, ProviderError
 from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
     MissingRawError, StaleTakesError, Voice, VoiceMismatchError, VoicesConfig, billed_chars,
-    check_distinct_voices, check_resume_voice, check_takes, load_voices, passage_pieces,
+    check_distinct_voices, check_delivery, check_resume_voice, check_takes, load_voices, passage_pieces,
     raw_passage_file, raw_takes, recording_pieces, revoice_files,
     render_recording, shuffle_billed_chars, shuffle_lines, shuffle_pieces, shuffle_rng,
     split_sentences,
@@ -161,7 +161,8 @@ def _remaining(script: Script, library: Path, voice: Voice, cfg: VoicesConfig,
     mc = _max_chars(cfg, voice.provider)
     return sum(uncached_chars(recording_pieces(script, p, mc, t),
                               d / raw_passage_file(p.index), voice, t,
-                              redo=p.index in revoice, speed=script.speed)
+                              redo=p.index in revoice, speed=script.speed,
+                              delivery=script.delivery)
                for p in script.passages)
 
 
@@ -209,6 +210,7 @@ def voice(script_id, all_, revoice_, yes, library, scripts_root, voices_path, en
             + " (pick them at STOP 2 first)")
     try:
         for s in scripts:
+            check_delivery(s, cfg.voice_for(voice_slot(s)))
             check_resume_voice(s, cfg.voice_for(voice_slot(s)), library)
     except (VoiceMismatchError, ValueError) as e:
         raise click.ClickException(str(e)) from None

@@ -309,3 +309,15 @@ def test_pace_present(tmp_path):
 def test_pace_rejected(tmp_path, extra, msg):
     with pytest.raises(ScriptError, match=msg):
         load_script(good(tmp_path, extra=extra))
+
+
+def test_delivery_tag(tmp_path):
+    assert load_script(good(tmp_path)).delivery is None
+    s = load_script(good(tmp_path, extra='delivery: "[slowly, languidly, like molasses]"\n'))
+    assert s.delivery == "[slowly, languidly, like molasses]"
+
+
+@pytest.mark.parametrize("value", ["slowly", "[slowly] and then", "3", "''"])
+def test_delivery_must_be_bracketed_tags(tmp_path, value):
+    with pytest.raises(ScriptError, match="delivery"):
+        load_script(good(tmp_path, extra=f"delivery: {value}\n"))

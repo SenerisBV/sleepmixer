@@ -42,6 +42,7 @@ first thing in the file.
 | `source_character` | yes | one of `tape`, `room`, `oldmic`, `hum`, `clean` |
 | `voice_profile` | no | a short comma-separated list of the voice as the operator imagines it (e.g. `female, older, slow, deep, scratchy`). The operator's words; STOP 2 picks voices against it before the `speaker` note |
 | `speed` | no | the provider's speaking rate for this recording, over `voices.yaml` (ElevenLabs 0.7-1.2, Cartesia 0.6-1.5; the parser accepts 0.5-1.5). Recorded per take; changing it makes the takes stale, so re-voice with `--revoice pNN`. **`eleven_v4` ignores it** (measured 2026-11-03); slow v4 down with an inline tag such as `[slowly]` instead |
+| `delivery` | no | one or more bracketed ElevenLabs v4 tags sent before every request, e.g. `"[slowly, languidly, like molasses]"`. Recorded per take; a change makes the takes stale. Refused for Cartesia (it would read the tag aloud). One tag only steers the first sentence or two of a long request; see `docs/project-state.md`, "Pace" |
 | `pause_stretch` | no | 1.0-4.0, default 1. Free and render-time: `render` lengthens the silences between phrases by this factor (speech untouched). For an end-of-the-night pace |
 | `voice` | yes | present but empty (YAML null) until STOP 2 picks one |
 

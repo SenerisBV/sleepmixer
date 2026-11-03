@@ -214,6 +214,37 @@ ElevenLabs total now about 59,983 of 265,000 credits. Then a tag test in the two
 drawn out]` gave Lantern 8.16 / 10.00 / 9.04 / 10.16 / 10.48 s and Northern
 7.04 / 8.24 / 7.44 / 8.24 / 8.32 s (scratchpad `molasses/`). Total about 61,291.
 
+**Tag references, by ear (the operator, 2026-11-03).** "Molasses was the best
+over both. Sleepy was probably best on Northern Tide, but molasses was a close
+second, and it was the best on Lantern Accords." They asked for these to be
+kept because the differences are subtle and may suit different places:
+
+| Tag | Heard as |
+|---|---|
+| `[slowly, languidly, like molasses]` | best over both; the one in use |
+| `[very slowly, sleepy, drawn out]` | probably best on Northern Tide (Bill); a candidate for other sleepy, older voices |
+| `[slowly]` | as slow as molasses by the numbers |
+| `[languidly]` | barely slower; changes tone more than pace |
+
+**The `delivery` key and a second miss.** A script's `delivery` (one or more
+bracketed tags) is sent before every request, recorded in the sidecar, part of
+the cache key and counted in the estimate; a change makes the takes stale; it
+is refused for Cartesia, which would read it aloud. Both scripts got
+`delivery: "[slowly, languidly, like molasses]"` (their `speed: 0.7` removed,
+it does nothing on v4) and were re-voiced: 17,853 characters. The raw takes
+came back the same length again (Lantern 8.2 min, Northern 11.9 min). A
+request here is about 1,600 characters (a passage is one request unless a
+`[long pause]` splits it), and one tag at the start wears off after the first
+sentence or two; the one-sentence test could not show that. A realistic test
+then (Harriet, three paragraphs of Lantern p01, 2,242 characters), speech time
+with silences removed: plain 20.5 s; tag at the start 22.7 s (+11%); tag before
+every paragraph 23.9 s (+17%); tag before every sentence 25.3 s (+23%, but 80%
+more characters). Files: scratchpad `molasses-long/`. The molasses takes on
+disk are kept as they are; the takes before them are in
+`esoterica/library/_superseded/` (`-speed-0.85`, `-speed-0.7-ignored`).
+**Decision pending with the operator:** tag per paragraph or per sentence.
+ElevenLabs total now about 81,386 of 265,000.
+
 **Placeholders** (Claude's, tune by ear):
 
 | Name | Value | Where |

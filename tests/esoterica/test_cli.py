@@ -583,3 +583,20 @@ def test_revoice_after_a_speed_change(monkeypatch, tmp_path, fakes):
                                   "--yes", *args])
     assert r.exit_code == 0, r.output
     assert calls(fakes) > before
+
+
+def test_delivery_for_cartesia_is_refused_before_anything_is_deleted(monkeypatch, tmp_path, fakes):
+    root = _speedy_scripts(tmp_path)
+    p = root / "testimonies" / "plain-one.md"
+    voices = voices_with_chosen(tmp_path, {
+        s: {"provider": "cartesia", "model": "sonic-3.6", "voice_id": f"v-{s}"}
+        for s in ("slow-one", "plain-one")})
+    args = ["--scripts", str(root), "--voices", str(voices), "--library", str(tmp_path / "lib")]
+    assert CliRunner().invoke(main, ["esoterica", "voice", "plain-one", "--yes", *args]).exit_code == 0
+    p.write_text(p.read_text().replace("voice:\n", "delivery: '[slowly]'\nvoice:\n"))
+    before = calls(fakes)
+    r = CliRunner().invoke(main, ["esoterica", "voice", "plain-one", "--revoice", "p01",
+                                  "--yes", *args])
+    assert r.exit_code != 0 and "read it aloud" in r.output
+    assert calls(fakes) == before
+    assert (tmp_path / "lib" / "plain-one" / "p01.raw.wav").exists()

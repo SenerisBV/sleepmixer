@@ -12,7 +12,7 @@ speaker: >
   hurried by it. She pauses for the hall rather than for applause.
 source_character: room
 voice_profile: female, deep, intense, sermonic, old-fashioned, commanding
-speed: 0.7
+delivery: "[slowly, languidly, like molasses]"
 pause_stretch: 2.2
 voice:
 ---
