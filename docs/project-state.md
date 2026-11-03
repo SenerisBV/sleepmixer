@@ -4782,13 +4782,18 @@ no AVFoundation, guarded by `nightRadioImportsNoAVFoundation`). Code in
   Engine seconds from 0 (cold start, no lead-in; the on-fade in Task 8 covers settling).
   Curves call `DriftClock.level(at:)` directly: no per-block snapshot was needed
   (processors read it at most once per 512 frames, scenes per event).
-- `StationVoice`: plays the program's segment via `FileSource` with clip time 0 at
-  the segment start (a segment starting mid-block starts at its exact frame);
+- `StationVoice`: plays the program's segment via `FileSource`. A segment whose start
+  falls inside the block starts from clip time 0 at its exact frame. A segment the
+  program reveals late (it reveals on a whole-second grid but backdates `start` to
+  `end + gap`, so up to ~1 s late whenever the gap isn't whole seconds) plays from
+  clip time 0 at the reveal frame, never seeked; the speech runs up to ~1 s behind
+  the schedule (absorbed by the next gap, >= 3 s). Only the switch-on segment (already
+  under way at engine second 0) is seeked, with a 30 ms raised-cosine fade-in. A
+  clip still sounding when the next segment starts fades out over 50 ms;
   per-block linear ramp to `Drift.voiceGainDB`; own `Distance` on
   `WarpDepth(distance: Drift.voiceDistance)`. Preloads the next clip when
   `upcoming` is under 5 s away; holds at most current + next. A nil load is
-  silence; the schedule carries on. A clip longer than its scheduled seconds
-  plays out rather than being cut.
+  silence; the schedule carries on.
 - `StaticChain`: `AMChannel` over zeros with the static settings, × per-block
   ramp to `Drift.staticGainDB`, then `masterGuard`.
 - Seeds: `NightRandom.hash(seed, stationIndex, k)` with stationIndex = index in
@@ -4797,10 +4802,12 @@ no AVFoundation, guarded by `nightRadioImportsNoAVFoundation`). Code in
 
 **Placeholders (tune by ear):** `StationChain.bedGainDB` −8 dB;
 `StaticChain.settings` (low 300, high 3000, hiss −30, crackle −36, fadeDepth 0.4,
-fadeRate 0.08, squash 0.3); `StationVoice.preloadSeconds` 5 s.
+fadeRate 0.08, squash 0.3); `StationVoice.preloadSeconds` 5 s;
+`StationVoice.fadeInSeconds` 0.03 (switch-on seek); `StationVoice.fadeOutSeconds` 0.05
+(overrunning clip replaced).
 
 **Measured:** release build on the Mac, three StationChains + StaticChain, 60 s at
-44.1 kHz in 2048-frame blocks: 1.51 s wall-clock, **about 40× real time**
+44.1 kHz in 2048-frame blocks: 1.41 s wall-clock, **about 42× real time** (after the fix round; 40× before)
 (`swift test -c release --filter rendersFastEnough`; needs ≥ 10×). Test temp
 bundle (300 Hz tone at −24 dBFS RMS): voice 11.8 dB above the Lantern bed over
 speech at drift 0; static RMS −35.8 dBFS at drift 0.
