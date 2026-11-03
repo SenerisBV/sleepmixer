@@ -11,6 +11,7 @@ speaker: >
   He reads unhurried, with the tiny pauses of someone glancing between
   pages, and never raises his voice for anything.
 source_character: hum
+voice_profile: male, clear, authoritative, busy
 voice:
 ---
 

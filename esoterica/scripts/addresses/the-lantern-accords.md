@@ -11,6 +11,7 @@ speaker: >
   back rows. Grave, warm, rhythmic, used to being listened to and never
   hurried by it. She pauses for the hall rather than for applause.
 source_character: room
+voice_profile: female, deep, intense, sermonic, old-fashioned, commanding
 voice:
 ---
 

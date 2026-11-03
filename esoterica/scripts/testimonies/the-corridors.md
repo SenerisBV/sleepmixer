@@ -11,6 +11,7 @@ speaker: >
   little hoarse; she speaks slowly, smiles at the hard parts, and keeps going
   back to the details because the details are how she knows it was real.
 source_character: tape
+voice_profile: female, older, slow, deep, scratchy
 voice:
 ---
 

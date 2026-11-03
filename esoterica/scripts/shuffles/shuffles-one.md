@@ -10,6 +10,7 @@ speaker: >
   after it. No performance, no colouring of the words; the images do the
   work. The few French lines are said by the same voice, naturally.
 source_character: clean
+voice_profile: female, clear, slow, clinical
 voice:
 ---
 

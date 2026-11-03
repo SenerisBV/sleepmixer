@@ -171,7 +171,7 @@ unrecognisable. Lengths are placeholders.
 | **Sideline** (sport commentary) | Play-by-play and colour commentary of a made-up sport whose rules are never fully explained, as if to a regional audience that knows them. Gentle, patient, full of small reverent details. | 4–6 passages | English |
 | **Addresses** (alternate-world speeches) | Speeches by invented figures at invented occasions in histories that didn't happen: a dedication, a farewell, a call to something. Grand in cadence, strange in content. | 3–5 passages | English |
 | **Strange stations** | A news-radio format (headlines, weather, traffic, time checks) from somewhere else: an alien city, the spirit realm. Calm, routine, impossible. | many short segments | English |
-| **Lessons** | A call-and-response language course for an invented language: phrases, repetition, pauses for the listener, a gently widening world glimpsed through the example sentences. | 4–6 passages | English + invented |
+| **Lessons** | A call-and-response language course for an invented language: phrases, repetition, pauses for the listener, a gently widening world glimpsed through the example sentences. *Amended at STOP 1 (2026-11-03), see below.* | 4–6 passages | English + invented |
 | **Méditations** | French guided meditations that begin conventionally and drift somewhere unexpected. | 3–5 passages | French |
 | **Shuffles** | Bursts of rapid, unrelated, concrete sensory images ("bright yellow … warm rain … sour apple"), one every 2–3 s, 20–40 per burst. Mixed between the longer pieces like the scenes are. | many 1–2 min bursts | English (a few French) |
 
@@ -320,3 +320,22 @@ loudness when it writes the file, so auditions compare fairly.
 3. **Voice the starter set**, with source character and manifests.
 4. **Engine file source** and `nightctl audition voice`.
 5. **Listening set and docs**, with the operator listening.
+
+## Amendment at STOP 1 (2026-11-03): lessons are not a real-sounding language
+
+The first lesson, *Aurish*, had a consistent invented grammar (*Vela en lume*). The operator read it and said it "feels too much like a romantic language, which is going to be distracting". A language that sounds learnable invites the half-asleep mind to try to learn it. The operator offered three directions:
+
+1. **One repeated nonsense word,** in the spirit of the Hamburglar's "robble robble" but not a clone of it. Spoken clinically, "this would actually be soothing".
+2. **An animal:** birds, whales, or "a non-specific animal that just growls, roars, and makes other guttural inarticulate noises" (not a dog or cat).
+3. **The same sentence with the letters reversed.**
+
+**Taken (Claude's call):** 1 and 3, written as two lessons so the audition can compare them:
+
+- `lessons/backward-lesson-one.md`: whole-sentence letter reversal ("Retaw eht no si noom eht"). It is never explained, and the vocabulary was chosen so the reversals stay pronounceable.
+- `lessons/mubba-lesson-one.md`: a whole language built from *mubba* and *mub*. The teacher calmly insists on distinctions no one can hear.
+
+Both are taught clinically: the teacher is never amused and never checks on you. *Aurish* was removed; it remains in git history.
+
+**Parked:** the animal lesson. A voice model can't growl or sing a whale call convincingly. It would need ElevenLabs' sound-effects generation (a different endpoint), with the teacher's line followed by a generated call. That is a pipeline change, so it is recorded in `docs/project-state.md` as a later door.
+
+**Also added at STOP 1:** the operator added a `voice_profile` front-matter field to each script, a few words describing the voice as they imagined it. STOP 2 picks voices against it.

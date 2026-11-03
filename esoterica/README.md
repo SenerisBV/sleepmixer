@@ -35,6 +35,7 @@ first thing in the file.
 | `language` | yes | `en`, `fr`, or `en+invented` |
 | `speaker` | yes | a prose note: age, manner, how close the microphone is, the room. Invented, never a real person |
 | `source_character` | yes | one of `tape`, `room`, `oldmic`, `hum`, `clean` |
+| `voice_profile` | no | a short comma-separated list of the voice as the operator imagines it (e.g. `female, older, slow, deep, scratchy`). The operator's words; STOP 2 picks voices against it before the `speaker` note |
 | `voice` | yes | present but empty (YAML null) until STOP 2 picks one |
 
 Example:
@@ -104,7 +105,7 @@ intensity comment is still allowed.
 | `sideline` | Play-by-play and colour commentary of a made-up sport, rules never fully explained, for a regional audience that knows them. Gentle, patient, reverent about small things. | `en` |
 | `addresses` | Speeches by invented figures at invented occasions in histories that didn't happen. Grand in cadence, strange in content. | `en` |
 | `stations` | News radio (headlines, weather, traffic, time checks) from somewhere else. Calm, routine, impossible. | `en` |
-| `lessons` | A call-and-response course in an invented language; the example sentences widen into a strange, gentle world. | `en+invented` |
+| `lessons` | A clinical call-and-response course in a "language" that is not a language: reversed English, or one soft word repeated (*mubba*). It must never sound like a real (especially Romance) language. The example sentences widen into a strange, gentle world. | `en+invented` |
 | `meditations` | French guided meditations that start conventionally and drift somewhere unexpected. | `fr` |
 | `shuffles` | Bursts of rapid, unrelated, concrete sensory images, a few in French. | `en` (some `fr` lines) |
 

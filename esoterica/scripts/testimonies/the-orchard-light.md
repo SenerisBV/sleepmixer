@@ -11,6 +11,7 @@ speaker: >
   himself on small facts and goes quiet when he gets near the centre of it.
   Now and then the creak of a stool.
 source_character: oldmic
+voice_profile: male, casual, articulate, british, deep
 voice:
 ---
 

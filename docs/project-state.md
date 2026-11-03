@@ -41,6 +41,11 @@ so it can grow into it.
 Everything below the Plan 7a section describes the Python engine and the web
 mixer as built through Plan 5, Phase 3.
 
+## Esoterica (Plan 8a, in progress on `feat/esoterica`): the deferred doors
+
+- **Animal-language lessons are parked** (STOP 1, 2026-11-03). The operator offered an animal as one direction for the lesson language: birds, whales, or "a non-specific animal that just growls, roars, and makes other guttural inarticulate noises" (not a dog or cat). Text-to-speech can't make those sounds convincingly. Building it means generating calls with ElevenLabs' sound-effects endpoint and placing each one after the teacher's line, a new step in the voicing pipeline. Of the operator's other two directions, reversed English and a repeated nonsense word became `lessons/backward-lesson-one.md` and `lessons/mubba-lesson-one.md`.
+- **Link import** (podcasts and other URLs) remains a later door, as the spec says.
+
 ## Plan 7a: two scenes through the channel
 
 **Status (2026-11-02): built and tested; not yet listened to.** Plan 7a is the

@@ -10,6 +10,7 @@ speaker: >
   someone from the south-west. She takes long pauses and sounds as if she
   can see what she is describing, and is gently pleased by it.
 source_character: clean
+voice_profile: french, female, clear, slow
 voice:
 ---
 

@@ -12,6 +12,7 @@ speaker: >
   game and loves telling you what the weather is doing. His colour partner,
   Wenna, is in the hut with him but never on the microphone.
 source_character: hum
+voice_profile: male, older, casual
 voice:
 ---
 

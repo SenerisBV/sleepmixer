@@ -86,6 +86,7 @@ These are spending and creative gates the operator asked for ("Let's do the audi
     - `language` (`en`, `fr`, or `en+invented`);
     - `speaker` (a prose note: age, manner, how close the microphone is, the room; invented, never a real person);
     - `source_character` (one of `tape`, `room`, `oldmic`, `hum`, `clean`);
+    - `voice_profile` (optional; added by the operator at STOP 1: a short comma-separated description of the voice they imagine);
     - `voice` (left empty until STOP 2).
   - **Passages:** separated by a line containing exactly `[passage]`. Each passage may start with an HTML comment `<!-- intensity: low|medium|high -->` (default `medium`).
   - **Neutral delivery cues,** inline, the only allowed set: `[pause]`, `[long pause]`, `[breath]`, `[softly]`, `[whisper]`, `[laughs quietly]`. Task 3's adapters translate or strip them per provider.
@@ -100,7 +101,7 @@ These are spending and creative gates the operator asked for ("Let's do the audi
 | `sideline/northern-tide-final.md` | Commentary on an invented sport | 5 | 2400 |
 | `addresses/the-lantern-accords.md` | An address by an invented figure in an invented history | 4 | 1800 |
 | `stations/wbx-the-far-shore.md` | A news-radio hour from somewhere else (headlines, weather, traffic, time checks) | 6 short | 2000 |
-| `lessons/aurish-lesson-one.md` | A call-and-response lesson in an invented language, with consistent grammar and vocabulary | 5 | 2000 |
+| `lessons/backward-lesson-one.md`, `lessons/mubba-lesson-one.md` | (Amended at STOP 1: *Aurish* sounded too much like a Romance language.) Two clinical call-and-response lessons, one in reversed English and one in a single repeated word | 4 each | ~650 each |
 | `meditations/la-maison-sous-la-mer.md` | A French guided meditation that drifts somewhere strange | 4 | 1600 |
 | `shuffles/shuffles-one.md` | Bursts of 20–40 concrete sensory images each, a few in French | 8 bursts | 1200 |
 
@@ -137,7 +138,7 @@ Total: about 15k words, roughly 90k characters, within budget.
 **Interfaces:**
 - Produces:
   - `@dataclass(frozen=True) class Passage: index: int; text: str; intensity: str  # "low"|"medium"|"high"`
-  - `@dataclass(frozen=True) class Script: id: str; show: str; title: str; language: str; speaker: str; source_character: str; voice: dict | None; passages: tuple[Passage, ...]; path: Path`
+  - `@dataclass(frozen=True) class Script: id: str; show: str; title: str; language: str; speaker: str; source_character: str; voice_profile: str | None; voice: dict | None; passages: tuple[Passage, ...]; path: Path`
   - `class ScriptError(ValueError)`. Its message always names the file, and the line where one applies.
   - `def load_script(path: Path) -> Script`
   - `def load_all(root: Path) -> list[Script]`
@@ -199,9 +200,9 @@ Total: about 15k words, roughly 90k characters, within budget.
   - **`cli.py`:** commands `sleepmix esoterica estimate`, `sleepmix esoterica audition --show <show>|--all [--yes]` and `sleepmix esoterica voice <id>|--all [--yes]`. Each prints the estimate and spends only with `--yes`.
   - **`esoterica/voices.yaml`:**
     - `providers:` gives per-provider `model`, `price_per_char` and `max_chars`, all from the current docs.
-    - `candidates:` gives, per show per provider, 2–3 `{voice_id, name, why}` entries.
-    - `chosen:` gives, per show, `{provider, model, voice_id}`. It stays empty until STOP 2.
-    - The audition excerpt is about 120 spoken words from the first passage of each show's first script (45–60 s). Audition output goes to `esoterica/audition/<show>/<provider>-<voice-name>.wav`, plus `esoterica/audition/index.md` listing them.
+    - `candidates:` gives, per script (keyed by script id; amended at STOP 1 because `voice_profile` is per script) per provider, 2–3 `{voice_id, name, why}` entries.
+    - `chosen:` gives, per script id, `{provider, model, voice_id}`. It stays empty until STOP 2.
+    - The audition excerpt is about 120 spoken words from the first passage of every script (45–60 s). Audition output goes to `esoterica/audition/<script-id>/<provider>-<voice-name>.wav`, plus `esoterica/audition/index.md` listing them.
 
 - [ ] **Step 1: Read the current docs.** For each provider, record in the report:
   - the TTS endpoint and the most expressive model (ElevenLabs "v4" if it exists, as the operator flagged);
@@ -212,7 +213,7 @@ Total: about 15k words, roughly 90k characters, within budget.
   - price per character.
 
   Choose the intimacy settings per the spec recipe: lower energy and slower pace, close and conversational, variability over maximum stability.
-- [ ] **Step 2: List voices through each provider's voice-listing API.** These calls are free; run them outside tests, and write no key. Pick 2–3 candidates per show per provider for warmth, age and intimacy, and for French-capable voices for `meditations` and the French shuffles. Write `voices.yaml`, with each candidate's `why`.
+- [ ] **Step 2: List voices through each provider's voice-listing API.** These calls are free; run them outside tests, and write no key. Pick 2–3 candidates per script per provider, matching its `voice_profile` first, then warmth, age and intimacy, and for French-capable voices for `meditations` and the French shuffles. Write `voices.yaml`, with each candidate's `why`.
 - [ ] **Step 3: Write the failing tests.** Use fake sessions returning canned audio bytes, and never the network.
   - `chunk` keeps sentences intact and respects `max_chars`, and a 1,000-character single sentence hard-splits at word boundaries.
   - `voice_passage` joins chunks with no sample-to-sample jump greater than the jump inside the canned audio itself. Its RMS over speech frames is −24 ± 0.5 dBFS and its peak is ≤ −3 dBFS.
@@ -226,7 +227,7 @@ Total: about 15k words, roughly 90k characters, within budget.
 - [ ] **Step 6: Run** the esoterica tests and the full non-slow suite. Expected: all PASS.
 - [ ] **Step 7: Commit** `feat(esoterica): providers, voicing, cost guard, audition`.
 - [ ] **Step 8: Run the audition for real.** The spend is approved by the operator. Run `pipenv run sleepmix esoterica audition --all`, record the printed estimate in the report, then run it with `--yes`.
-- [ ] **Step 9: Measure each audition file** (duration, RMS, peak) and note Claude's pick per show in `voices.yaml` `chosen:`. Base the pick on the spec's recipe, the script's speaker note and any measurable proxies; don't describe sound qualities as heard. Commit `voices.yaml`.
+- [ ] **Step 9: Measure each audition file** (duration, RMS, peak) and note Claude's pick per script in `voices.yaml` `chosen:`. Base the pick on the script's `voice_profile` (the operator's words, which come first), then the spec's recipe, the speaker note and any measurable proxies; don't describe sound qualities as heard. Commit `voices.yaml`.
 - [ ] **Step 10: STOP 2.** The controller gives the operator `esoterica/audition/index.md`, the per-show picks, and any Cartesia spend estimate, and waits for go.
 
 ---
