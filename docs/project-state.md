@@ -67,9 +67,9 @@ no raws) would need re-voicing; none exists yet.
 | Kind | Recipe |
 |---|---|
 | tape | wow 0.4 Hz +-3 cents; flutter 7 Hz +-1 cent; hiss -52 dBFS RMS; 2nd-order 7 kHz lowpass |
-| room | `sleepmix.effects` reverb: room_size 0.3 (~0.4 s decay), damping 0.6, wet 0.15 / dry 0.85, no pre-delay; RMS matched to input |
-| oldmic | tanh drive 1.3 (`tanh(1.3x)/1.3`), 2nd-order 150-5000 Hz bandpass; RMS matched to input |
-| hum | 50 Hz + 2nd + 3rd harmonics, each -55 dBFS, random phase |
+| room | dry voice plus a synthetic tail (own impulse response, not `sleepmix.effects`: pedalboard cannot go below ~0.6 s to -60 dB and its wet/dry gains are not energy-true): flat-spectrum random-phase noise, -60 dB at 0.4 s (measured 0.38 s), 5 kHz one-pole damping, tail = 15% of output energy across 100-4000 Hz (measured 14.8%); no RMS matching (mean +0.6 dB; `normalise` sets level) |
+| oldmic | tanh drive 1.3 (`tanh(1.3x)/1.3`), 2nd-order 150-5000 Hz bandpass; RMS matched to input (the band takes a few dB off broadband sound; `normalise` sets final level) |
+| hum | 50 Hz + 2nd + 3rd harmonics, each -55 dBFS, random phase, 5 ms fade-in |
 | clean | identity |
 
 ## Esoterica voicing (Plan 8a Task 3, 2026-11-03): built, audition not yet run

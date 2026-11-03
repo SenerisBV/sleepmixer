@@ -466,13 +466,15 @@ def render_character(script: Script, library: Path) -> list[PassageEntry]:
     """
     d = Path(library) / script.id
     _require_raw(script, d)
-    entries: list[PassageEntry] = []
-    for p in script.passages:
+    rendered: list[tuple[Path, np.ndarray]] = []
+    for p in script.passages:  # all in memory first: a crash never leaves a mixed set
         x, sr = sf.read(str(d / raw_passage_file(p.index)), dtype="float32")
         x = _to_sr(x, sr)
         y = normalise(apply_character(x, SR, script.source_character,
                                       character_seed(script.id, p.index)))
-        out = d / passage_file(p.index)
+        rendered.append((d / passage_file(p.index), y))
+    entries: list[PassageEntry] = []
+    for p, (out, y) in zip(script.passages, rendered):
         _write_atomic(y, out)
         entries.append(PassageEntry(index=p.index, file=out.name,
                                     duration_s=round(len(y) / SR, 3),

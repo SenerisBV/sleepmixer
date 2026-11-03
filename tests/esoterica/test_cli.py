@@ -1,7 +1,9 @@
 import re
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 import yaml
 from click.testing import CliRunner
 
@@ -310,7 +312,6 @@ def test_remaining_counts_raw_files_not_rendered(tmp_path):
     s = [x for x in load_all(REAL) if x.id == "the-corridors"][0]
     d = tmp_path / s.id
     d.mkdir()
-    import numpy as np, soundfile as sf
     sf.write(d / "p01.wav", np.zeros(10, np.float32), 44100, subtype="FLOAT")
     full = ecli._remaining(s, tmp_path, "elevenlabs")
     sf.write(d / "p01.raw.wav", np.zeros(10, np.float32), 44100, subtype="FLOAT")

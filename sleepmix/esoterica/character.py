@@ -7,11 +7,8 @@ audio in place. Every recipe is subtle and every value below is a PLACEHOLDER
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import butter, sosfilt
+from scipy.signal import butter, fftconvolve, sosfilt
 
-from ..audio import AudioBuffer
-from ..config import ReverbConfig
-from ..effects import apply_reverb
 
 KINDS = ("tape", "room", "oldmic", "hum", "clean")
 
@@ -20,12 +17,15 @@ TAPE_WOW_HZ, TAPE_WOW_CENTS = 0.4, 3.0
 TAPE_FLUTTER_HZ, TAPE_FLUTTER_CENTS = 7.0, 1.0
 TAPE_HISS_DB = -52.0           # white-noise RMS, dBFS
 TAPE_LOWPASS_HZ = 7000.0
-ROOM_CONFIG = ReverbConfig(room_size=0.3, damping=0.6, wet=0.15, dry=0.85,
-                           width=1.0, predelay_ms=0.0)   # ~0.4 s decay, 15% wet
+ROOM_DECAY_S = 0.4             # time for the reverb tail to fall 60 dB
+ROOM_WET = 0.15                # wet share of the output energy (wet / (dry + wet))
+ROOM_VOICE_BAND_HZ = (100.0, 4000.0)  # where the 15% is measured
+ROOM_DAMP_HZ = 5000.0          # the tail is a little darker than the voice
 OLDMIC_BAND_HZ = (150.0, 5000.0)
 OLDMIC_DRIVE = 1.3
 HUM_HZ = 50.0
 HUM_DB = -55.0                 # each of the fundamental, 2nd and 3rd harmonic
+HUM_FADE_S = 0.005             # fade-in so the hum has no step at sample 0
 
 
 def _db(db: float) -> float:
@@ -61,12 +61,34 @@ def _tape(x, sr, rng):
 
 
 def _room(x, sr, rng):
-    out = apply_reverb(AudioBuffer(x, sr), ROOM_CONFIG).data[:, 0]
-    out = out[: len(x)]
-    return _match_rms(np.pad(out, (0, len(x) - len(out))), x)
+    """A small room: the dry voice plus a short, dark, exponentially decaying noise tail.
+
+    Not `sleepmix.effects` reverb: pedalboard's tail cannot get shorter than
+    ~0.6 s to -60 dB and its wet/dry gains are not in energy terms, so the
+    "small room, 0.4 s, 15% wet" spec could not be met. This impulse response
+    is exact: amplitude -60 dB at ROOM_DECAY_S, and its energy is set so the
+    tail is ROOM_WET of the output energy across the voice band. Level is not
+    compensated (it rises ~0.7 dB); `normalise` sets it afterwards.
+    """
+    n = int(ROOM_DECAY_S * sr)
+    t = np.arange(n) / sr
+    # flat-magnitude random-phase noise (a plain noise IR has a Rayleigh-random
+    # response, so a held vowel could land on a hot or dead bin), then the decay
+    ph = np.exp(2j * np.pi * rng.random(n // 2 + 1))
+    ph[0] = 1
+    ir = np.fft.irfft(ph, n) * np.exp(-np.log(1000) * t / ROOM_DECAY_S)
+    ir = sosfilt(butter(1, ROOM_DAMP_HZ, "low", fs=sr, output="sos"), ir)
+    # scale so the tail's mean power gain over the voice band is wet/(1-wet)
+    H = np.abs(np.fft.rfft(ir, 1 << 17)) ** 2
+    f = np.fft.rfftfreq(1 << 17, 1 / sr)
+    band = (f >= ROOM_VOICE_BAND_HZ[0]) & (f <= ROOM_VOICE_BAND_HZ[1])
+    ir *= np.sqrt(ROOM_WET / (1 - ROOM_WET) / H[band].mean())
+    return x + fftconvolve(x.astype(np.float64), ir)[: len(x)]
 
 
 def _oldmic(x, sr, rng):
+    # The bandpass takes a few dB off broadband input, so the recipe matches RMS
+    # to its input to stay level-neutral on its own; `normalise` sets the final level.
     y = np.tanh(OLDMIC_DRIVE * x.astype(np.float64)) / OLDMIC_DRIVE
     return _match_rms(sosfilt(butter(2, OLDMIC_BAND_HZ, "band", fs=sr, output="sos"), y), x)
 
@@ -75,6 +97,8 @@ def _hum(x, sr, rng):
     t = np.arange(len(x)) / sr
     h = sum(np.sin(2 * np.pi * HUM_HZ * k * t + rng.uniform(0, 2 * np.pi))
             for k in (1, 2, 3)) * _db(HUM_DB)
+    fade = min(int(HUM_FADE_S * sr), len(x))
+    h[:fade] *= 0.5 * (1 - np.cos(np.pi * np.arange(fade) / max(fade, 1)))
     return x + h
 
 
