@@ -308,6 +308,24 @@ def test_render_fails_clearly_when_raw_is_missing(fakes, no_keys, tmp_path):
     assert "raw" in r.output and "voice" in r.output
 
 
+def test_render_all_skips_unvoiced_but_named_id_still_fails(fakes, no_keys, tmp_path):
+    v = all_chosen(tmp_path)
+    lib = tmp_path / "library"
+    run(["voice", "the-corridors", "--yes", "--scripts", str(REAL), "--voices", str(v),
+         "--library", str(lib)])
+    before = calls(fakes)
+    r = run(["render", "--all", "--scripts", str(REAL), "--library", str(lib)])
+    assert r.exit_code == 0, r.output
+    assert "the-corridors:" in r.output and "passages rendered" in r.output
+    assert "skipped, not voiced" in r.output
+    assert calls(fakes) == before
+    assert (lib / "the-corridors" / "recording.json").exists()
+    assert not (lib / "shuffles-one").exists()
+    r2 = CliRunner().invoke(main, ["esoterica", "render", "shuffles-one", "--scripts",
+                                   str(REAL), "--library", str(lib)])
+    assert r2.exit_code != 0 and "raw" in r2.output
+
+
 def test_remaining_counts_raw_files_not_rendered(tmp_path):
     s = [x for x in load_all(REAL) if x.id == "the-corridors"][0]
     d = tmp_path / s.id

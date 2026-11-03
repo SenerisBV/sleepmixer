@@ -205,7 +205,9 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
 @click.option("--scripts", "scripts_root", type=click.Path(path_type=Path),
               default=SCRIPTS, show_default=True)
 def render(script_id, all_, library, scripts_root):
-    """Re-render source character from the raw takes. Free: no provider, no key."""
+    """Re-render source character from the raw takes. Free: no provider, no key.
+
+    With --all, recordings that have no raw takes yet are skipped."""
     if bool(script_id) == bool(all_):
         raise click.UsageError("give one script id or --all")
     try:
@@ -217,6 +219,9 @@ def render(script_id, all_, library, scripts_root):
         if not scripts:
             raise click.ClickException(f"no script with id '{script_id}'")
     for s in scripts:
+        if all_ and not any((Path(library) / s.id).glob("p*.raw.wav")):
+            click.echo(f"  {s.id}: skipped, not voiced")  # --all only; a named id still fails
+            continue
         try:
             m = render_recording(s, library)
         except (FileNotFoundError, ValueError) as e:
