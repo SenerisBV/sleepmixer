@@ -261,7 +261,15 @@ paragraph, Harriet, one request. Speaking rate against the full p01 takes
 words/s (~4%). The numbers say the levers are small on this voice; the
 operator's ear decides. File: scratchpad `ellipses/lantern-e-paragraph-ellipses.wav`
 (rendered with room character and pause_stretch 2.2; `.raw.wav` beside it).
-ElevenLabs total now about 82,613 of 265,000.
+
+**Final re-voice (operator: "It starts really slow, then speeds up. I think this
+is as good as we'll get for now and am ok with just proceeding").** Ellipses
+added by hand through both scripts (60 in Lantern, 90 in Northern Tide, weighted
+toward paragraph ends, where the speed-up is heard), tag before every paragraph,
+19,913 characters. Overall rate, raw takes: Lantern 2.80 -> 2.70 words/s (8.5
+min raw, 11.0 rendered); Northern 2.69 -> 2.61 (12.3 raw, 16.0 rendered). The
+previous takes are in `_superseded/<id>-molasses-start/`. A naturally slow voice
+is the remaining lever, untried. ElevenLabs total now about 102,526 of 265,000.
 
 **Placeholders** (Claude's, tune by ear):
 
