@@ -164,7 +164,7 @@ def test_audition_slot_with_yes_writes_files_and_index(fakes, tmp_path):
     r = run(["audition", "--slot", "the-corridors", "--yes", "--scripts", str(REAL),
              "--voices", str(VOICES), "--out", str(out)])
     assert r.exit_code == 0, r.output
-    files = sorted(p.name for p in (out / "the-corridors").iterdir())
+    files = sorted(p.name for p in (out / "the-corridors").glob("*.wav"))
     assert files == sorted(["elevenlabs-blue.wav", "elevenlabs-empress.wav",
                             "elevenlabs-julie.wav", "cartesia-edith.wav",
                             "cartesia-loretta.wav"])
@@ -467,3 +467,63 @@ def test_revoice_must_name_every_stale_passage_and_needs_one_id(fakes, tmp_path)
     assert r.exit_code != 0 and "p02" in r.output
     r = CliRunner().invoke(main, ["esoterica", "voice", "--all", "--revoice", "p01", *args])
     assert r.exit_code != 0
+
+
+# --- final review: audition files know their voice -----------------------------------
+
+def _corridors_audition(out, voices, **kw):
+    return CliRunner().invoke(main, ["esoterica", "audition", "--slot", "the-corridors",
+                                     *(["--yes"] if kw.get("yes") else []),
+                                     "--scripts", str(REAL), "--voices", str(voices),
+                                     "--out", str(out)], catch_exceptions=False)
+
+
+def test_audition_writes_a_voice_sidecar_per_file(fakes, tmp_path):
+    import json
+    out = tmp_path / "audition"
+    r = _corridors_audition(out, VOICES, yes=True)
+    assert r.exit_code == 0, r.output
+    cfg = load_voices(VOICES)
+    blue = next(c for c in cfg.candidates["the-corridors"]["elevenlabs"] if c["name"] == "Blue")
+    side = json.loads((out / "the-corridors" / "elevenlabs-blue.json").read_text())
+    assert side == {"provider": "elevenlabs", "model": cfg.providers["elevenlabs"]["model"],
+                    "voice_id": blue["voice_id"], "name": "Blue"}
+    assert blue["voice_id"] in (out / "index.md").read_text()
+
+
+def test_audition_redoes_a_file_whose_voice_changed(fakes, tmp_path):
+    import json
+    out = tmp_path / "audition"
+    _corridors_audition(out, VOICES, yes=True)
+    before = calls(fakes)
+    untouched = (out / "the-corridors" / "elevenlabs-julie.wav").read_bytes()
+    data = yaml.safe_load(VOICES.read_text())
+    for c in data["candidates"]["the-corridors"]["elevenlabs"]:
+        if c["name"] == "Blue":
+            c["voice_id"] = "a-new-blue"
+    v2 = tmp_path / "voices.yaml"
+    v2.write_text(yaml.safe_dump(data, allow_unicode=True))
+    s = next(x for x in load_all(REAL) if x.id == "the-corridors")
+    one = billed_chars(ecli.audition_excerpt(s), ElevenLabs.translate_cues, max_chars(ElevenLabs))
+    r = _corridors_audition(out, v2)  # estimate only
+    assert re.search(rf"elevenlabs .*\b{one:,} characters", r.output)
+    assert "elevenlabs-blue" in r.output and calls(fakes) == before
+    r = _corridors_audition(out, v2, yes=True)
+    assert r.exit_code == 0, r.output
+    new = [c for p in fakes for c in p.calls][before:]
+    assert {c[1] for c in new} == {"a-new-blue"}
+    side = json.loads((out / "the-corridors" / "elevenlabs-blue.json").read_text())
+    assert side["voice_id"] == "a-new-blue"
+    assert (out / "the-corridors" / "elevenlabs-julie.wav").read_bytes() == untouched
+    assert "a-new-blue" in (out / "index.md").read_text()
+
+
+def test_audition_file_without_a_sidecar_is_redone(fakes, tmp_path):
+    out = tmp_path / "audition"
+    _corridors_audition(out, VOICES, yes=True)
+    (out / "the-corridors" / "cartesia-edith.json").unlink()
+    r = _corridors_audition(out, VOICES)
+    s = next(x for x in load_all(REAL) if x.id == "the-corridors")
+    one = billed_chars(ecli.audition_excerpt(s), Cartesia.translate_cues, max_chars(Cartesia))
+    assert re.search(rf"cartesia .*\b{one:,} characters", r.output)
+    assert re.search(r"elevenlabs .*\b0 characters", r.output)

@@ -6,6 +6,7 @@ no synthesize call, reads no key, and exits 0.
 """
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -18,9 +19,10 @@ from .providers import Cartesia, ElevenLabs, ProviderError
 from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
     MissingRawError, StaleTakesError, Voice, VoiceMismatchError, VoicesConfig, billed_chars,
-    check_distinct_voices, check_resume_voice, check_takes, load_voices,
+    check_distinct_voices, check_resume_voice, check_takes, load_voices, passage_pieces,
     raw_passage_file, raw_takes, recording_pieces, revoice_files,
-    render_recording, shuffle_billed_chars, shuffle_lines, shuffle_rng, split_sentences,
+    render_recording, shuffle_billed_chars, shuffle_lines, shuffle_pieces, shuffle_rng,
+    split_sentences,
     uncached_chars, voice_passage, voice_recording, voice_shuffle, voice_slot, write_backfill,
 )
 
@@ -350,6 +352,34 @@ def _slots(scripts: list[Script]) -> dict[str, Script]:
     return dict(sorted(out.items()))
 
 
+def audition_file(out_dir: Path, slot: str, prov: str, name: str) -> Path:
+    return Path(out_dir) / slot / f"{prov}-{slug(name)}.wav"
+
+
+def _audition_record(prov: str, cfg: VoicesConfig, c: dict) -> dict:
+    return {"provider": prov, "model": cfg.providers[prov]["model"],
+            "voice_id": c["voice_id"], "name": c["name"]}
+
+
+def _audition_sidecar(wav: Path) -> dict | None:
+    """The voice an audition file was made with (`<file>.json`), or None."""
+    side = wav.with_suffix(".json")
+    try:
+        rec = json.loads(side.read_text(encoding="utf-8"))
+        return rec if isinstance(rec, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def _audition_current(wav: Path, prov: str, cfg: VoicesConfig, c: dict) -> bool:
+    """The file exists and was made with this candidate's current voice and model.
+    A file with no sidecar (its voice unknown) is not current."""
+    rec = _audition_sidecar(wav)
+    want = _audition_record(prov, cfg, c)
+    return wav.exists() and rec is not None and all(
+        rec.get(k) == want[k] for k in ("provider", "model", "voice_id"))
+
+
 def _write_index(out_dir: Path, every: dict[str, Script], cfg: VoicesConfig) -> Path:
     """List every slot that has audition files on disk (not just this run's)."""
     import soundfile as sf
@@ -357,20 +387,32 @@ def _write_index(out_dir: Path, every: dict[str, Script], cfg: VoicesConfig) -> 
     lines = ["# Esoterica audition", "",
              "One excerpt per voice slot (the first script in the slot, first passage), "
              "voiced by each candidate. Files are mono float32 44.1 kHz, normalised to "
-             "-24 dBFS RMS over speech, peaks at most -3 dBFS.", ""]
+             "-24 dBFS RMS over speech, peaks at most -3 dBFS. Each file's voice is "
+             "recorded beside it in `<file>.json`; a file made with a voice id that is no "
+             "longer the candidate's is listed as stale and re-made by the next "
+             "`audition --yes`.", ""]
     for slot, s in every.items():
-        if not (out_dir / slot).is_dir() or not any((out_dir / slot).glob("*.wav")):
+        if not (out_dir / slot).is_dir() or not any(
+                p for p in (out_dir / slot).glob("*.wav") if not p.name.endswith(".seg.wav")):
             continue
         lines += [f"## {slot}", "",
                   f"- Script: `{s.show}/{s.id}.md`",
                   f"- Voice profile: {s.voice_profile or '(none)'}", ""]
-        lines += ["| Provider | Voice | File | Duration | Why |", "|---|---|---|---|---|"]
+        lines += ["| Provider | Voice | Voice id | File | Duration | Why |",
+                  "|---|---|---|---|---|---|"]
         for prov, cands in cfg.candidates.get(slot, {}).items():
             for c in cands:
-                f = out_dir / slot / f"{prov}-{slug(c['name'])}.wav"
-                dur = (f"{sf.info(str(f)).duration:.1f} s" if f.exists() else "missing")
-                lines.append(f"| {prov} | {c['name']} | `{slot}/{f.name}` | {dur} | "
-                             f"{c['why']} |")
+                f = audition_file(out_dir, slot, prov, c["name"])
+                if not f.exists():
+                    dur = "missing"
+                elif not _audition_current(f, prov, cfg, c):
+                    rec = _audition_sidecar(f)
+                    dur = (f"stale (made with {rec.get('voice_id')})" if rec
+                           else "stale (voice not recorded)")
+                else:
+                    dur = f"{sf.info(str(f)).duration:.1f} s"
+                lines.append(f"| {prov} | {c['name']} | `{c['voice_id']}` | `{slot}/{f.name}` "
+                             f"| {dur} | {c['why']} |")
         lines.append("")
     path = out_dir / "index.md"
     path.write_text("\n".join(lines), encoding="utf-8")
@@ -405,22 +447,34 @@ def audition(slot, show, all_, yes, out_dir, scripts_root, voices_path, env_path
 
     jobs = []  # (slot, script, provider, candidate, out, excerpt)
     chars: dict[str, int] = {n: 0 for n in cfg.providers}
-    click.echo(f"Audition into {out_dir} (files already on disk are skipped and not counted):")
+    redo: list[str] = []
+    click.echo(f"Audition into {out_dir} (files already made with the candidate's current "
+               "voice, and paid pieces, are skipped and not counted):")
     for k, s in chosen.items():
         excerpt = audition_excerpt(s)
         per = {prov: excerpt_chars(excerpt, prov, cfg) for prov in cfg.candidates[k]}
         for prov, cands in cfg.candidates[k].items():
+            t = PROVIDERS[prov].translate_cues
+            pieces = (shuffle_pieces(excerpt, s.language) if isinstance(excerpt, list)
+                      else passage_pieces(excerpt, _max_chars(cfg, prov), t, s.language))
             for c in cands:
-                out = out_dir / k / f"{prov}-{slug(c['name'])}.wav"
-                if not out.exists():
-                    chars[prov] += per[prov]
-                    jobs.append((k, s, prov, c, out, excerpt))
+                out = audition_file(out_dir, k, prov, c["name"])
+                if _audition_current(out, prov, cfg, c):
+                    continue
+                v = Voice(prov, cfg.providers[prov]["model"], c["voice_id"])
+                chars[prov] += uncached_chars(pieces, out, v, t, redo=out.exists())
+                if out.exists():
+                    redo.append(f"{k}/{out.name}")
+                jobs.append((k, s, prov, c, out, excerpt))
         click.echo(f"  {k:<20} {s.id:<24} "
                    + ", ".join(f"{prov} {n:,} x {len(cfg.candidates[k][prov])}"
                                for prov, n in per.items()) + " characters")
     click.echo("\nPer provider:")
     for line in _cost_lines(chars, cfg):
         click.echo(line)
+    if redo:
+        click.echo("Re-made because the candidate's voice changed (or was never recorded), "
+                   "replaced with --yes: " + ", ".join(redo))
     if not yes:
         _no_spend_note()
         return
@@ -430,6 +484,11 @@ def audition(slot, show, all_, yes, out_dir, scripts_root, voices_path, env_path
     try:
         for k, s, prov, c, out, excerpt in jobs:
             v = Voice(prov, cfg.providers[prov]["model"], c["voice_id"])
+            # the old file is of a voice no longer the candidate's: replace it
+            out.unlink(missing_ok=True)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.with_suffix(".json").write_text(
+                json.dumps(_audition_record(prov, cfg, c), indent=2) + "\n", encoding="utf-8")
             try:
                 if isinstance(excerpt, list):
                     voice_shuffle(providers[prov], excerpt, v, s.language, out,
