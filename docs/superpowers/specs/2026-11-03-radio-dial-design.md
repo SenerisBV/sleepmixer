@@ -1,7 +1,7 @@
 # Plan 9: the radio dial — the first iPhone night
 
-**Status:** design written 2026-11-03 from the operator's answers; awaiting
-their review. Not yet planned.
+**Status:** design written 2026-11-03 from the operator's answers, builder-checked;
+awaiting the operator's review. Not yet planned.
 
 **Builds on** `2026-11-02-am-night-design.md` (Plan 7: the scenes, the AM
 channel, the warping, the shape of the night) and
@@ -190,8 +190,18 @@ narrower). *Claude's call.*
   "great as-is". If a thought boundary has no usable pause, the mark moves
   to the nearest pause; a segment is never cut in a word and never
   crossfaded mid-speech.
-- **Leaving mid-segment:** coming back, the station starts at the
-  beginning of the segment you left, never mid-sentence.
+- **Stations keep broadcasting (the operator's answer, 2026-11-03):** "When
+  you tune away, it keeps broadcasting." Every station's schedule (its
+  segments, gaps and end-of-recording waits) runs from the moment the radio
+  clicks on, whether you're tuned to it or not, like a real radio. Tuning
+  in, you land wherever it is: mid-segment, or in a gap with only the bed.
+  That is in medias res and is fine, because a station always arrives
+  through static, faded up, never cut in. *Claude's call for the start:*
+  each station starts at a random point in its first pass when the radio
+  clicks on, so turning it on doesn't always land you at the opening.
+  Whether a station off the needle is actually rendered or only its
+  schedule advances is the builder's, as long as tuning in sounds
+  continuous after the fade.
 
 ## A station
 
@@ -235,10 +245,8 @@ there is nothing between them.
 
 After the last segment, the station waits (a placeholder, long, longer
 later in the night) and starts again from the first segment. A reset by
-the wheel doesn't restart the recording; it carries on from where it was.
-*Claude's call:* so you don't hear the opening every time you wake and
-retune. Coming back to a station after leaving it, it resumes where it was
-too (each station keeps its own place for the night).
+the wheel doesn't restart the recording; the broadcast carries on and only
+the drift resets (so the gaps ahead shorten again).
 
 ### The bed
 
@@ -285,6 +293,11 @@ little of the others. Tuned by ear, recorded as placeholders.
   just played and then hand over to another recording or another station.
   The station's "what plays next" decision lives in one place in the
   planner so that it can later be handed to a DJ.
+- **Schedules** (the operator, 2026-11-03: "Later we should add schedules
+  so that tuning can start a station in medias res"): a station's
+  programme laid out in time, so that what's on at a given moment is
+  decided by the schedule. The broadcast model above is the ground for it:
+  the planner already answers "what is this station playing at minute N".
 - **A growing scene library:** a bed is a recipe over named scenes, so a
   new scene is a new name, not a new kind of station.
 
