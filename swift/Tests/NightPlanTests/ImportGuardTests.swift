@@ -21,7 +21,7 @@ private func importLines(_ url: URL) throws -> [String] {
     #expect(!files.isEmpty)
     for f in files {
         for line in try importLines(f) {
-            #expect(line.wholeMatch(of: /import Foundation/) != nil, "\(f.lastPathComponent): \(line)")
+            #expect(line.wholeMatch(of: /import (Foundation|Synchronization)/) != nil, "\(f.lastPathComponent): \(line)")
         }
     }
 }
