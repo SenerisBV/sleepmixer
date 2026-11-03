@@ -262,5 +262,10 @@ def prepare() -> None:
     click.echo(f"Ready: {len(profiles)} source(s), {total} loop(s).")
 
 
+from .esoterica.cli import esoterica as _esoterica  # noqa: E402
+
+main.add_command(_esoterica)
+
+
 if __name__ == "__main__":
     main()

@@ -1,0 +1,146 @@
+# Esoterica voices: providers, audition candidates, and the chosen voice per slot.
+#
+# A *slot* is the show name for a show with one recurring host (sideline,
+# stations, lessons, meditations, shuffles) or the recording id for a show of
+# different people (testimonies, addresses), so no testimony or address ever
+# repeats a voice. See `voice_slot` in sleepmix/esoterica/voicing.py.
+#
+# Everything under `providers:` was read from the providers' live docs and APIs
+# on 2026-11-03 (sources in the Task 3 report). Numbers marked PLACEHOLDER are
+# Claude's choices, recorded in docs/project-state.md.
+#
+# No voice here is a clone of, or named after, a real person: premade voices,
+# first-name-only library voices, and Cartesia stock voices only.
+
+providers:
+  elevenlabs:
+    model: eleven_v4            # "most emotive"; GET /v1/models lists it, 10,000-char limit, French
+    price_per_char: 0.00008     # USD, API rate card ($0.08 per 1K characters for Eleven v4)
+    credits_per_char: 1.0       # /v1/models: character_cost_multiplier 1.0 (the 265k-credit budget)
+    max_chars: 10000            # /v1/models: maximum_text_length_per_request
+    output_format: pcm_24000    # raw S16LE mono; pcm_44100 needs the Pro tier, so resample instead
+    settings:                   # PLACEHOLDERS (intimacy recipe)
+      stability: 0.5            # below "robust"; valid whether v4 takes 0/0.5/1 steps or a range
+      similarity_boost: 0.75    # provider default
+      speed: 0.85               # slower than default 1.0 (docs floor 0.7)
+  cartesia:
+    model: sonic-3.6            # current Sonic, "fastest, most natural"; French supported
+    price_per_char: 0.00005     # USD, UNVERIFIED: docs say ~1 credit/char; $/credit is third-party (Pro $5 / 100K)
+    credits_per_char: 1.0       # docs: "approximately 1 credit per character"
+    max_chars: 1000             # PLACEHOLDER: the docs state no transcript limit; conservative
+    settings:                   # PLACEHOLDERS (intimacy recipe)
+      speed: 0.8                # docs: speed is guidance, use large steps (0.6-1.5)
+      emotion: calm             # English only per docs; omitted for French
+
+# Library voices (`library_owner_id` set) are shared-library voices. The docs
+# say paid tiers can use them by id directly; if the audition reports
+# voice_not_found, add them to the account (free, no custom slot):
+#   POST /v1/voices/add/{library_owner_id}/{voice_id}
+candidates:
+  the-corridors:   # testimonies. Profile: female, older, slow, deep, scratchy
+    elevenlabs:
+      - {voice_id: YGWwh1G8pUwWmJyCCpma, name: Blue, library_owner_id: 8d1d0024941d4ae1a0d0a82548e13742f805ff45269aea7f9a9ea0ab5118e949,
+         why: "Library 'Low, Calm with Grit': an older woman, low and gritty, the closest match to deep and scratchy."}
+      - {voice_id: MHPwHxLx0nmGIb5Jnbly, name: Empress, library_owner_id: 1d0dd652d18ed32384750738d142308160a41f4c9c8b4e353ab54afcfd8f416f,
+         why: "Library 'Smoky, Breathy': a sixty-year-old woman, deep and smoky, for the hoarse warmth in the speaker note."}
+      - {voice_id: g12yXXabMWeFoLMzxPrF, name: Julie, library_owner_id: bf6e42a20a691e123db74ee577f6b579d9beebb6d60a9c8898390ba9de72ca4a,
+         why: "Library 'Warm, Mature': older, soft, described as intimate and reflective; the warm end of the profile."}
+    cartesia:
+      - {voice_id: c8605446-247c-4d39-acd4-8f4c28aa363c, name: Edith,
+         why: "'Matriarch': the only elderly English woman in Cartesia's catalogue."}
+      - {voice_id: 25bf938a-025c-4dd0-906f-8cf8be2e26e9, name: Loretta,
+         why: "'Still Comfort': slow, heavy, peaceful cadence; matches slow and the kitchen-table closeness."}
+  the-orchard-light:   # testimonies. Profile: male, casual, articulate, british, deep
+    elevenlabs:
+      - {voice_id: 7p1Ofvcwsv7UBPoFNcpI, name: Julian, library_owner_id: 5950b4bbcd7f674c5fc1f6d2a7aea6b66c9a94c8e3c5a00093b6dc405fe4461a,
+         why: "Library 'Deep, Rich and Mature': an old British man with a hint of roughness; deep, british, the right age."}
+      - {voice_id: lL4hpA5hxNF3ovpnRQT5, name: Barry, library_owner_id: b179597cacbb0cc79ce188273a15d6736b26a48697ba34da9d955b84869e4f1d,
+         why: "Library 'Gentle English Male': old, deep and gentle; the quiet measuring man going quiet near the centre."}
+      - {voice_id: JBFqnCBsd6RMkjVDRZzb, name: George,
+         why: "Premade 'Warm, Captivating Storyteller': British, mature, warm resonance; articulate and casual."}
+    cartesia:
+      - {voice_id: c99d36f3-5ffd-4253-803a-535c1bc9c306, name: Griffin,
+         why: "'Narrator': an elderly British man; age and accent match a retired surveyor."}
+      - {voice_id: c45bc5ec-dc68-4feb-8829-6e6b2748095d, name: Trevor,
+         why: "'Movieman': deep, elderly, British; the deep end of the profile."}
+  the-lantern-accords:   # addresses. Profile: female, deep, intense, sermonic, old-fashioned, commanding
+    elevenlabs:
+      - {voice_id: kkPJzQOWz2Oz9cUaEaQd, name: Beatrice, library_owner_id: e21da557bd3d3d214ca0cd46cb06720331c223a478ee711c3b62b8965330ec9d,
+         why: "Library 'Mature, Gentle and Engaging': older British woman, rich tone, calm steady pace; grave and warm."}
+      - {voice_id: aAsWcN5jdLdiYG7Hq0YL, name: Harriet, library_owner_id: 3f2ca29fd2019c4a0516b646c73c6f21140f676ac6d45236a2b5ef291bf8d8e1,
+         why: "Library 'British Actress': older, refined, a little bossy; commanding and old-fashioned."}
+      - {voice_id: pFZP5JQG7iQjIQuC4Bku, name: Lily,
+         why: "Premade 'Velvety Actress': British, middle-aged, warm and clear; the safe premade fallback for the lectern."}
+    cartesia:
+      - {voice_id: 26403c37-80c1-4a1a-8692-540551ca2ae5, name: Marian,
+         why: "'Poised Narrator': matured, calm authority, smooth pacing; sermonic without hurry."}
+      - {voice_id: 11af83e2-23eb-452f-956e-7fee218ccb5c, name: Ruth,
+         why: "'Manager': firm and authoritative; the commanding edge of the profile."}
+  sideline:   # Profile: male, older, casual
+    elevenlabs:
+      - {voice_id: pqHfZKP75CvOlQylNhV4, name: Bill,
+         why: "Premade 'Wise, Mature, Balanced': an old man, friendly and comforting; thirty seasons in the hut."}
+      - {voice_id: CwhRBWXzGAHq8TQ4Fs17, name: Roger,
+         why: "Premade 'Laid-Back, Casual, Resonant': the casual, fond, unhurried manner."}
+      - {voice_id: iP95p4xoKVk53GoZ742B, name: Chris,
+         why: "Premade 'Charming, Down-to-Earth': natural and real, a regional-station everyman."}
+    cartesia:
+      - {voice_id: 4cf80313-54dc-4ca9-a17c-3e5b8f68a78c, name: Hugh,
+         why: "'Confident Veteran': seasoned, characterful; an old hand at the microphone."}
+      - {voice_id: ed82c17b-4704-4d34-be43-5d19065acdf1, name: Carl,
+         why: "'Steady Storyteller': matured, calm depth, measured pacing; patient play-by-play."}
+  stations:   # Profile: male, clear, authoritative, busy
+    elevenlabs:
+      - {voice_id: onwK4e9ZLuTAKqWW03F9, name: Daniel,
+         why: "Premade 'Steady Broadcaster': a news voice, clear and authoritative."}
+      - {voice_id: nPczCjzI2devNBz1zQrb, name: Brian,
+         why: "Premade 'Deep, Resonant and Comforting': middle-aged, low and even; the overnight register."}
+      - {voice_id: cjVigY5qzO86Huf0OWal, name: Eric,
+         why: "Premade 'Smooth, Trustworthy': a man in his forties, as the speaker note says."}
+    cartesia:
+      - {voice_id: 74f42072-6245-4fe2-b5dc-3dc9b56fdbd0, name: Regis,
+         why: "'News Anchor': authoritative, polished clarity; built for news."}
+      - {voice_id: a892d232-f705-40d7-bc8d-e368b295ec2a, name: Harlan,
+         why: "'Vintage Tone': deep, like an old radio announcer; suits the hum source."}
+  lessons:   # Profile: middle-aged, deep, clinical (one teacher for every lesson)
+    elevenlabs:
+      - {voice_id: G17SuINrv2H9FC6nvetn, name: Christopher,
+         why: "Account voice 'Gentle and Trustworthy': middle-aged British, calm, well-spoken; reads for tape."}
+      - {voice_id: ZthjuvLPty3kTMaNKVKb, name: Peter,
+         why: "Account voice 'Confident narrator': middle-aged, credible, resolute; clinical and even."}
+      - {voice_id: SAz9YHcvj6GT2YYXdXww, name: River,
+         why: "Premade 'Relaxed, Neutral, Informative': middle-aged and neutral; a teacher who finds nothing strange."}
+    cartesia:
+      - {voice_id: b24f41fd-00a3-4cd8-992a-a0c9f13f3ef1, name: Clive,
+         why: "'Measured Expert': composed, articulate, educational; the clinical teacher."}
+      - {voice_id: 68fb6747-b6ea-4c44-a18e-4e29921424d3, name: Derek,
+         why: "'Deep Advisor': low register, grounded, calm; the deep part of the profile."}
+  meditations:   # Profile: french, female, clear, slow (French only)
+    elevenlabs:
+      - {voice_id: hndZlkpVm5i9lXBY9CKj, name: Mila, library_owner_id: 93daf5b3db405bfe13e492bb796116286c6e8d4251107921a5102c3a8e94098a,
+         why: "Library, native French, middle-aged: 'for meditation, sleep stories'; warm, calm pace, clear diction."}
+      - {voice_id: j3PYHC4NBf5MAIuCgGYU, name: Corinne, library_owner_id: 010717ff507973747e0b77ce32d767b2ad2e067285be4fd463a56d8ef908e1b1,
+         why: "Library, native French, middle-aged, deep: soft and enveloping; the low, husky note in the speaker note."}
+      - {voice_id: sEk5ftjVl91hHjtOlmK1, name: Lise, library_owner_id: 4920d0000b706812ca6a9bf06f8c138ec8842da7e610c2a1a63158f19d1a7925,
+         why: "Library, native French, middle-aged 'Meditation Coach': clear, smooth, soothing."}
+    cartesia:
+      - {voice_id: 8832a0b5-47b2-4751-bb22-6a8e2149303d, name: French Narrator Lady,
+         why: "Native fr-FR, 'velvety and neutral, for narrating'; the least service-desk of Cartesia's French women."}
+      - {voice_id: 92579402-6868-412e-b845-3efed0be7a9e, name: Jade,
+         why: "Native fr-FR 'Steady Companion': serene, composed, steady."}
+  shuffles:   # Profile: female, clear, slow, clinical (English with a few French lines)
+    elevenlabs:
+      - {voice_id: Xb7hH8MSUJpSbSDYk0k2, name: Alice,
+         why: "Premade 'Clear, Engaging Educator': clear British woman; verified French for the French lines."}
+      - {voice_id: XrExE9yKIg1WjnnlVkGX, name: Matilda,
+         why: "Premade 'Knowledgable, Professional': alto, even; clinical; verified French."}
+      - {voice_id: EXAVITQu4vr4xnSDxMaL, name: Sarah,
+         why: "Premade 'Mature, Reassuring': warm, confident; verified French."}
+    cartesia:
+      - {voice_id: 694f9389-aac1-45b6-b726-9d9369183238, name: Sarah,
+         why: "'Mindful Woman': soothing, made for meditation; multilingual including French."}
+      - {voice_id: 25d7abcb-4d6d-4aca-adce-8a1c85620c8b, name: Jessica,
+         why: "'Clear Communicator': crisp and articulate; the clinical end; multilingual including French."}
+
+# Per slot: {provider, model, voice_id}. Empty until STOP 2.
+chosen: {}

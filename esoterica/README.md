@@ -99,6 +99,38 @@ In a `shuffles` script each passage is one burst: one concrete image per line,
 20–40 lines, no cues. The voicing tool spaces the lines 2–3 seconds apart. The
 intensity comment is still allowed.
 
+## Voicing
+
+`sleepmix esoterica estimate | audition | voice` (in `sleepmix/esoterica/cli.py`)
+turns scripts into audio. Every command prints the characters and estimated
+cost per provider first and spends nothing without `--yes`.
+
+- **Voices** come from `esoterica/voices.yaml`: per-provider model, price and
+  limits under `providers:`, 2–3 candidates per slot per provider under
+  `candidates:`, and the pick per slot under `chosen:` (empty until STOP 2).
+- **Audition:** `sleepmix esoterica audition --slot <slot> | --show <show> | --all [--yes]`
+  voices about 120 spoken words of the first passage of the first script (by
+  id) in each slot (shuffles: the first 16 images) with every candidate, into
+  `esoterica/audition/<slot>/<provider>-<voice>.wav`, and lists them in
+  `esoterica/audition/index.md`.
+- **Voicing:** `sleepmix esoterica voice <id> | --all [--yes]` uses the slot's
+  `chosen:` voice and writes `esoterica/library/<id>/`.
+- **Passage files** are named from the passage's 0-based `index`, 1-based on
+  disk: index 0 is `p01.wav`, index 1 is `p02.wav`. The manifest's `file` field
+  holds that name. Each is mono float32 WAV at 44100 Hz, normalised to
+  -24 dBFS RMS over speech frames with peaks at most -3 dBFS.
+- **Resumable:** a passage (or audition file) already on disk is never voiced
+  again, and `recording.json` is written only when every passage exists. A
+  provider error mid-run keeps the finished passages; re-run to finish.
+- **Cues** are translated per provider (ElevenLabs v4 audio tags or ellipses;
+  Cartesia `<break>` tags and `[laughter]`) or stripped where the provider has
+  no equivalent. `[long pause]` is not sent at all: the tool splits there and
+  inserts 3 s of real silence, so the lessons get a dependable answer gap.
+- **Shuffles** are voiced one image per request and assembled with 2–3 s gaps,
+  seeded from the recording id. A line that opens with a French article
+  (`le`, `la`, `les`, `un`, `une`, `des`, `du`, `au`, `aux`, `l'`) is sent as
+  French.
+
 ## The shows
 
 | Show | What it is | Language |

@@ -46,6 +46,52 @@ mixer as built through Plan 5, Phase 3.
 - **Animal-language lessons are parked** (STOP 1, 2026-11-03). The operator offered an animal as one direction for the lesson language: birds, whales, or "a non-specific animal that just growls, roars, and makes other guttural inarticulate noises" (not a dog or cat). Text-to-speech can't make those sounds convincingly. Building it means generating calls with ElevenLabs' sound-effects endpoint and placing each one after the teacher's line, a new step in the voicing pipeline. Of the operator's other two directions, reversed English and a repeated nonsense word became `lessons/backward-lesson-one.md` and `lessons/mubba-lesson-one.md`.
 - **Link import** (podcasts and other URLs) remains a later door, as the spec says.
 
+## Esoterica voicing (Plan 8a Task 3, 2026-11-03): built, audition not yet run
+
+`sleepmix esoterica estimate | audition | voice` in `sleepmix/esoterica/`
+(`providers.py`, `voicing.py`, `cli.py`) with `esoterica/voices.yaml`. Provider
+facts were read from the live docs and the providers' free listing APIs on
+2026-11-03 (sources in `.superpowers/sdd/2026-11-03-esoterica-8a-starter-set/task-3-report.md`).
+The audition (STOP 2) has not run; `voices.yaml` `chosen:` is empty, so
+`voice` refuses to run until it is filled.
+
+**Every placeholder, by name and value** (Claude's choices, to tune by ear):
+
+| Name | Value | Where |
+|---|---|---|
+| ElevenLabs model | `eleven_v4` | voices.yaml |
+| ElevenLabs stability | 0.5 (valid whether v4 takes 0/0.5/1 steps or a range) | voices.yaml |
+| ElevenLabs similarity_boost | 0.75 (provider default) | voices.yaml |
+| ElevenLabs speed | 0.85 (docs floor 0.7) | voices.yaml |
+| ElevenLabs output | `pcm_24000`, resampled to 44.1 kHz (44.1 kHz PCM needs the Pro tier) | providers.py |
+| Cartesia model | `sonic-3.6` | voices.yaml |
+| Cartesia speed | 0.8 | voices.yaml |
+| Cartesia emotion | `calm` (English only; omitted for French) | voices.yaml |
+| Cartesia max_chars | 1000 (docs state no limit) | voices.yaml |
+| Cartesia price_per_char | $0.00005 (unverified: docs give ~1 credit/char; $/credit is third-party) | voices.yaml |
+| Chunk gap | 250 ms | voicing.py `CHUNK_GAP_S` |
+| Chunk edge fade | 10 ms raised cosine | voicing.py `EDGE_S` |
+| `[long pause]` | 3.0 s of real silence (split, not sent) | voicing.py `LONG_PAUSE_S` |
+| Shuffle gaps | uniform 2–3 s, seeded crc32(id) + passage index | voicing.py |
+| Loudness target | -24 dBFS RMS over 20 ms frames above -50 dBFS | voicing.py |
+| Peak ceiling | -3 dBFS, smooth limiter (5 ms window) | voicing.py |
+| Audition excerpt | ~120 spoken words, cut at a sentence end; shuffles 16 images | cli.py |
+| `[pause]` | ElevenLabs `…`; Cartesia `<break time="1s"/>` | providers.py |
+| `[breath]` | ElevenLabs `[exhales]`; Cartesia stripped | providers.py |
+| `[softly]` | ElevenLabs `[softly]`; Cartesia stripped | providers.py |
+| `[whisper]` | ElevenLabs `[whispers]`; Cartesia stripped | providers.py |
+| `[laughs quietly]` | ElevenLabs `[laughs]`; Cartesia `[laughter]` | providers.py |
+
+**Known gaps:**
+- Library (shared) ElevenLabs voices among the candidates do not appear in
+  `GET /v1/voices/{id}` for this account. The docs say paid tiers can use them
+  by id; if the audition reports `voice_not_found`, add them (free) with
+  `POST /v1/voices/add/{library_owner_id}/{voice_id}` (ids in voices.yaml).
+- The API key lacks `user_read`, so the subscription tier could not be read.
+- A shuffle passage that fails part-way is re-voiced whole on rerun (a few
+  short lines are paid twice); every other passage is resumable exactly.
+- Shuffle French detection is an article heuristic, not a language model.
+
 ## Plan 7a: two scenes through the channel
 
 **Status (2026-11-02): built and tested; not yet listened to.** Plan 7a is the
