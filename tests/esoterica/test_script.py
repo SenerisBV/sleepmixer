@@ -321,3 +321,24 @@ def test_delivery_tag(tmp_path):
 def test_delivery_must_be_bracketed_tags(tmp_path, value):
     with pytest.raises(ScriptError, match="delivery"):
         load_script(good(tmp_path, extra=f"delivery: {value}\n"))
+
+
+def test_segment_marker_is_structural(tmp_path):
+    body = "one.\n\ntwo.\n\n[segment]\n\nthree.\n\n[passage]\n\nfour.\n"
+    s = load_script(good(tmp_path, body=body))
+    plain = load_script(good(tmp_path, body=body.replace("[segment]\n\n", ""), id="b-script"))
+    assert s.passages[0].text == plain.passages[0].text      # hash-neutral: takes stay current
+    assert s.passages[0].segment_starts == (0, 2)
+    assert s.passages[1].segment_starts == (0,)
+    assert "[segment]" not in s.passages[0].text
+
+
+def test_segment_marker_must_stand_alone(tmp_path):
+    with pytest.raises(ScriptError, match="segment"):
+        load_script(good(tmp_path, body="one. [segment] two.\n"))
+
+
+def test_segment_marker_at_passage_start_is_noop(tmp_path):
+    s = load_script(good(tmp_path, body="[segment]\n\none.\n\ntwo.\n"))
+    assert s.passages[0].segment_starts == (0,)
+    assert s.passages[0].text == "one.\n\ntwo."

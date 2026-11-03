@@ -39,6 +39,9 @@ class Passage:
     index: int
     text: str
     intensity: str  # "low" | "medium" | "high"
+    # 0-based paragraph indexes (blank-line separated, as in `text`) where a
+    # `[segment]` marker begins a new segment; always starts with 0.
+    segment_starts: tuple[int, ...] = (0,)
 
 
 @dataclass(frozen=True)
@@ -162,7 +165,33 @@ def load_script(path: Path) -> Script:
                 if intensity not in INTENSITIES:
                     fail(f"unknown intensity '{intensity}'", chunk[0][0])
                 chunk.pop(0)
+        # A line that is exactly [segment] is structural: drop it with one
+        # following blank line (so `text` matches the unmarked script) and
+        # record the paragraph index it introduces.
+        kept: list[tuple[int, str]] = []
+        starts = [0]
+        i = 0
+        while i < len(chunk):
+            ln, text = chunk[i]
+            if text.strip() == "[segment]":
+                if kept and kept[-1][1].strip():
+                    fail("[segment] must stand on its own line between "
+                         "paragraphs", ln)
+                i += 1
+                if i < len(chunk) and not chunk[i][1].strip():
+                    i += 1
+                if i < len(chunk):
+                    n = sum(1 for k, (_, t) in enumerate(kept)
+                            if t.strip() and (k == 0 or not kept[k - 1][1].strip()))
+                    if n > starts[-1]:
+                        starts.append(n)
+                continue
+            kept.append((ln, text))
+            i += 1
+        chunk = kept
         for ln, text in chunk:
+            if "[segment]" in text:
+                fail("[segment] must stand alone on its own line", ln)
             if "<!--" in text:
                 fail("HTML comments are only allowed as a passage's "
                      "'<!-- intensity: ... -->' first line", ln)
@@ -173,7 +202,7 @@ def load_script(path: Path) -> Script:
                 fail("stray '[' or ']' (an unbalanced or split cue would be "
                      "spoken aloud)", ln)
         body = "\n".join(t for _, t in chunk).strip()
-        p = Passage(idx, body, intensity)
+        p = Passage(idx, body, intensity, tuple(starts))
         if not spoken_text(p):
             fail(f"passage {idx + 1} is empty (no spoken text)", start_lines[idx])
         passages.append(p)
