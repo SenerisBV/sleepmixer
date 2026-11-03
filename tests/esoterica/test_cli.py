@@ -122,8 +122,12 @@ def test_voice_one_with_yes_writes_library(fakes, tmp_path):
 
 def test_voice_without_chosen_fails_before_spend(fakes, tmp_path):
     lib = tmp_path / "library"
+    data = yaml.safe_load(VOICES.read_text())
+    data["chosen"] = {k: v for k, v in data["chosen"].items() if k != "the-corridors"}
+    voices = tmp_path / "voices.yaml"
+    voices.write_text(yaml.safe_dump(data))
     r = CliRunner().invoke(main, ["esoterica", "voice", "--all", "--yes", "--scripts", str(REAL),
-                                  "--voices", str(VOICES), "--library", str(lib)])
+                                  "--voices", str(voices), "--library", str(lib)])
     assert r.exit_code != 0
     assert "chosen" in r.output and "the-corridors" in r.output
     assert fakes == [] and not lib.exists()

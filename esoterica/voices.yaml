@@ -142,5 +142,15 @@ candidates:
       - {voice_id: 25d7abcb-4d6d-4aca-adce-8a1c85620c8b, name: Jessica,
          why: "'Clear Communicator': crisp and articulate; the clinical end; multilingual including French."}
 
-# Per slot: {provider, model, voice_id}. Empty until STOP 2.
-chosen: {}
+# Per slot: {provider, model, voice_id}. Claude's picks for STOP 2 (2026-11-03), from the
+# operator's voice_profile first, then the candidate descriptions; not judged by ear.
+# All ElevenLabs eleven_v4. Testimony and address voices are pairwise distinct.
+chosen:
+  the-corridors: {provider: elevenlabs, model: eleven_v4, voice_id: YGWwh1G8pUwWmJyCCpma}   # Blue: profile 'female, older, slow, deep, scratchy'; the only candidate described as low with grit
+  the-orchard-light: {provider: elevenlabs, model: eleven_v4, voice_id: 7p1Ofvcwsv7UBPoFNcpI}   # Julian: profile 'male, casual, articulate, british, deep'; old British man, deep, a little rough
+  the-lantern-accords: {provider: elevenlabs, model: eleven_v4, voice_id: aAsWcN5jdLdiYG7Hq0YL}   # Harriet: profile 'female, deep, intense, sermonic, old-fashioned, commanding'; older, refined, commanding
+  sideline: {provider: elevenlabs, model: eleven_v4, voice_id: pqHfZKP75CvOlQylNhV4}   # Bill: profile 'male, older, casual'; old man, friendly and comforting
+  stations: {provider: elevenlabs, model: eleven_v4, voice_id: onwK4e9ZLuTAKqWW03F9}   # Daniel: profile 'male, clear, authoritative, busy'; a news voice, clear and authoritative
+  lessons: {provider: elevenlabs, model: eleven_v4, voice_id: ZthjuvLPty3kTMaNKVKb}   # Peter: profile 'middle-aged, deep, clinical'; middle-aged, even, resolute: the clinical teacher
+  meditations: {provider: elevenlabs, model: eleven_v4, voice_id: hndZlkpVm5i9lXBY9CKj}   # Mila: profile 'french, female, clear, slow'; native French, made for meditation and sleep stories
+  shuffles: {provider: elevenlabs, model: eleven_v4, voice_id: XrExE9yKIg1WjnnlVkGX}   # Matilda: profile 'female, clear, slow, clinical'; alto, even, clinical, verified French for the French lines

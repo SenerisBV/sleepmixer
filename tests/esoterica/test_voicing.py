@@ -253,6 +253,8 @@ def test_real_voices_yaml_covers_every_slot():
         p = cfg.providers[prov]
         assert p["model"] and p["price_per_char"] > 0 and p["max_chars"] > 0
     check_distinct_voices(cfg.chosen, scripts)
+    # STOP 2: every slot has a chosen voice
+    assert set(cfg.chosen) == {voice_slot(s) for s in scripts}
 
 
 def test_testimony_slots_share_no_candidates():
