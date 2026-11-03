@@ -154,8 +154,10 @@ class ElevenLabs(_Base):
         body = {
             "text": self.translate_cues(text),
             "model_id": model,
-            # `speed` is documented (0.7-1.2) on the v4 prompting page and the
-            # API reference places no model restriction on it.
+            # `speed` (0.7-1.2) is documented with no model restriction, but
+            # eleven_v4 ignores it (measured 2026-11-03: identical lengths at
+            # 0.7 and 1.2; eleven_multilingual_v2 honours it). Sent anyway: it
+            # is harmless and applies if a slot moves to a model that reads it.
             "voice_settings": {k: self.settings[k] for k in
                                ("stability", "similarity_boost", "speed")},
         }

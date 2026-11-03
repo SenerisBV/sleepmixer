@@ -53,6 +53,14 @@ def make_provider(name: str, cfg: dict, env_path: Path):
     return p
 
 
+def _paced_cfg(cfg: VoicesConfig, name: str, speed: float | None) -> dict:
+    """The provider's config with a recording's own `speed` over its settings."""
+    pc = dict(cfg.providers[name])
+    if speed is not None:
+        pc["settings"] = {**(pc.get("settings") or {}), "speed": speed}
+    return pc
+
+
 def _build_providers(names, cfg: VoicesConfig, env_path: Path) -> dict:
     """Every provider a run needs, built (keys resolved) before the first
     request, so a missing second key fails while nothing has been spent."""
@@ -153,7 +161,7 @@ def _remaining(script: Script, library: Path, voice: Voice, cfg: VoicesConfig,
     mc = _max_chars(cfg, voice.provider)
     return sum(uncached_chars(recording_pieces(script, p, mc, t),
                               d / raw_passage_file(p.index), voice, t,
-                              redo=p.index in revoice)
+                              redo=p.index in revoice, speed=script.speed)
                for p in script.passages)
 
 
@@ -235,8 +243,13 @@ def voice(script_id, all_, revoice_, yes, library, scripts_root, voices_path, en
     if not yes:
         _no_spend_note()
         return
-    providers = _build_providers((cfg.voice_for(voice_slot(s)).provider for s in scripts),
-                                 cfg, env_path)
+    # one provider per (provider, speed): a recording's own speed rides in its
+    # settings; every key is resolved before the first request
+    providers = {}
+    for s in scripts:
+        k = (cfg.voice_for(voice_slot(s)).provider, s.speed)
+        if k not in providers:
+            providers[k] = make_provider(k[0], _paced_cfg(cfg, *k), env_path)
     if named:
         s = scripts[0]
         d = library / s.id
@@ -254,7 +267,7 @@ def voice(script_id, all_, revoice_, yes, library, scripts_root, voices_path, en
     for s in scripts:
         v = cfg.voice_for(voice_slot(s))
         try:
-            m = voice_recording(s, providers[v.provider], v, library,
+            m = voice_recording(s, providers[(v.provider, s.speed)], v, library,
                                 on_error=lambda msg: click.echo(f"  failed: {msg}", err=True))
         except (StaleTakesError, VoiceMismatchError) as e:
             raise click.ClickException(str(e)) from None

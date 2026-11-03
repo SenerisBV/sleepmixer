@@ -283,3 +283,29 @@ def test_bom_and_crlf(tmp_path):
     s = load_script(p)
     assert [q.intensity for q in s.passages] == ["high", "medium", "low"]
     assert "\r" not in s.passages[0].text and "\r" not in s.speaker
+
+
+# --- pace: speed and pause_stretch -------------------------------------------------
+
+def test_pace_defaults(tmp_path):
+    s = load_script(good(tmp_path))
+    assert s.speed is None and s.pause_stretch == 1.0
+
+
+def test_pace_present(tmp_path):
+    s = load_script(good(tmp_path, extra="speed: 0.7\npause_stretch: 2.2\n"))
+    assert s.speed == 0.7 and s.pause_stretch == 2.2
+
+
+@pytest.mark.parametrize("extra, msg", [
+    ("speed: fast\n", "speed must be a number"),
+    ("speed: true\n", "speed must be a number"),
+    ("speed: 0.3\n", "speed must be between"),
+    ("speed: 2\n", "speed must be between"),
+    ("pause_stretch: 0.5\n", "pause_stretch must be between"),
+    ("pause_stretch: 5\n", "pause_stretch must be between"),
+    ("pause_stretch: x\n", "pause_stretch must be a number"),
+])
+def test_pace_rejected(tmp_path, extra, msg):
+    with pytest.raises(ScriptError, match=msg):
+        load_script(good(tmp_path, extra=extra))

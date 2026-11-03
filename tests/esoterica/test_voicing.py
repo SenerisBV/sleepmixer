@@ -735,3 +735,78 @@ def test_missing_raw_error_names_the_files(tmp_path):
     with pytest.raises(MissingRawError) as e:
         render_recording(s, tmp_path / "lib")
     assert e.value.missing == ["p02.raw.wav"]
+
+
+# --- pace: speed (provider) and pause_stretch (render) -----------------------------
+
+from dataclasses import replace as _replace  # noqa: E402
+
+from sleepmix.esoterica.voicing import piece_cache, stretch_pauses  # noqa: E402
+
+
+def test_sidecar_records_speed_and_a_speed_change_is_stale(tmp_path):
+    s, lib = _voiced(tmp_path, ["One.", "Two."])
+    assert json.loads((lib / "rec" / "p01.raw.json").read_text())["speed"] is None
+    slow = _replace(s, speed=0.7)
+    stale, _ = check_takes(slow, lib)
+    assert list(stale) == ["p01", "p02"]
+    assert "speed" in stale["p01"]
+    fp = FakeProvider()
+    with pytest.raises(StaleTakesError, match="--revoice p01"):
+        voice_recording(slow, fp, V, lib)
+    assert fp.calls == []
+
+
+def test_a_take_voiced_at_a_speed_is_current_at_that_speed(tmp_path):
+    s = _replace(write_script(tmp_path / "scripts", "testimonies", "rec", ["One."]),
+                 speed=0.7)
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    assert json.loads((lib / "rec" / "p01.raw.json").read_text())["speed"] == 0.7
+    assert check_takes(s, lib) == ({}, [])
+
+
+def test_a_cache_at_another_speed_is_not_reused(tmp_path):
+    from sleepmix.esoterica.voicing import Piece
+    pc = Piece("Alpha.", "en", 0.0)
+    out = tmp_path / "p01.raw.wav"
+    assert piece_cache(out, 0, pc, V) == piece_cache(out, 0, pc, V, speed=None)
+    assert piece_cache(out, 0, pc, V, speed=0.7) != piece_cache(out, 0, pc, V)
+
+
+def _speech_and_gaps(sr=44100):
+    t = tone(0.5)  # 0.5 s of "speech"
+    gap = np.zeros(int(0.4 * sr), dtype=np.float32)
+    lead = np.zeros(int(0.1 * sr), dtype=np.float32)
+    return np.concatenate([lead, t, gap, t, gap, t, lead]), len(t), len(gap), len(lead)
+
+
+def test_stretch_pauses_lengthens_inner_gaps_only():
+    x, n_t, n_gap, n_lead = _speech_and_gaps()
+    y = stretch_pauses(x, 44100, 2.0)
+    assert abs(len(y) - (len(x) + 2 * n_gap)) < 0.05 * 44100  # each inner gap doubled (to a frame)
+    assert stretch_pauses(x, 44100, 1.0) is x
+    # the speech itself is untouched: same energy, same samples in order
+    loud = lambda a: a[np.abs(a) > 1e-3]
+    assert np.array_equal(loud(y), loud(x))
+
+
+def test_stretch_pauses_leaves_short_gaps_between_words():
+    t = tone(0.5)
+    short = np.zeros(int(0.06 * 44100), dtype=np.float32)
+    x = np.concatenate([t, short, t])
+    assert len(stretch_pauses(x, 44100, 3.0)) == len(x)
+
+
+def test_render_applies_pause_stretch_and_records_it(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec",
+                     ["One. [long pause] Two."])
+    lib = tmp_path / "lib"
+    m = voice_recording(s, FakeProvider(), V, lib)
+    plain = m.passages[0].duration_s
+    assert "pause_stretch" not in m.character_params
+    raw = (lib / "rec" / "p01.raw.wav").read_bytes()
+    m2 = render_recording(_replace(s, pause_stretch=2.0), lib)
+    assert m2.passages[0].duration_s > plain + 2.5  # the 3 s long pause roughly doubled
+    assert m2.character_params["pause_stretch"] == 2.0
+    assert (lib / "rec" / "p01.raw.wav").read_bytes() == raw

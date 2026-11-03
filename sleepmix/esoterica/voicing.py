@@ -341,10 +341,14 @@ def _base(out: Path) -> str:
     return Path(out).stem
 
 
-def piece_cache(out: Path, n: int, piece: Piece, voice: Voice) -> Path:
-    """Where piece `n` (0-based) of the file `out` is cached once paid for."""
-    key = hashlib.sha256("\n".join((voice.provider, voice.model, voice.voice_id,
-                                     piece.language, piece.text)).encode("utf-8"))
+def piece_cache(out: Path, n: int, piece: Piece, voice: Voice,
+                speed: float | None = None) -> Path:
+    """Where piece `n` (0-based) of the file `out` is cached once paid for.
+    A recording's own `speed` is part of the key (absent: the provider default)."""
+    fields = (voice.provider, voice.model, voice.voice_id, piece.language, piece.text)
+    if speed is not None:
+        fields += (f"speed={speed!r}",)
+    key = hashlib.sha256("\n".join(fields).encode("utf-8"))
     return Path(out).parent / f"{_base(out)}.s{n + 1:02d}.{key.hexdigest()[:10]}.seg.wav"
 
 
@@ -366,13 +370,14 @@ def raw_takes(d: Path) -> list[Path]:
 
 
 def uncached_chars(pieces: list[Piece], out: Path, voice: Voice,
-                   translate: Callable[[str], str], redo: bool = False) -> int:
+                   translate: Callable[[str], str], redo: bool = False,
+                   speed: float | None = None) -> int:
     """Characters still to pay for to make `out` (0 if it exists, unless
     `redo`: it is about to be deleted and voiced again)."""
     if Path(out).exists() and not redo:
         return 0
     return sum(len(translate(pc.text)) for n, pc in enumerate(pieces)
-               if not piece_cache(out, n, pc, voice).exists())
+               if not piece_cache(out, n, pc, voice, speed).exists())
 
 
 def _read_mono(path: Path) -> np.ndarray:
@@ -381,7 +386,8 @@ def _read_mono(path: Path) -> np.ndarray:
 
 
 def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Path,
-                  rng: np.random.Generator | None = None) -> float:
+                  rng: np.random.Generator | None = None,
+                  speed: float | None = None) -> float:
     """Synthesize every uncached piece (caching each response at once), then
     assemble, normalise and write `out`, and drop the caches."""
     out = Path(out)
@@ -391,7 +397,7 @@ def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Pa
         raise ValueError(f"nothing to voice for {out.name}")
     audio: list[np.ndarray] = []
     for n, pc in enumerate(pieces):
-        cache = piece_cache(out, n, pc, voice)
+        cache = piece_cache(out, n, pc, voice, speed)
         if cache.exists():
             audio.append(_read_mono(cache))
             continue
@@ -413,7 +419,7 @@ def _voice_pieces(provider: Provider, pieces: list[Piece], voice: Voice, out: Pa
 
 
 def voice_passage(provider: Provider, text: str, voice: Voice, language: str,
-                  out: Path) -> float:
+                  out: Path, speed: float | None = None) -> float:
     """Voice one passage (neutral cues) to `out`; return its duration in seconds.
 
     A `[long pause]` is real silence (LONG_PAUSE_S) rather than a provider cue,
@@ -421,13 +427,14 @@ def voice_passage(provider: Provider, text: str, voice: Voice, language: str,
     exists; resumes from the piece caches if an earlier run failed part-way.
     """
     pieces = passage_pieces(text, provider.max_chars, provider.translate_cues, language)
-    return _voice_pieces(provider, pieces, voice, out)
+    return _voice_pieces(provider, pieces, voice, out, speed=speed)
 
 
 def voice_shuffle(provider: Provider, lines: list[str], voice: Voice, language: str,
-                  out: Path, rng: np.random.Generator) -> float:
+                  out: Path, rng: np.random.Generator, speed: float | None = None) -> float:
     """One image per call, assembled with 2–3 s gaps from `rng`."""
-    return _voice_pieces(provider, shuffle_pieces(lines, language), voice, out, rng)
+    return _voice_pieces(provider, shuffle_pieces(lines, language), voice, out, rng,
+                         speed=speed)
 
 
 def recording_pieces(script: Script, p, max_chars: int,
@@ -539,12 +546,14 @@ def voice_recording(script: Script, provider: Provider, voice: Voice,
         for p in script.passages:
             raw = d / raw_passage_file(p.index)
             if not raw.exists():  # record the text before paying for it
-                _write_json_atomic(_take_record(p, voice), d / take_sidecar_file(p.index))
+                _write_json_atomic(_take_record(p, voice, speed=script.speed),
+                                   d / take_sidecar_file(p.index))
             if script.show == "shuffles":
-                voice_shuffle(provider, shuffle_lines(p.text), voice,
-                              script.language, raw, shuffle_rng(script.id, p.index))
+                voice_shuffle(provider, shuffle_lines(p.text), voice, script.language,
+                              raw, shuffle_rng(script.id, p.index), speed=script.speed)
             else:
-                voice_passage(provider, p.text, voice, script.language, raw)
+                voice_passage(provider, p.text, voice, script.language, raw,
+                              speed=script.speed)
             done += 1
     except ProviderError as e:
         msg = f"{script.id}: stopped at passage {done + 1}: {e}"
@@ -606,9 +615,12 @@ def _write_json_atomic(obj: dict, out: Path) -> None:
         raise
 
 
-def _take_record(p, voice: Voice, backfilled: bool = False) -> dict:
+def _take_record(p, voice: Voice, backfilled: bool = False,
+                 speed: float | None = None) -> dict:
+    """`speed` is the script's own speed (None: the provider default); a sidecar
+    without the key predates it and means None."""
     return {"index": p.index, "text_sha256": text_sha256(p.text),
-            **_voice_record(voice), "backfilled": backfilled}
+            **_voice_record(voice), "speed": speed, "backfilled": backfilled}
 
 
 class StaleTakesError(ValueError):
@@ -658,9 +670,13 @@ def check_takes(script: Script, library: Path) -> tuple[dict[str, str], list]:
                 ok = (isinstance(rec, dict) and rec.get("index") == p.index
                       and rec.get("text_sha256") == text_sha256(p.text))
             except ValueError:
-                ok = False
+                ok, rec = False, None
             if not ok:
                 stale[name] = "its text changed since it was voiced"
+            elif rec.get("speed") != script.speed:
+                was, now = (("default" if v is None else v)
+                            for v in (rec.get("speed"), script.speed))
+                stale[name] = f"its speed changed since it was voiced ({was} -> {now})"
         elif manifest_text.get(p.index) == spoken_text(p):
             backfill.append(p)
         else:
@@ -733,7 +749,7 @@ def render_character(script: Script, library: Path) -> list[PassageEntry]:
     rendered: list[tuple[Path, np.ndarray]] = []
     for p in script.passages:  # all in memory first: a crash never leaves a mixed set
         x, sr = sf.read(str(d / raw_passage_file(p.index)), dtype="float32")
-        x = _to_sr(x, sr)
+        x = stretch_pauses(_to_sr(x, sr), SR, script.pause_stretch)
         y = apply_character(x, SR, script.source_character,
                             character_seed(script.id, p.index))
         y = normalise(_edges(y, RENDER_EDGE_S))  # gain keeps the zeroed ends at zero
@@ -747,9 +763,51 @@ def render_character(script: Script, library: Path) -> list[PassageEntry]:
     return entries
 
 
-def render_params(kind: str) -> dict:
-    """What the manifest records as `character_params`."""
-    return {**character_params(kind), "render_edge_s": RENDER_EDGE_S}
+def render_params(kind: str, pause_stretch: float = 1.0) -> dict:
+    """What the manifest records as `character_params` (`pause_stretch` only
+    when it is not 1, so manifests from before it existed stay current)."""
+    params = {**character_params(kind), "render_edge_s": RENDER_EDGE_S}
+    if pause_stretch != 1.0:
+        params["pause_stretch"] = pause_stretch
+    return params
+
+
+PAUSE_THRESHOLD_DB = -45.0  # PLACEHOLDER: below this (20 ms RMS, dBFS) is a pause;
+                            # raw takes are normalised to -24 dB speech RMS first
+PAUSE_MIN_S = 0.12          # PLACEHOLDER: shorter silences are gaps inside words
+PAUSE_WIN_S = 0.02
+
+
+def stretch_pauses(x: np.ndarray, sr: int, factor: float) -> np.ndarray:
+    """Lengthen every silence of at least PAUSE_MIN_S between two stretches of
+    speech by `factor`, inserting digital silence in the middle of it. Speech
+    samples are untouched and in order; leading and trailing silence is left
+    alone. factor 1 returns `x` itself."""
+    if factor == 1.0:
+        return x
+    win = max(1, int(PAUSE_WIN_S * sr))
+    n = len(x) // win
+    if n == 0:
+        return x
+    frames = x[: n * win].astype(np.float64).reshape(n, win)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1) + 1e-20)
+    quiet = 20 * np.log10(rms) < PAUSE_THRESHOLD_DB
+    parts: list[np.ndarray] = []
+    pos = 0
+    i = 0
+    while i < n:
+        j = i
+        while j < n and quiet[j] == quiet[i]:
+            j += 1
+        inner = quiet[i] and i > 0 and j < n
+        if inner and (j - i) * win / sr >= PAUSE_MIN_S:
+            mid = (i * win + j * win) // 2
+            parts.append(x[pos:mid])
+            parts.append(np.zeros(int(round((j - i) * win * (factor - 1))), dtype=x.dtype))
+            pos = mid
+        i = j
+    parts.append(x[pos:])
+    return np.concatenate(parts)
 
 
 def render_recording(script: Script, library: Path, voice: Voice | None = None) -> Manifest:
@@ -778,7 +836,7 @@ def render_recording(script: Script, library: Path, voice: Voice | None = None) 
             raise FileNotFoundError(f"{script.id}: no {VOICE_FILE} in {d} "
                                     "(run `sleepmix esoterica voice` first)")
     entries = render_character(script, library)
-    params = render_params(script.source_character)
+    params = render_params(script.source_character, script.pause_stretch)
     if (existing is not None and existing.passages == entries
             and existing.source_character == script.source_character
             and existing.character_params == params):

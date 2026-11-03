@@ -41,6 +41,8 @@ first thing in the file.
 | `speaker` | yes | a prose note: age, manner, how close the microphone is, the room. Invented, never a real person |
 | `source_character` | yes | one of `tape`, `room`, `oldmic`, `hum`, `clean` |
 | `voice_profile` | no | a short comma-separated list of the voice as the operator imagines it (e.g. `female, older, slow, deep, scratchy`). The operator's words; STOP 2 picks voices against it before the `speaker` note |
+| `speed` | no | the provider's speaking rate for this recording, over `voices.yaml` (ElevenLabs 0.7-1.2, Cartesia 0.6-1.5; the parser accepts 0.5-1.5). Recorded per take; changing it makes the takes stale, so re-voice with `--revoice pNN`. **`eleven_v4` ignores it** (measured 2026-11-03); slow v4 down with an inline tag such as `[slowly]` instead |
+| `pause_stretch` | no | 1.0-4.0, default 1. Free and render-time: `render` lengthens the silences between phrases by this factor (speech untouched). For an end-of-the-night pace |
 | `voice` | yes | present but empty (YAML null) until STOP 2 picks one |
 
 **Who speaks.** A show with a recurring host keeps one voice: the same commentator, newsreader, teacher, guide and shuffler every time, so all lessons share one teacher. Testimonies and addresses are different people, so every recording gets its own voice and none repeats. The voice comes from `esoterica/voices.yaml`, keyed by show or, for testimonies and addresses, by recording id.
@@ -208,6 +210,7 @@ swift run -c release nightctl audition voice \
 | `sideline` | Play-by-play and colour commentary of a made-up sport, rules never fully explained, for a regional audience that knows them. Gentle, patient, reverent about small things. | `en` |
 | `addresses` | Speeches by invented figures at invented occasions in histories that didn't happen. Grand in cadence, strange in content. | `en` |
 | `stations` | News radio (headlines, weather, traffic, time checks) from somewhere else. Calm, routine, impossible. | `en` |
+| *(planned)* late-night call-in show | A station on the dial: a soothing overnight host taking calls. The operator's "number 1 sleep request"; added to the station list 2026-11-03, not designed or written yet, so not a `show` value the parser accepts. | `en` |
 | `lessons` | A clinical call-and-response course in a "language" that is not a language: reversed English, or one soft word repeated (*mubba*). It must never sound like a real (especially Romance) language. The example sentences widen into a strange, gentle world. | `en+invented` |
 | `meditations` | French guided meditations that start conventionally and drift somewhere unexpected. | `fr` |
 | `shuffles` | Bursts of rapid, unrelated, concrete sensory images, a few in French. | `en` (some `fr` lines) |

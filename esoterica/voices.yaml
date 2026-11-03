@@ -22,7 +22,7 @@ providers:
     settings:                   # PLACEHOLDERS (intimacy recipe)
       stability: 0.5            # below "robust"; valid whether v4 takes 0/0.5/1 steps or a range
       similarity_boost: 0.75    # provider default
-      speed: 0.85               # slower than default 1.0 (docs floor 0.7)
+      speed: 0.85               # slower than default 1.0 (docs floor 0.7); eleven_v4 IGNORES it (measured 2026-11-03)
   cartesia:
     model: sonic-3.6            # current Sonic, "fastest, most natural"; French supported
     price_per_char: 0.00005     # USD, UNVERIFIED: docs say ~1 credit/char; $/credit is third-party (Pro $5 / 100K)

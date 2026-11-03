@@ -48,6 +48,23 @@ until they've thought about how; the voice layer is built so it can grow into it
 Below Plan 8a come the Plan 7a and 7b sections (the Swift engine); after them,
 the Python engine and the web mixer as built through Plan 5, Phase 3.
 
+## The app's UI idea: a radio dial (operator, 2026-11-03)
+
+In the operator's words: "I think a radio dial might be the UI with a
+serrated wheel UX, and users scroll station to station with static between
+or mixed over when the needle is a little off. That might be the only UI."
+
+What that implies, as Claude reads it (not designed yet): the shows are
+stations on one dial (testimonies, sideline, addresses, strange stations,
+lessons, méditations, shuffles, and the late-night call-in show the operator
+added to the station list the same day). A serrated thumb-wheel moves a
+needle; landing between stations gives AM static, and being slightly off a
+station mixes that station with static, which fits the AM channel the engine
+already has (distance, fragmentation). Possibly no other screen at all. The
+iPhone app is not planned or built (Plan 6's iOS design was superseded), so
+this is the starting picture for the app milestone, alongside the planner and
+a real-time engine, which the app also needs.
+
 ## Plan 8a: the Esoterica starter set (2026-11-03, branch `feat/esoterica`)
 
 **What this is, in the operator's spirit.** Esoterica is a collection of found
@@ -138,11 +155,77 @@ character for v4). The whole starter set is estimated at 57,134 characters, so
 the five unvoiced recordings need roughly 30k more. Shared-library ElevenLabs
 voices worked by id without being added to the account.
 
+### Pace: the end-of-the-night re-voice (2026-11-03, branch `feat/esoterica-pace`)
+
+**What the operator asked.** After listening, backward lesson and orchard light
+are "great as-is". The Lantern Accords and Northern Tide should be slower:
+"speech more like an elderly person, or more deliberately slow and leisurely, a
+kind of end-of-the-night vibe". Of four free offline test versions (speech
+time-stretched to 85% or 75% with ffmpeg `atempo`, pauses 1.6x or 2.2x longer),
+they said "for lantern accords, slower would be acceptable, but in both
+versions, I would prefer much slower if it were naturally revoiced". The
+"much slower" version was 75% speech and 2.2x pauses.
+
+**What was built.** Two optional script keys (`esoterica/README.md` documents
+them):
+
+- `speed`: the provider's speaking-rate setting for this recording,
+  overriding `voices.yaml`. It is recorded in each take's sidecar
+  (`pNN.raw.json` gains `"speed"`; a sidecar without it means the default), is
+  part of the piece-cache key, and a change makes the takes stale, so
+  `voice <id> --revoice pNN` is the deliberate way to re-voice at a new speed.
+- `pause_stretch`: free and render-time. `render` lengthens every silence of at
+  least `PAUSE_MIN_S` between two stretches of speech by this factor (digital
+  silence inserted mid-pause, speech samples untouched, raw takes untouched),
+  before the source character. The manifest's `character_params` records it
+  when it is not 1.
+
+Both scripts now carry `speed: 0.7` and `pause_stretch: 2.2`. Rendered, the
+Lantern Accords is 10.9 min (was 8.3) and Northern Tide 15.6 min (was 12.0),
+all of the gain from the longer pauses.
+
+**What went wrong: `eleven_v4` ignores `speed`.** Both were re-voiced at 0.7
+(17,398 characters) and the raw takes came back the same length as at 0.85.
+A 79-character test sentence then measured, on the sideline voice (Bill):
+`eleven_v4` 5.52 s at speed 0.7 and 5.52 s at 1.2 (identical), against
+`eleven_multilingual_v2` 7.52 s at 0.7 and 4.13 s at 1.2. So the v4
+model ignores the setting, and the `speed: 0.85` in `voices.yaml` has never
+applied to any v4 take either. The API reference documents `speed` with no
+model restriction, which is why it was trusted; it should have been checked
+with one short sentence first. The re-voiced takes are good new takes at the
+old pace, not slower ones. The 0.85 takes they replaced are kept, untouched, in
+the git-ignored `esoterica/library/_superseded/<id>-speed-0.85/`.
+
+**What does slow v4 down** (same sentence, same voice): an inline tag before
+the text. `[slowly]` 6.40 s, `[tired, speaking very slowly]` 6.24 s,
+`[drowsy] [slowly]` 6.00 s, against 5.36-5.52 s plain: about 15% slower,
+natural, in v4's own performance. `eleven_multilingual_v2` at 0.7 is about
+30-35% slower but is a different (less emotive) model, so it changes the
+recorded voice and needs a full re-voice. Samples for the operator:
+`bill-v4-plain.wav`, `bill-v4-slowly.wav`, `bill-v4-tired.wav`,
+`bill-v4-drowsy.wav` and `bill-v2-speed0.7.wav` in the session scratchpad
+(`.../scratchpad/v4tags/`). **Decision pending with the operator**: v4 with a
+slow tag, v2 at 0.7, or the current takes with longer pauses only.
+
+**Spend.** The re-voice 17,398 characters plus the speed and tag tests 768:
+ElevenLabs total now about 59,983 of 265,000 credits.
+
+**Placeholders** (Claude's, tune by ear):
+
+| Name | Value | Where |
+|---|---|---|
+| `PAUSE_THRESHOLD_DB` | -45 dBFS (20 ms RMS) | `voicing.py`: below this is a pause (raw takes are at -24 dB speech RMS) |
+| `PAUSE_MIN_S` | 0.12 s | `voicing.py`: shorter silences are gaps inside words, not stretched |
+| `PAUSE_WIN_S` | 0.02 s | `voicing.py`: the analysis frame |
+| `pause_stretch` | 2.2 | both scripts: the operator's "much slower" test version |
+| `speed` | 0.7 | both scripts: ElevenLabs' floor; **no effect on `eleven_v4`** |
+
 ### Provider facts (read from live docs and free APIs, 2026-11-03)
 
 - **ElevenLabs:** `POST /v1/text-to-speech/{voice_id}`, header `xi-api-key`; model
   `eleven_v4` ("most emotive"; 10,000-char request limit; French; no style or
-  speaker boost; no SSML breaks, pauses come from ellipses); inline audio tags
+  speaker boost; no SSML breaks, pauses come from ellipses; **ignores the
+  `speed` voice setting**, measured 2026-11-03, see "Pace" above); inline audio tags
   like `[whispers]`, `[exhales]`; `pcm_44100` output needs the Pro tier, so
   `pcm_24000` is requested and resampled; $0.08 per 1,000 characters.
 - **Cartesia:** `POST /tts/bytes`, `Cartesia-Version: 2026-08-14`; model

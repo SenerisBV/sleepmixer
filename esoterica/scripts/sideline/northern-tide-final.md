@@ -13,6 +13,8 @@ speaker: >
   Wenna, is in the hut with him but never on the microphone.
 source_character: hum
 voice_profile: male, older, casual
+speed: 0.7
+pause_stretch: 2.2
 voice:
 ---
 

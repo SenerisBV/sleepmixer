@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -527,3 +528,58 @@ def test_audition_file_without_a_sidecar_is_redone(fakes, tmp_path):
     one = billed_chars(ecli.audition_excerpt(s), Cartesia.translate_cues, max_chars(Cartesia))
     assert re.search(rf"cartesia .*\b{one:,} characters", r.output)
     assert re.search(r"elevenlabs .*\b0 characters", r.output)
+
+
+# --- pace -------------------------------------------------------------------------
+
+def _speedy_scripts(tmp_path):
+    root = tmp_path / "scripts"
+    for show, id, extra in (("testimonies", "slow-one", "speed: 0.7\n"),
+                            ("testimonies", "plain-one", "")):
+        (root / show).mkdir(parents=True, exist_ok=True)
+        (root / show / f"{id}.md").write_text(
+            f"---\nid: {id}\nshow: {show}\ntitle: T\nlanguage: en\nspeaker: x\n"
+            f"source_character: clean\n{extra}voice:\n---\nOne. Two.\n")
+    return root
+
+
+def test_voice_sends_each_recordings_own_speed(monkeypatch, tmp_path):
+    seen = []
+
+    def factory(name, cfg, env_path):
+        seen.append((cfg.get("settings") or {}).get("speed"))
+        p = FakeProvider()
+        p.name = name
+        return p
+
+    monkeypatch.setattr(ecli, "make_provider", factory)
+    root = _speedy_scripts(tmp_path)
+    voices = voices_with_chosen(tmp_path, {
+        s: {"provider": "elevenlabs", "model": "eleven_v4", "voice_id": f"v-{s}"}
+        for s in ("slow-one", "plain-one")})
+    r = CliRunner().invoke(main, ["esoterica", "voice", "--all", "--yes",
+                                  "--scripts", str(root), "--voices", str(voices),
+                                  "--library", str(tmp_path / "lib")])
+    assert r.exit_code == 0, r.output
+    default = (yaml.safe_load(VOICES.read_text())["providers"]["elevenlabs"].get("settings") or {}).get("speed")
+    assert sorted(seen, key=str) == sorted([0.7, default], key=str)
+    side = json.loads((tmp_path / "lib" / "slow-one" / "p01.raw.json").read_text())
+    assert side["speed"] == 0.7
+
+
+def test_revoice_after_a_speed_change(monkeypatch, tmp_path, fakes):
+    root = _speedy_scripts(tmp_path)
+    voices = voices_with_chosen(tmp_path, {
+        s: {"provider": "elevenlabs", "model": "eleven_v4", "voice_id": f"v-{s}"}
+        for s in ("slow-one", "plain-one")})
+    args = ["--scripts", str(root), "--voices", str(voices), "--library", str(tmp_path / "lib")]
+    assert CliRunner().invoke(main, ["esoterica", "voice", "plain-one", "--yes", *args]).exit_code == 0
+    p = root / "testimonies" / "plain-one.md"
+    p.write_text(p.read_text().replace("voice:\n", "speed: 0.7\nvoice:\n"))
+    r = CliRunner().invoke(main, ["esoterica", "voice", "plain-one", "--yes", *args])
+    assert r.exit_code != 0 and "speed changed" in r.output and "--revoice p01" in r.output
+    before = calls(fakes)
+    r = CliRunner().invoke(main, ["esoterica", "voice", "plain-one", "--revoice", "p01",
+                                  "--yes", *args])
+    assert r.exit_code == 0, r.output
+    assert calls(fakes) > before

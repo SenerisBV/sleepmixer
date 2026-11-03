@@ -126,7 +126,8 @@ serious and essential, approached with play but never with irony.
 - **The iPhone app.** Files are produced on the Mac; getting them to the phone
   is the app milestone.
 - **The late-night DJ / call-in show.** Still the operator's to design. The
-  strange-stations show is a neighbour of it, not it.
+  strange-stations show is a neighbour of it, not it. Since 2026-11-03 it is
+  on the station list (the show table above) so it is not forgotten.
 
 ## Anti-goals: it fails if…
 
@@ -171,6 +172,7 @@ unrecognisable. Lengths are placeholders.
 | **Sideline** (sport commentary) | Play-by-play and colour commentary of a made-up sport whose rules are never fully explained, as if to a regional audience that knows them. Gentle, patient, full of small reverent details. | 4–6 passages | English |
 | **Addresses** (alternate-world speeches) | Speeches by invented figures at invented occasions in histories that didn't happen: a dedication, a farewell, a call to something. Grand in cadence, strange in content. | 3–5 passages | English |
 | **Strange stations** | A news-radio format (headlines, weather, traffic, time checks) from somewhere else: an alien city, the spirit realm. Calm, routine, impossible. | many short segments | English |
+| **Late-night call-in show** *(added 2026-11-03, not designed)* | A soothing overnight host taking calls, late at night. The operator asked for it to be on the station list; how it works (callers, the host's voice, whether calls are generated live) is still theirs to design. | — | English |
 | **Lessons** | A call-and-response language course for an invented language: phrases, repetition, pauses for the listener, a gently widening world glimpsed through the example sentences. *Amended at STOP 1 (2026-11-03), see below.* | 4–6 passages | English + invented |
 | **Méditations** | French guided meditations that begin conventionally and drift somewhere unexpected. | 3–5 passages | French |
 | **Shuffles** | Bursts of rapid, unrelated, concrete sensory images ("bright yellow … warm rain … sour apple"), one every 2–3 s, 20–40 per burst. Mixed between the longer pieces like the scenes are. | many 1–2 min bursts | English (a few French) |

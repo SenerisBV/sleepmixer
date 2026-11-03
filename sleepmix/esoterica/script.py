@@ -16,7 +16,12 @@ LANGUAGES = frozenset({"en", "fr", "en+invented"})
 INTENSITIES = frozenset({"low", "medium", "high"})
 
 _REQUIRED = ("id", "show", "title", "language", "speaker", "source_character", "voice")
-_OPTIONAL = ("voice_profile",)
+_OPTIONAL = ("voice_profile", "speed", "pause_stretch")
+# speed: the provider's speaking-rate setting for this recording (ElevenLabs
+# accepts 0.7-1.2, Cartesia 0.6-1.5); pause_stretch: render-time factor on the
+# silences between phrases (free to change, raw takes are not touched).
+SPEED_RANGE = (0.5, 1.5)
+PAUSE_STRETCH_RANGE = (1.0, 4.0)
 _BRACKET = re.compile(r"\[[^\]\n]*\]")
 _INTENSITY = re.compile(r"^<!--\s*intensity:\s*(\S+?)\s*-->$")
 _COMMENT = re.compile(r"<!--.*?-->")
@@ -45,6 +50,8 @@ class Script:
     voice: dict | None
     passages: tuple[Passage, ...]
     path: Path
+    speed: float | None = None
+    pause_stretch: float = 1.0
 
 
 def spoken_text(p: Passage) -> str:
@@ -105,6 +112,18 @@ def load_script(path: Path) -> Script:
     vp = meta.get("voice_profile")
     if vp is not None and not isinstance(vp, str):
         fail("voice_profile must be a string", key_line("voice_profile"))
+    def number(key: str, lo: float, hi: float) -> float | None:
+        v = meta.get(key)
+        if v is None:
+            return None
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            fail(f"{key} must be a number", key_line(key))
+        if not lo <= v <= hi:
+            fail(f"{key} must be between {lo} and {hi}", key_line(key))
+        return float(v)
+
+    speed = number("speed", *SPEED_RANGE)
+    pause_stretch = number("pause_stretch", *PAUSE_STRETCH_RANGE) or 1.0
     voice = meta["voice"]
     if voice is not None and not isinstance(voice, dict):
         fail("voice must be empty or a mapping", key_line("voice"))
@@ -152,7 +171,8 @@ def load_script(path: Path) -> Script:
     return Script(id=meta["id"], show=meta["show"], title=meta["title"],
                   language=meta["language"], speaker=meta["speaker"],
                   source_character=meta["source_character"], voice_profile=vp,
-                  voice=voice, passages=tuple(passages), path=path)
+                  voice=voice, passages=tuple(passages), path=path,
+                  speed=speed, pause_stretch=pause_stretch)
 
 
 def load_all(root: Path) -> list[Script]:
