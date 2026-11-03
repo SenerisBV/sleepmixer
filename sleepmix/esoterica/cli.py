@@ -13,12 +13,12 @@ from pathlib import Path
 import click
 import requests
 
-from .cost import estimate as estimate_cost
 from .env import api_key
 from .providers import Cartesia, ElevenLabs, ProviderError
-from .script import SHOWS, Script, load_all, spoken_text
+from .script import SHOWS, Passage, Script, load_all
 from .voicing import (
-    Voice, VoicesConfig, check_distinct_voices, load_voices, passage_file, shuffle_lines,
+    Voice, VoiceMismatchError, VoicesConfig, billed_chars, check_distinct_voices,
+    check_resume_voice, load_voices, passage_file, shuffle_billed_chars, shuffle_lines,
     shuffle_rng, split_sentences, voice_passage, voice_recording, voice_shuffle, voice_slot,
 )
 
@@ -47,6 +47,28 @@ def make_provider(name: str, cfg: dict, env_path: Path):
     p = PROVIDERS[name](key, requests.Session(), settings=cfg.get("settings"))
     p.max_chars = int(cfg["max_chars"])
     return p
+
+
+def _build_providers(names, cfg: VoicesConfig, env_path: Path) -> dict:
+    """Every provider a run needs, built (keys resolved) before the first
+    request, so a missing second key fails while nothing has been spent."""
+    return {n: make_provider(n, cfg.providers[n], env_path) for n in sorted(set(names))}
+
+
+# --- billed characters (what each provider is actually sent; no key needed) ----
+
+def passage_chars(script: Script, p: Passage, provider: str) -> int:
+    t = PROVIDERS[provider].translate_cues
+    if script.show == "shuffles":
+        return shuffle_billed_chars(shuffle_lines(p.text), t)
+    return billed_chars(p.text, t)
+
+
+def excerpt_chars(excerpt, provider: str) -> int:
+    t = PROVIDERS[provider].translate_cues
+    if isinstance(excerpt, list):
+        return shuffle_billed_chars(excerpt, t)
+    return billed_chars(excerpt, t)
 
 
 def _common(f):
@@ -96,22 +118,25 @@ def esoterica() -> None:
 def estimate(scripts_root, voices_path, env_path):
     """Characters and estimated cost of voicing every script, per provider."""
     scripts, cfg = _load(scripts_root, voices_path)
-    prices = {n: float(p["price_per_char"]) for n, p in cfg.providers.items()}
-    first = estimate_cost(scripts, next(iter(prices)), prices)
-    click.echo(f"{len(scripts)} scripts:")
-    for sid, n in first.per_recording.items():
-        click.echo(f"  {sid:<24} {n:>7,} characters")
+    names = list(cfg.providers)
+    click.echo(f"{len(scripts)} scripts (characters sent, after cue translation):")
+    click.echo(f"  {'':<24} " + " ".join(f"{n:>11}" for n in names))
+    chars = {n: 0 for n in names}
+    for s in scripts:
+        row = {n: sum(passage_chars(s, p, n) for p in s.passages) for n in names}
+        for n in names:
+            chars[n] += row[n]
+        click.echo(f"  {s.id:<24} " + " ".join(f"{row[n]:>11,}" for n in names))
     click.echo("\nAll scripts, per provider:")
-    chars = {n: estimate_cost(scripts, n, prices).characters for n in prices}
     for line in _cost_lines(chars, cfg):
         click.echo(line)
 
 
 # --- voice ----------------------------------------------------------------------
 
-def _remaining(script: Script, library: Path) -> int:
+def _remaining(script: Script, library: Path, provider: str) -> int:
     d = library / script.id
-    return sum(len(spoken_text(p)) for p in script.passages
+    return sum(passage_chars(script, p, provider) for p in script.passages
                if not (d / passage_file(p.index)).exists())
 
 
@@ -136,10 +161,15 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
         raise click.ClickException(
             "no chosen voice in voices.yaml `chosen:` for slot(s): " + ", ".join(missing)
             + " (pick them at STOP 2 first)")
+    try:
+        for s in scripts:
+            check_resume_voice(s, cfg.voice_for(voice_slot(s)), library)
+    except (VoiceMismatchError, ValueError) as e:
+        raise click.ClickException(str(e)) from None
     chars: dict[str, int] = {}
     for s in scripts:
         v = cfg.voice_for(voice_slot(s))
-        chars[v.provider] = chars.get(v.provider, 0) + _remaining(s, library)
+        chars[v.provider] = chars.get(v.provider, 0) + _remaining(s, library, v.provider)
     click.echo(f"Voicing {len(scripts)} recording(s) into {library} "
                "(passages already on disk are skipped and not counted):")
     for line in _cost_lines(chars, cfg):
@@ -147,13 +177,11 @@ def voice(script_id, all_, yes, library, scripts_root, voices_path, env_path):
     if not yes:
         _no_spend_note()
         return
-    providers: dict[str, object] = {}
+    providers = _build_providers((cfg.voice_for(voice_slot(s)).provider for s in scripts),
+                                 cfg, env_path)
     failed = []
     for s in scripts:
         v = cfg.voice_for(voice_slot(s))
-        if v.provider not in providers:
-            providers[v.provider] = make_provider(v.provider, cfg.providers[v.provider],
-                                                  env_path)
         m = voice_recording(s, providers[v.provider], v, library,
                             on_error=lambda msg: click.echo(f"  failed: {msg}", err=True))
         if m is None:
@@ -189,12 +217,6 @@ def audition_excerpt(script: Script) -> str | list[str]:
         if words >= AUDITION_WORDS:
             break
     return " ".join(taken)
-
-
-def _excerpt_chars(excerpt) -> int:
-    if isinstance(excerpt, list):
-        return sum(len(x) for x in excerpt)
-    return len(re.sub(r"\s+", " ", _CUE.sub("", excerpt)).strip())
 
 
 def _slots(scripts: list[Script]) -> dict[str, Script]:
@@ -263,15 +285,16 @@ def audition(slot, show, all_, yes, out_dir, scripts_root, voices_path, env_path
     click.echo(f"Audition into {out_dir} (files already on disk are skipped and not counted):")
     for k, s in chosen.items():
         excerpt = audition_excerpt(s)
-        n = _excerpt_chars(excerpt)
+        per = {prov: excerpt_chars(excerpt, prov) for prov in cfg.candidates[k]}
         for prov, cands in cfg.candidates[k].items():
             for c in cands:
                 out = out_dir / k / f"{prov}-{slug(c['name'])}.wav"
-                todo = not out.exists()
-                chars[prov] += n if todo else 0
-                jobs.append((k, s, prov, c, out, excerpt))
-        click.echo(f"  {k:<20} {s.id:<24} {n:>5,} characters x "
-                   f"{sum(len(v) for v in cfg.candidates[k].values())} voices")
+                if not out.exists():
+                    chars[prov] += per[prov]
+                    jobs.append((k, s, prov, c, out, excerpt))
+        click.echo(f"  {k:<20} {s.id:<24} "
+                   + ", ".join(f"{prov} {n:,} x {len(cfg.candidates[k][prov])}"
+                               for prov, n in per.items()) + " characters")
     click.echo("\nPer provider:")
     for line in _cost_lines(chars, cfg):
         click.echo(line)
@@ -279,26 +302,25 @@ def audition(slot, show, all_, yes, out_dir, scripts_root, voices_path, env_path
         _no_spend_note()
         return
 
-    providers: dict[str, object] = {}
+    providers = _build_providers((j[2] for j in jobs), cfg, env_path)
     failed = []
-    for k, s, prov, c, out, excerpt in jobs:
-        if out.exists():
-            continue
-        if prov not in providers:
-            providers[prov] = make_provider(prov, cfg.providers[prov], env_path)
-        v = Voice(prov, cfg.providers[prov]["model"], c["voice_id"])
-        try:
-            if isinstance(excerpt, list):
-                voice_shuffle(providers[prov], excerpt, v, s.language, out,
-                              shuffle_rng(s.id, 0))
-            else:
-                voice_passage(providers[prov], excerpt, v, s.language, out)
-            click.echo(f"  wrote {out.relative_to(out_dir)}")
-        except ProviderError as e:
-            failed.append(f"{k}/{prov}-{slug(c['name'])}")
-            click.echo(f"  failed: {k} {prov} {c['name']}: {e}", err=True)
-    index = _write_index(out_dir, every, cfg)
-    click.echo(f"Index: {index}")
+    try:
+        for k, s, prov, c, out, excerpt in jobs:
+            v = Voice(prov, cfg.providers[prov]["model"], c["voice_id"])
+            try:
+                if isinstance(excerpt, list):
+                    voice_shuffle(providers[prov], excerpt, v, s.language, out,
+                                  shuffle_rng(s.id, 0))
+                else:
+                    voice_passage(providers[prov], excerpt, v, s.language, out)
+                click.echo(f"  wrote {out.relative_to(out_dir)}")
+            except ProviderError as e:
+                failed.append(f"{k}/{prov}-{slug(c['name'])}")
+                click.echo(f"  failed: {k} {prov} {c['name']}: {e}", err=True)
+    finally:
+        # Whatever happened, list what is on disk now.
+        if out_dir.is_dir():
+            click.echo(f"Index: {_write_index(out_dir, every, cfg)}")
     if failed:
         click.echo(f"{len(failed)} audition file(s) failed: {', '.join(failed)}. "
                    "Re-run to retry; finished files are kept.", err=True)

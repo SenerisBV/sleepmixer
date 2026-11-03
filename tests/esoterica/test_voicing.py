@@ -9,9 +9,13 @@ from sleepmix.esoterica import voicing
 from sleepmix.esoterica.manifest import read_manifest
 from sleepmix.esoterica.providers import Cartesia, ElevenLabs, ProviderError
 from sleepmix.esoterica.script import load_all, load_script
+import json
+import logging
+
 from sleepmix.esoterica.voicing import (
-    PER_RECORDING_SHOWS, Voice, check_distinct_voices, chunk, load_voices,
-    voice_passage, voice_recording, voice_slot,
+    PER_RECORDING_SHOWS, Voice, VoiceMismatchError, billed_chars, check_distinct_voices,
+    check_resume_voice, chunk, load_voices, normalise, voice_passage, voice_recording,
+    voice_slot,
 )
 
 from .fakes import FakeProvider, FakeResponse, FakeSession, pcm_f32, pcm_s16, tone
@@ -164,7 +168,7 @@ def test_voice_recording_writes_passages_and_manifest(tmp_path):
     assert m is not None
     d = lib / "rec"
     assert sorted(p.name for p in d.iterdir()) == ["p01.wav", "p02.wav", "p03.wav",
-                                                    "recording.json"]
+                                                    "recording.json", "voice.json"]
     back = read_manifest(d / "recording.json")
     assert back == m
     assert [e.file for e in m.passages] == ["p01.wav", "p02.wav", "p03.wav"]
@@ -193,7 +197,7 @@ def test_mid_run_failure_keeps_done_passages_and_no_manifest(tmp_path):
     bad = FakeProvider(fail_when=lambda t: "Three" in t)
     assert voice_recording(s, bad, V, lib) is None
     d = lib / "rec"
-    assert sorted(p.name for p in d.iterdir()) == ["p01.wav", "p02.wav"]
+    assert sorted(p.name for p in d.iterdir()) == ["p01.wav", "p02.wav", "voice.json"]
     good = FakeProvider()
     m = voice_recording(s, good, V, lib)
     assert m is not None
@@ -278,3 +282,85 @@ def test_load_voices_rejects_malformed_chosen(tmp_path):
     p.write_text(yaml.safe_dump(data))
     with pytest.raises(ValueError, match="lessons"):
         load_voices(p)
+
+
+# --- review round 1 ---------------------------------------------------------------
+
+def test_chunk_measures_translated_length():
+    text = " ".join(["Word word. [pause]"] * 20)
+    measure = lambda t: len(Cartesia.translate_cues(t))
+    chunks = chunk(text, 100, measure=measure)
+    assert all(measure(c) <= 100 for c in chunks)
+    # plain len() would pack more per chunk than the provider can take
+    assert any(measure(c) > 100 for c in chunk(text, 100))
+
+
+def test_voice_passage_sends_chunks_within_limit_after_translation(tmp_path):
+    s = FakeSession(cartesia_tone)
+    p = Cartesia("k", s)
+    p.max_chars = 60
+    text = " ".join(["The floor was warm. [pause]"] * 8)
+    voice_passage(p, text, Voice("cartesia", "m", "v"), "en", tmp_path / "p.wav")
+    assert all(len(c["json"]["transcript"]) <= 60 for c in s.calls)
+
+
+def test_billed_chars_counts_what_is_sent():
+    text = "One. [pause] Two. [long pause] Three [breath] four."
+    # [long pause] is a split, never sent; each segment counted after translation
+    assert billed_chars(text, Cartesia.translate_cues) == (
+        len(Cartesia.translate_cues("One. [pause] Two."))
+        + len(Cartesia.translate_cues("Three [breath] four.")))
+    assert billed_chars(text, ElevenLabs.translate_cues) == (
+        len(ElevenLabs.translate_cues("One. [pause] Two."))
+        + len(ElevenLabs.translate_cues("Three [breath] four.")))
+    assert billed_chars(text, Cartesia.translate_cues) > len("One. Two.Three four.")
+
+
+def test_resume_with_a_different_voice_is_refused(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec",
+                     ["One.", "Two fails.", "Three."])
+    lib = tmp_path / "lib"
+    assert voice_recording(s, FakeProvider(fail_when=lambda t: "Two" in t), V, lib) is None
+    rec = json.loads((lib / "rec" / "voice.json").read_text())
+    assert rec == {"provider": "fake", "model": "m", "voice_id": "v1"}
+    other = FakeProvider()
+    with pytest.raises(VoiceMismatchError, match="rec.*v1.*v2"):
+        voice_recording(s, other, Voice("fake", "m", "v2"), lib)
+    assert other.calls == []
+    # the same voice resumes fine
+    assert voice_recording(s, FakeProvider(), V, lib) is not None
+
+
+def test_resume_refused_for_finished_recording_with_other_voice(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One."])
+    lib = tmp_path / "lib"
+    voice_recording(s, FakeProvider(), V, lib)
+    (lib / "rec" / "voice.json").unlink()  # the manifest alone still records it
+    with pytest.raises(VoiceMismatchError):
+        check_resume_voice(s, Voice("fake", "m", "other"), lib)
+    check_resume_voice(s, V, lib)
+
+
+def test_resume_refused_for_passages_with_no_voice_record(tmp_path):
+    s = write_script(tmp_path / "scripts", "testimonies", "rec", ["One.", "Two."])
+    d = tmp_path / "lib" / "rec"
+    d.mkdir(parents=True)
+    sf.write(d / "p01.wav", np.zeros(100, np.float32), 44100, subtype="FLOAT")
+    fp = FakeProvider()
+    with pytest.raises(VoiceMismatchError, match="no record"):
+        voice_recording(s, fp, V, tmp_path / "lib")
+    assert fp.calls == []
+
+
+def test_normalise_warns_when_it_cannot_reach_the_target(caplog):
+    x = np.zeros(44100, np.float32)
+    x[::1000] = 0.9  # a sparse spike train: capped at -3 dBFS, RMS stays far below -24
+    with caplog.at_level(logging.WARNING, logger="sleepmix.esoterica.voicing"):
+        normalise(x)
+    assert "misses" in caplog.text
+
+
+def test_normalise_quiet_when_on_target(caplog):
+    with caplog.at_level(logging.WARNING, logger="sleepmix.esoterica.voicing"):
+        normalise(tone(1.0) * 0.1)
+    assert "misses" not in caplog.text

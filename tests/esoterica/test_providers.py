@@ -39,7 +39,7 @@ def test_elevenlabs_request_shape_and_decode():
     body = call["json"]
     assert body["text"] == "hello there."
     assert body["model_id"] == "eleven_v4"
-    assert body["language_code"] == "en"
+    assert "language_code" not in body  # only sent for French
     vs = body["voice_settings"]
     assert set(vs) == {"stability", "similarity_boost", "speed"}  # v4: no style / speaker boost
     assert 0.7 <= vs["speed"] < 1.0
@@ -113,7 +113,8 @@ def test_key_never_leaks_in_error_or_logs(cls, caplog):
     assert "TESTSECRET" not in msg
     assert "TESTSECRET" not in repr(e.value)
     assert "TESTSECRET" not in caplog.text
-    assert e.value.__cause__ is None or "TESTSECRET" not in str(e.value.__cause__)
+    assert e.value.__cause__ is None
+    assert e.value.__context__ is None
 
 
 @pytest.mark.parametrize("cls", [ElevenLabs, Cartesia])
@@ -133,6 +134,7 @@ def test_timeout_raises_provider_error_without_key(cls):
         p.synthesize("hello.", "v", "m", "en")
     assert "TESTSECRET" not in str(e.value)
     assert e.value.__cause__ is None
+    assert e.value.__context__ is None  # the requests exception is not reachable
 
 
 @pytest.mark.parametrize("cls", [ElevenLabs, Cartesia])
@@ -192,3 +194,20 @@ def test_synthesize_never_sends_a_neutral_unsupported_cue(cls):
     sent = s.calls[0]["json"].get("text") or s.calls[0]["json"].get("transcript")
     assert set(re.findall(r"\[[^\]]*\]", sent)) <= cls.SUPPORTED_TAGS
     assert "[pause]" not in sent and "[whisper]" not in sent
+
+
+@pytest.mark.parametrize("cls", [ElevenLabs, Cartesia])
+@pytest.mark.parametrize("ctype", ["application/json", "application/json; charset=utf-8",
+                                   "text/html", "text/plain"])
+def test_2xx_non_audio_is_rejected_without_echo(cls, ctype):
+    body = b'{"warning": "sk-TESTSECRET123 something odd"}'
+    p = cls(KEY, FakeSession(lambda c: FakeResponse(200, body, {"Content-Type": ctype})))
+    with pytest.raises(ProviderError, match="not audio") as e:
+        p.synthesize("hello.", "v", "m", "en")
+    assert "TESTSECRET" not in str(e.value) and "warning" not in str(e.value)
+
+
+@pytest.mark.parametrize("cls", [ElevenLabs, Cartesia])
+def test_translate_cues_needs_no_instance_or_key(cls):
+    assert cls.translate_cues("a [laughs quietly] b") == cls(KEY, FakeSession(ok_f32)).translate_cues(
+        "a [laughs quietly] b")

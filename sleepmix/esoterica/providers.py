@@ -67,10 +67,11 @@ class _Base:
     def __repr__(self) -> str:  # never show the key
         return f"{type(self).__name__}(settings={self.settings!r})"
 
-    def translate_cues(self, text: str) -> str:
-        # [long pause] first so "[pause]" can't match inside it (it can't, but
-        # the order makes the table read top to bottom).
-        return _translate(text, self.CUE_FORMS)
+    @classmethod
+    def translate_cues(cls, text: str) -> str:
+        """Neutral cues -> this provider's forms. A classmethod, so cost
+        estimates can count exactly what will be sent without a key."""
+        return _translate(text, cls.CUE_FORMS)
 
     def _redact(self, s: str) -> str:
         if self._key:
@@ -78,19 +79,27 @@ class _Base:
         return _TOKENISH.sub("***", s)
 
     def _post(self, url: str, *, params=None, body: dict, headers: dict) -> bytes:
+        failure = None
         try:
             r = self._session.post(url, params=params, json=body, headers=headers,
                                    timeout=TIMEOUT)
         except requests.RequestException as e:
-            # Deliberately no `from e`: a requests exception can carry the
-            # request (and so the headers) in its args or attributes.
-            raise ProviderError(f"{self.name}: request failed "
-                                f"({type(e).__name__})") from None
+            # Only the exception's type name is kept. The ProviderError is
+            # raised *outside* this except block so neither __cause__ nor
+            # __context__ points at the requests exception, which can carry
+            # the request and so the key header.
+            failure = f"{self.name}: request failed ({type(e).__name__})"
+        if failure is not None:
+            raise ProviderError(failure)
         if not (200 <= r.status_code < 300):
-            raise ProviderError(f"{self.name}: HTTP {r.status_code}"
-                                f"{self._detail(r)}") from None
+            raise ProviderError(f"{self.name}: HTTP {r.status_code}{self._detail(r)}")
+        ctype = str(r.headers.get("Content-Type", "")).lower()
+        if ctype.startswith(("application/json", "text/")):
+            # A 2xx that isn't audio; decoding it as PCM would write noise.
+            raise ProviderError(f"{self.name}: HTTP {r.status_code} returned "
+                                f"{ctype.split(';')[0]}, not audio")
         if not r.content:
-            raise ProviderError(f"{self.name}: empty audio in the response") from None
+            raise ProviderError(f"{self.name}: empty audio in the response")
         return r.content
 
     def _detail(self, r) -> str:
@@ -145,10 +154,16 @@ class ElevenLabs(_Base):
         body = {
             "text": self.translate_cues(text),
             "model_id": model,
-            "language_code": api_language(language),
+            # `speed` is documented (0.7-1.2) on the v4 prompting page and the
+            # API reference places no model restriction on it.
             "voice_settings": {k: self.settings[k] for k in
                                ("stability", "similarity_boost", "speed")},
         }
+        # The API reference says an unsupported language_code is ignored, but
+        # it lists no models that accept it, so it is sent only where it
+        # matters (French); English is the model's own detection.
+        if api_language(language) == "fr":
+            body["language_code"] = "fr"
         raw = self._post(self.URL.format(voice_id=voice_id),
                          params={"output_format": self.OUTPUT_FORMAT}, body=body,
                          headers={"xi-api-key": self._key,

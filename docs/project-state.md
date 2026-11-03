@@ -91,6 +91,23 @@ The audition (STOP 2) has not run; `voices.yaml` `chosen:` is empty, so
 - A shuffle passage that fails part-way is re-voiced whole on rerun (a few
   short lines are paid twice); every other passage is resumable exactly.
 - Shuffle French detection is an article heuristic, not a language model.
+- **A timed-out request may still be billed.** The read timeout is 300 s; if a
+  provider finishes a generation after the client gave up, it may charge for
+  it, and the rerun pays again for that passage.
+- **Cartesia price and limit are placeholders:** $0.00005/char (third-party
+  plan pricing; Cartesia's docs give only ~1 credit/char) and a 1000-character
+  request limit (Cartesia documents none).
+- **ElevenLabs audio is requested as 24 kHz PCM and resampled to 44.1 kHz,**
+  because 44.1 kHz PCM output needs the Pro tier.
+- **Estimates count what is sent:** characters after each provider's cue
+  translation (Cartesia's `<break time="1s"/>` is longer than `[pause]`), with
+  `[long pause]` excluded because it is never sent.
+- **Resume never mixes voices:** each recording directory gets a `voice.json`
+  (provider, model, voice_id) before its first request; `voice` refuses, before
+  spending, to resume a recording with a different voice, or one whose
+  passages have no record of their voice.
+- ElevenLabs `language_code` is sent only for French (the API reference says
+  an unsupported code is ignored but lists no models that accept it).
 
 ## Plan 7a: two scenes through the channel
 
