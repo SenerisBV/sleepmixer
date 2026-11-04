@@ -41,7 +41,7 @@ public struct FireSound: SoundSource {
     static let popLengthRange = 0.020...0.050    // seconds; attack 10-25 ms
     static let popBand = 150.0...900.0           // Hz
     static let popLevelRange = 0.6...1.0
-    static let popGain = 0.35
+    static let popGain = 0.22
     static let popNorm = 6.0
     // NightRandom streams: 100-101 noise, 102-103 seed-level wander, 104-108 per crackle cell,
     // 109-113 per pop cell.

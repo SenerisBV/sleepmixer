@@ -4,9 +4,11 @@ import NightPlan
 
 /// The weather outside the radio: the night's window sounds, in stereo.
 ///
-///     per sound: two instances (L and R seeds) -> width mix -> window bus
+///     rain, stream, crickets: two instances (L and R seeds) -> width mix -> window bus
+///     thunder: ONE instance, identical in L and R -> window bus (R3: sudden events keep their
+///     documented rate and are never panned to one side; the rumble is near-mono)
 ///     window bus (not the fire): lowpass ~5 kHz -> + wet short Reverb (small room)
-///     fire: its own bus, nearer the centre, no lowpass and no reverb
+///     fire: ONE instance, centred, its own bus, no lowpass and no reverb
 ///     (window + fire) x windowGain -> master guard, per channel
 ///
 /// Which sounds play follows the night: rain = rain; rainThunder = rain + thunder;
@@ -27,9 +29,11 @@ public struct WindowChain {
     /// Per-night trims in dB, so every night lands about 8 dB under a station. Raw levels differ:
     /// crickets+stream measure 5.6 dB and the fire 16.1 dB quieter than rain. rainThunder has no
     /// trim, so its rain is bit-identical to a rain night's; a thunder roll lifts it 1-2 dB.
-    static let nightTrimDB: [WindowNight: Double] = [.rain: 0, .rainThunder: 0, .cricketsStream: 6.1, .fire: 16.6]
+    static let nightTrimDB: [WindowNight: Double] = [.rain: 0, .rainThunder: 0, .cricketsStream: 6.1, .fire: 14.6]
+    /// Thunder's own trim in dB (R4): a single centred roll adds coherently in both channels, and at
+    /// unit trim its loudest 10 ms came within ~1 dB of the station's; this keeps it 3+ dB under.
+    static let thunderTrimDB = -6.0
     static let width = 0.6                // stereo width of the window sounds
-    static let fireWidth = 0.3            // the fire sits nearer the centre
     static let lowpassHz = 5000.0         // the open window: nothing bright gets through
     static let reverbWet = 0.2            // the small room's tail, relative to dry
     static let reverbDecaySeconds = 0.4
@@ -61,12 +65,12 @@ public struct WindowChain {
     private var rain: Pair<RainSound>?
     private var stream: Pair<StreamSound>?
     private var crickets: Pair<CricketsSound>?
-    private var thunder: Pair<ThunderSound>?
-    private var fire: Pair<FireSound>?
+    private var thunder: ThunderSound?     // one instance, identical in L and R (R3)
+    private var fire: FireSound?           // one instance, centred (R3)
 
     private let windowMix: (a: Float, b: Float)
-    private let fireMix: (a: Float, b: Float)
     private let gain: Float
+    private let thunderGain = Float(pow(10, WindowChain.thunderTrimDB / 20))
     private var lowL: Biquad, lowR: Biquad
     private var reverbL: Reverb, reverbR: Reverb
     private var busL: [Float], busR: [Float]       // the window bus
@@ -87,13 +91,12 @@ public struct WindowChain {
             stream = pair(Self.streamK) { StreamSound(seed: $0, sampleRate: sampleRate, startSecond: startSecond) }
             crickets = pair(Self.cricketsK) { CricketsSound(seed: $0, sampleRate: sampleRate, startSecond: startSecond) }
         case .fire:
-            fire = pair(Self.fireK) { FireSound(seed: $0, sampleRate: sampleRate, startSecond: startSecond, sudden: sudden) }
+            fire = FireSound(seed: s(Self.fireK, 0), sampleRate: sampleRate, startSecond: startSecond, sudden: sudden)
         }
         if night == .rainThunder {
-            thunder = pair(Self.thunderK) { ThunderSound(seed: $0, sampleRate: sampleRate, startSecond: startSecond, sudden: sudden) }
+            thunder = ThunderSound(seed: s(Self.thunderK, 0), sampleRate: sampleRate, startSecond: startSecond, sudden: sudden)
         }
         windowMix = Self.mix(width: Self.width)
-        fireMix = Self.mix(width: Self.fireWidth)
         gain = Float(pow(10, (Self.windowGainDB + (Self.nightTrimDB[night] ?? 0)) / 20))
         lowL = Biquad.lowpass(cutoff: Self.lowpassHz, sampleRate: sampleRate)
         lowR = Biquad.lowpass(cutoff: Self.lowpassHz, sampleRate: sampleRate)
@@ -118,6 +121,14 @@ public struct WindowChain {
         }
     }
 
+    /// Adds one mono sound identically to both buses' channels (thunder, the fire).
+    private static func addMono<S: SoundSource>(_ p: inout S?, count: Int, tmp: inout [Float],
+                                                busL: inout [Float], busR: inout [Float], gain: Float = 1) {
+        guard p != nil else { return }
+        p!.render(into: &tmp, count: count)
+        for i in 0..<count { busL[i] += gain * tmp[i]; busR[i] += gain * tmp[i] }
+    }
+
     /// Renders `count` frames of stereo into `left[0..<count]` and `right[0..<count]` (overwritten).
     public mutating func render(left: inout [Float], right: inout [Float], count: Int) {
         guard count > 0 else { return }
@@ -127,10 +138,10 @@ public struct WindowChain {
         }
         for i in 0..<count { busL[i] = 0; busR[i] = 0; fireL[i] = 0; fireR[i] = 0 }
         Self.add(&rain, mix: windowMix, count: count, tmpL: &tmpL, tmpR: &tmpR, busL: &busL, busR: &busR)
-        Self.add(&thunder, mix: windowMix, count: count, tmpL: &tmpL, tmpR: &tmpR, busL: &busL, busR: &busR)
+        Self.addMono(&thunder, count: count, tmp: &tmpL, busL: &busL, busR: &busR, gain: thunderGain)
         Self.add(&stream, mix: windowMix, count: count, tmpL: &tmpL, tmpR: &tmpR, busL: &busL, busR: &busR)
         Self.add(&crickets, mix: windowMix, count: count, tmpL: &tmpL, tmpR: &tmpR, busL: &busL, busR: &busR)
-        Self.add(&fire, mix: fireMix, count: count, tmpL: &tmpL, tmpR: &tmpR, busL: &fireL, busR: &fireR)
+        Self.addMono(&fire, count: count, tmp: &tmpL, busL: &fireL, busR: &fireR)
 
         let wet = Float(Self.reverbWet)
         let hasWindow = fire == nil
