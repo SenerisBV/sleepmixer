@@ -4858,7 +4858,7 @@ and `RenderThread` (`Renderer.swift`). The dial's needle in, stereo audio out.
   `tearingDown`); a switch-on during it is deferred and started fresh when the teardown
   re-locks. `RenderThread.stop()` called from the render thread itself (the engine freed
   there) only asks, never waits.
-- No `AVAudioSession` handling (the app does that), no route-loss handling yet (app task).
+- No `AVAudioSession` handling (the app does that). Route loss and engine configuration changes: see Task 9.
 
 **Placeholders (tune by ear):** `RadioEngine.onFadeSeconds` 2.0, `offFadeSeconds` 1.5,
 `pauseFadeSeconds` 1.5 *(brief)* — shape: a **raised cosine of a linear phase** (phase
@@ -4870,3 +4870,57 @@ fade turns around without a step, and a fade begun mid-way takes proportionally 
 `ringCapacity` 88200 (2 s, ≥ target + block); `RenderThread.idleSleepSeconds` 0.005;
 `manualChunkFrames` 4096 (manual-mode max frame count and the callback's mix chunk; a
 longer live callback is mixed in 4096-frame pieces).
+
+### Plan 9 Task 9: the app (`ios/`, "Esoterica DM Radio")
+
+An old radio on the nightstand: one black screen, a dim band printed **DM** with **OFF** at
+the left and the three station titles at their dial positions, a warm orange needle, and a
+serrated wheel along the bottom. Nothing else to read in the dark. Bundle id
+`nl.senerisbv.esoterica`, iOS 18, iPhone, portrait, `UIBackgroundModes: audio`, dark.
+No `DEVELOPMENT_TEAM` — the operator picks the team in Xcode (Signing & Capabilities,
+automatic signing) and installs it themselves.
+
+- **Build:** `cd ios && xcodegen && xcodebuild -scheme Esoterica -destination
+  'platform=iOS Simulator,name=iPhone 18 Pro' -derivedDataPath build build`.
+  `ios/Esoterica.xcodeproj/` and `ios/build/` are generated and git-ignored; committed are
+  `ios/project.yml`, the three Swift files and `Info.plist` (XcodeGen regenerates it from
+  `project.yml`'s `info.properties` — edit there, not in the plist). `Esoterica/Stations`
+  (from `make stations`, git-ignored) is a folder reference copied as-is, marked optional so
+  a fresh clone still generates; then every station plays its bed only.
+- **Code:** `EsotericaApp.swift` (loads `Stations/<id>` per `StationRecipe.all`, owns the
+  `RadioEngine`), `DialView.swift` (band, needle, wheel, haptics, persistence),
+  `AudioSessionController.swift` (session, route loss, interruptions, engine configuration
+  changes, lock screen). Testable logic lives in the package: `Dial.nowPlayingTitle`
+  (NightPlan) and `RadioEngine.restartAfterConfigurationChange()` (NightRadio).
+- **Starts off, always.** The needle launches at 0. The last place the radio was left on
+  (UserDefaults `needle`, saved on release when ≥ the off zone) is a faint tick on the band.
+- **Wheel:** a horizontal drag; the full wheel width moves the needle 0.5 of travel.
+  Every further 3 pt of finger movement calls `engine.wheelTouched()` (accumulated, so a
+  steady drag touches the drift every few points, a resting finger does not). On release
+  the engine gets `Dial.snapped` at once; only the drawn needle animates there (ease-out
+  0.35 s), and the animation never touches the drift. Haptics: `.light` on each detent
+  change while dragging, `.rigid` instead when crossing in or out of OFF.
+- **Audio session:** `.playback`, no options, activated just before the needle leaves OFF
+  (the engine starts inside `setNeedle`) and on lock-screen play. Never deactivated (the
+  off-fade is still running when OFF is reached) — fine for now.
+- **Route loss** (`.oldDeviceUnavailable`): pause, stay paused. **Engine configuration
+  change** (`AVAudioEngineConfigurationChange`, observed with `object: nil` — the app has
+  one engine): `restartAfterConfigurationChange()` starts the stopped engine from master
+  phase 0 — a 2 s fade in if playing, silent if paused — so a paused radio is never heard
+  fading out of the phone speaker after a lost route. Covered by
+  `pausedRestartAfterConfigurationChangeStaysSilent`, `restartAfterConfigurationChangeFadesBackIn`,
+  `restartAfterConfigurationChangeIsANoOpWhenOff`. Caveat: if a route loss does *not* stop
+  the engine (same output format), the pause is the normal 1.5 s fade and that fade plays
+  through the new route (the speaker). Untested on a device.
+- **Interruptions:** began → pause; ended with `.shouldResume` → restart + play, but only
+  if the interruption is what paused it (a listener's own pause is kept).
+- **Lock screen:** play / pause / toggle → `play()` / `pause()` (play also restarts a stopped
+  engine). Title = `Dial.nowPlayingTitle`: the loudest station when its gain > 0.5, else
+  "DM static"; nothing (and `.stopped`) when off. Artist "Esoterica DM Radio", live stream.
+- **Not verified:** sound on a device, haptics, lock-screen controls, real route changes —
+  only the simulator build, launch and the OFF screenshot.
+
+**Placeholders (tune by hand):** `DialView.travelPerWheelWidth` 0.5 *(brief)*,
+`touchPoints` 3 pt *(controller)*, `snapSeconds` 0.35; `Dial.titleGain` 0.5
+*(controller)*; wheel ridge spacing 9 pt; remembered-tick opacity 0.18; print colour
+(0.86, 0.70, 0.48) at 0.5–0.6 opacity; needle (0.95, 0.42, 0.22); restart fade = `onFadeSeconds` 2.0.
