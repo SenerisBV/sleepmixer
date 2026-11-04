@@ -57,7 +57,7 @@ thunder, a glassy stream, crickets, a fire), chosen per night and mixed under th
 same master fade, ignoring the dial. Spec: `docs/superpowers/specs/2026-11-04-window-weather-design.md`.
 Plan: `docs/superpowers/plans/2026-11-04-window-weather-10.md`.
 
-Task 1 (the rules, `NightPlan/Weather.swift`) is built. Placeholders so far:
+Task 1 (the rules, `NightPlan/Weather.swift`) and Task 2 (felted rain) are built. Placeholders so far:
 
 | Name | Value | File | Why |
 |---|---|---|---|
@@ -68,6 +68,13 @@ Task 1 (the rules, `NightPlan/Weather.swift`) is built. Placeholders so far:
 | Night weight: rainThunder | 0.25 | `NightPlan/Weather.swift` | Claude's guess; thunder as a common but not dominant night. |
 | Night weight: cricketsStream | 0.25 | `NightPlan/Weather.swift` | Claude's guess; the quietest sounds, even split with thunder. |
 | Night weight: fire | 0.20 | `NightPlan/Weather.swift` | Claude's guess; the fire's pops make it the least steady, so the rarest. |
+| `RainSound.dropRateRange` | 40-120 drops/s, wandering slowly (period 25-70 s) between them | `NightDSP/Window/RainSound.swift` | Plan value; the wander keeps the rain from sounding mechanical. |
+| `RainSound.dropAttackMinSeconds` | 3 ms (drops are 12-30 ms Hann bursts, so attacks are 6-15 ms) | `NightDSP/Window/RainSound.swift` | Plan value; felted, no hard attacks. |
+| `RainSound.dropLengthRange` / `dropHzRange` / `dropLevelRange` | 12-30 ms; 600-3000 Hz log-uniform; level 0.3-1.0 | `NightDSP/Window/RainSound.swift` | Claude's guess; small soft pings as on a pane close by. Tune by ear. |
+| `RainSound.washCutoffHz` / `washHighpassHz` | 3000 Hz lowpass; 150 Hz highpass | `NightDSP/Window/RainSound.swift` | Lowpass is the plan's ~3 kHz; the highpass is invented so the wash does not thump. |
+| `RainSound.swellPeriodRange` / `swellDepthDB` | 20-60 s; +/-3 dB on drops and wash together | `NightDSP/Window/RainSound.swift` | Plan value. |
+| `RainSound.dropGain` / `washGain` | 0.09 / 0.2 (seed 3, 60 s: RMS 0.058 = -24.8 dBFS, peak 0.34, crest 5.9) | `NightDSP/Window/RainSound.swift` | Claude's guess; the window gain is set later (WindowChain). Crest sits close to the plan's 6 limit. |
+| `RainSound` stream numbers | 0-4 seed-level, 6-11 per cell (NightRandom) | `NightDSP/Window/RainSound.swift` | Invented; keeps rain's draws independent of each other. |
 
 ## Plan 9: Esoterica DM Radio (2026-11-03, merged to `main` 2026-11-04)
 
