@@ -63,6 +63,7 @@ Task 1 (the rules, `NightPlan/Weather.swift`) is built. Placeholders so far:
 |---|---|---|---|
 | `Weather.silentRatchet` | 0.6 (sudden sounds are gone when the drift's ratchet reaches 0.6, about 4 h in) | `NightPlan/Weather.swift` | Claude's guess; sudden sounds should be gone well before the deepest drift. Tune by ear. |
 | `Weather.suddenFloorDB` | -18 dB (sudden-sound gain just before silence) | `NightPlan/Weather.swift` | Claude's guess; recedes thunder and pops smoothly rather than cutting. |
+| `Weather.nightStream` | 70 (NightRandom stream for the night draw; 40/50/51 are taken by Drift and StationProgram, 60-64 reserved for window sound seeds) | `NightPlan/Weather.swift` | Controller ruling: keeps tonight's weather independent of the starting station. |
 | Night weight: rain | 0.30 | `NightPlan/Weather.swift` | Claude's guess; felted rain is the most restful default. |
 | Night weight: rainThunder | 0.25 | `NightPlan/Weather.swift` | Claude's guess; thunder as a common but not dominant night. |
 | Night weight: cricketsStream | 0.25 | `NightPlan/Weather.swift` | Claude's guess; the quietest sounds, even split with thunder. |

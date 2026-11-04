@@ -25,6 +25,9 @@ public enum Weather {
     /// Sudden-sound gain just before silence.
     static let suddenFloorDB = -18.0
 
+    /// NightRandom stream for the night draw. Streams 40/50/51 are taken by Drift and StationProgram.
+    static let nightStream: UInt64 = 70
+
     /// Cumulative night weights: rain 0.3, rainThunder 0.25, cricketsStream 0.25, fire 0.2.
     static let nightWeights: [(WindowNight, Double)] = [
         (.rain, 0.30), (.rainThunder, 0.25), (.cricketsStream, 0.25), (.fire, 0.20),
@@ -32,7 +35,7 @@ public enum Weather {
 
     /// This night's weather. Deterministic in `seed`.
     public static func night(seed: UInt64) -> WindowNight {
-        let u = NightRandom.unit(seed, 50, 0)
+        let u = NightRandom.unit(seed, nightStream, 0)
         var acc = 0.0
         for (night, weight) in nightWeights {
             acc += weight

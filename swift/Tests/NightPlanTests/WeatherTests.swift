@@ -35,3 +35,11 @@ import Foundation
         last = r
     }
 }
+
+@Test func nightIsIndependentOfStationStart() {
+    // StationProgram picks the starting station from stream 50; the night must not be determined by it.
+    let lowDraw = (0..<2000).map { UInt64($0) }.filter { NightRandom.unit($0, 50, 0) < 0.3 }
+    #expect(lowDraw.count > 100)
+    let nights = Set(lowDraw.map { Weather.night(seed: $0) })
+    #expect(nights.count >= 2)
+}
