@@ -31,6 +31,19 @@ public enum Dial {
         return n
     }
 
+    /// What the lock screen calls it: the station whose gain is highest, when that gain is above
+    /// `titleGain`; "DM static" between stations; nil when off.
+    public static let titleGain = 0.5
+    public static let staticTitle = "DM static"
+
+    public static func nowPlayingTitle(needle: Double, stations: [StationRecipe]) -> String? {
+        let g = gains(needle: needle, stations: stations)
+        guard g.isOn else { return nil }
+        guard let best = g.stations.indices.max(by: { g.stations[$0] < g.stations[$1] }),
+              g.stations[best] > titleGain else { return staticTitle }
+        return stations[best].title
+    }
+
     /// The detent the needle is in; a haptic tick fires when this changes.
     public static func detentIndex(_ needle: Double) -> Int {
         Int((clamped(needle, 0, 1) / detent).rounded(.down))

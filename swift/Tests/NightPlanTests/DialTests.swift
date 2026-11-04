@@ -54,3 +54,11 @@ private let all = StationRecipe.all
     #expect(Dial.detentIndex(-3) == 0)
     #expect(Dial.detentIndex(5) == 100)
 }
+
+@Test func nowPlayingTitleNamesTheLoudestStation() {
+    #expect(Dial.nowPlayingTitle(needle: 0.0, stations: all) == nil)
+    #expect(Dial.nowPlayingTitle(needle: 0.55, stations: all) == "Backward Lesson One")
+    #expect(Dial.nowPlayingTitle(needle: 0.25 + 0.03, stations: all) == "The Lantern Accords")
+    #expect(Dial.nowPlayingTitle(needle: 0.25 + 0.045, stations: all) == "DM static")
+    #expect(Dial.nowPlayingTitle(needle: 0.40, stations: all) == "DM static")
+}

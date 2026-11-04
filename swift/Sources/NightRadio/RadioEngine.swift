@@ -179,6 +179,23 @@ public final class RadioEngine: @unchecked Sendable {
         }
     }
 
+    /// After `AVAudioEngineConfigurationChange` (a route or format change, an interruption): the
+    /// engine has stopped itself. While the radio is on, start it again from silence: a fade in over
+    /// `onFadeSeconds`, or, if paused, nothing at all until `play()`, so a pause made for a lost route
+    /// is never heard fading out of the phone speaker. Off, or switching off: nothing (the render
+    /// thread ends a session whose engine has stopped).
+    public func restartAfterConfigurationChange() {
+        control.withLock { c in
+            guard c.on, c.session != nil, !c.tearingDown, !engine.isRunning else { return }
+            mixer.silenceMaster()
+            if !c.paused { mixer.setMaster(up: true, seconds: Self.onFadeSeconds) }
+            startEngine()
+        }
+    }
+
+    /// Test hook: stop the engine the way a configuration change does.
+    func stopEngineForTest() { engine.stop() }
+
     /// Seconds of output since the radio last switched on (frames / 44100), pauses included.
     public var nowSecond: Double {
         Double(mixer.framesPlayed.load(ordering: .relaxed)) / Self.sampleRate
@@ -407,6 +424,9 @@ final class Mixer: @unchecked Sendable {
             fadeOutLeft[i] = 0
         }
     }
+
+    /// UI side, engine stopped: the master starts again from silence.
+    func silenceMaster() { masterPhase = 0 }
 
     @inline(__always) private func raisedCosineUp(_ k: Int, of n: Int) -> Float {
         0.5 * (1 - cos(Float.pi * Float(k) / Float(n)))
