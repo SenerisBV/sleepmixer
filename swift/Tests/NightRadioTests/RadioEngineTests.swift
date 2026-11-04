@@ -499,7 +499,8 @@ private let staticOnly = 0.40
     /// The window's two rings are one unit in the callback: when the render thread has written the left
     /// block but not yet the right (the two writes are separate), neither side starts, and from then on
     /// left and right read the same ring frame, sample for sample. A centred sound (thunder, the fire)
-    /// would otherwise sit a few ms to one side all night.
+    /// would otherwise sit a few ms to one side all night. Likewise when the ring runs dry: both sides
+    /// drain (fade out) together.
     @Test func windowSidesStayAligned() {
         let rings = (0..<6).map { _ in SPSCRing(capacity: 16384) }
         let mixer = Mixer(rings: rings, sampleRate: sr, maxChunk: 512)
@@ -527,17 +528,28 @@ private let staticOnly = 0.40
             left.append(contentsOf: UnsafeBufferPointer(start: l, count: n))
             right.append(contentsOf: UnsafeBufferPointer(start: r, count: n))
         }
-        write(0, 2048)          // the left block is in, the right not yet
+        func aligned(_ range: Range<Int>, _ what: String) {
+            for j in range where right[j] != -left[j] {
+                Issue.record("\(what), frame \(j): left \(left[j]), right \(right[j])")
+                break
+            }
+        }
+        // The start edge: the left block is in, the right not yet.
+        write(0, 2048)
         render()
         write(1, 2048)
-        for _ in 0..<3 { render() }
-        write(0, 4096); write(1, 4096)
-        for _ in 0..<8 { render() }   // runs both rings dry: the draining edge too
+        for _ in 0..<3 { render() }       // both play; 512 frames left in each
+        let startEdge = left.count
+        // The drain edge: the next left block lands before the right one. Both sides must drain
+        // together (the right has only 512 < n + R), not the right alone.
+        write(0, 2048)
+        render()
+        write(1, 2048)
+        for _ in 0..<6 { render() }       // three chunks, a fourth that drains both, then silence
         #expect(left.contains { $0 != 0 }, "the window played")
-        for j in left.indices where right[j] != -left[j] {
-            Issue.record("frame \(j): left \(left[j]), right \(right[j])")
-            break
-        }
+        #expect(rings[4].available == 0 && rings[5].available == 0, "both rings fully drained")
+        aligned(0..<startEdge, "start edge")
+        aligned(startEdge..<left.count, "drain edge")
     }
 
     @Test func tuningCrossfadesSmoothly() throws {
