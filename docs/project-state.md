@@ -4811,3 +4811,52 @@ fadeRate 0.08, squash 0.3); `StationVoice.preloadSeconds` 5 s;
 (`swift test -c release --filter rendersFastEnough`; needs ≥ 10×). Test temp
 bundle (300 Hz tone at −24 dBFS RMS): voice 11.8 dB above the Lantern bed over
 speech at drift 0; static RMS −35.8 dBFS at drift 0.
+
+### Plan 9 Task 8: the live engine (`NightRadio`)
+
+`RadioEngine` (`swift/Sources/NightRadio/RadioEngine.swift`), `SPSCRing`, `Renderer`
+and `RenderThread` (`Renderer.swift`). The dial's needle in, stereo audio out.
+
+- **Threads.** UI calls (`setNeedle`, `wheelTouched`, `pause`, `play`) serialise on a
+  `Mutex` the callback never touches. `setNeedle` computes `Dial.gains` on the UI thread
+  and publishes the four gains (3 stations + static) as Float bit patterns in
+  `Atomic<UInt32>`; the needle is stored as `Atomic<UInt64>` (not yet read by anything).
+  One render thread (`.userInteractive`) owns the chains — built lazily on its first
+  fill, so they never cross threads — and fills four `SPSCRing`s round-robin in 2048-frame
+  blocks to 1.5 s, sleeping 5 ms when nothing needed writing. The `AVAudioSourceNode`
+  callback (`Mixer.render`) reads rings and atomics only: no locks, no allocation, no I/O.
+- **Switch on** (needle leaves the off zone): random seed, new `DriftClock` touched at 0,
+  rings emptied, `nowSecond` 0, new `Renderer`, thread + `AVAudioEngine` started, 2 s
+  fade in. **Switch off**: 1.5 s fade; when it reaches silence the render thread itself
+  stops the engine, empties the rings and ends the session. **Turning back on during the
+  off-fade reverses the fade on the same session** (not a fresh night): a fresh start
+  under a half-faded sound would be a jump. A fresh night needs the fade to have finished.
+- **Pause/play**: master fade to 0 / back to 1 over 1.5 s; engine, render thread and
+  `nowSecond` keep running. Switching off clears the pause; switching on always plays.
+- **Off-zone gains are not published**, so the off-fade keeps the last tuning instead of
+  gliding to silence in 30 ms.
+- **Underruns**: the callback keeps 5 ms in hand. A ring plays only while it holds a block
+  + 5 ms; when it doesn't, the last 5 ms of real frames fade out (raised cosine) and the
+  rest is zeros; once it holds a block + 5 ms again, it fades back in over 5 ms. The audio
+  timeline slips by the gap (nothing is skipped to catch up).
+- **Mix**: Σ smoothed gain × ring → master fade → `NightFactory.masterGuard` → every
+  channel of a 44100 Hz stereo non-interleaved Float32 format.
+- **Manual rendering (tests)**: `manualRendering: true` uses AVAudioEngine's offline
+  manual mode and **no render thread**: `renderManually` tops the rings up synchronously
+  on the calling thread before each 4096-frame chunk and runs the off teardown after each
+  chunk. Deterministic; the threaded path is covered only by `renderThreadFillsRings`
+  (the thread alone, no engine) — the live engine's thread-side teardown is not under test.
+- **Import guard**: `RadioEngine.swift` is the one NightRadio file allowed `import
+  AVFoundation` (ImportGuardTests narrowed); UI frameworks stay banned everywhere.
+- No `AVAudioSession` handling (the app does that), no route-loss handling yet (app task).
+
+**Placeholders (tune by ear):** `RadioEngine.onFadeSeconds` 2.0, `offFadeSeconds` 1.5,
+`pauseFadeSeconds` 1.5 *(brief)* — shape: a **raised cosine of a linear phase** (phase
+moves 1/(fade s × 44100) per sample toward 0 or 1, gain = ½(1 − cos πp)), so a reversed
+fade turns around without a step, and a fade begun mid-way takes proportionally less time.
+`Mixer.gainSmoothingSeconds` 0.03 (one-pole per sample, per ring);
+`Mixer.underrunFadeSeconds` 0.005 (raised cosine, both directions);
+`RadioEngine.renderAheadFrames` 66150 (1.5 s) and `blockFrames` 2048 *(brief)*;
+`ringCapacity` 88200 (2 s, ≥ target + block); `RenderThread.idleSleepSeconds` 0.005;
+`manualChunkFrames` 4096 (manual-mode max frame count and the callback's mix chunk; a
+longer live callback is mixed in 4096-frame pieces).
