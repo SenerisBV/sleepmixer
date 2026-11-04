@@ -185,4 +185,35 @@ private func seedStartingInSegmentZero() -> UInt64 {
     print("rendersFastEnough: 60 s of 3 stations + static in \(wall) s = \(seconds / wall)x real time")
     #expect(wall < 6, "\(wall) s")
 }
+
+/// The full engine's render thread (Plan 10): three stations, the static and the window, every night.
+@Test func rendersFastEnoughWithWindow() throws {
+    let dir = try makeBundle()
+    let bundle = try StationBundle.load(directory: dir)
+    for night in WindowNight.allCases {
+        let c = clock(11)
+        var chains = StationRecipe.all.map {
+            StationChain(recipe: $0, bundle: bundle, seed: 11, clock: c, sampleRate: sr)
+        }
+        var stat = StaticChain(seed: 11, clock: c, sampleRate: sr)
+        var window = WindowChain(seed: 11, sampleRate: sr, night: night)
+        var buf = [Float](repeating: 0, count: block)
+        var left = buf, right = buf
+        let seconds = 60.0
+        let total = Int(seconds * sr)
+        let t0 = ContinuousClock.now
+        var done = 0
+        while done < total {
+            let n = min(block, total - done)
+            for i in chains.indices { chains[i].render(into: &buf, count: n) }
+            stat.render(into: &buf, count: n)
+            window.render(left: &left, right: &right, count: n)
+            done += n
+        }
+        let elapsed = ContinuousClock.now - t0
+        let wall = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) * 1e-18
+        print("rendersFastEnoughWithWindow (\(night)): 60 s of 3 stations + static + window in \(wall) s = \(seconds / wall)x real time")
+        #expect(wall < 6, "\(night): \(wall) s")
+    }
+}
 #endif

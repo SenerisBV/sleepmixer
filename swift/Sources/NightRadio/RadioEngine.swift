@@ -34,8 +34,17 @@ import Synchronization
 ///
 /// **The callback.** Each ring's gain is smoothed per sample by a 30 ms one-pole; the master fade is a
 /// raised cosine of a linear phase that moves at 1 / (fade seconds × 44100) per sample toward its
-/// target, so a fade reversed midway turns around without a step. The mono mix goes through the master
-/// guard and into every channel of a stereo, non-interleaved Float32 format at 44100 Hz.
+/// target, so a fade reversed midway turns around without a step. The output is stereo,
+/// non-interleaved Float32 at 44100 Hz.
+///
+/// **The window (Plan 10).** Six rings: 0-2 the stations, 3 the static, 4 and 5 the window's left and
+/// right (`WindowChain`, already at its final level). The radio's four rings make a mono mix as
+/// before; the window rings have a fixed gain of 1 (no atomic, nothing from the dial, so the window is
+/// the same on a station, on the static and between) and take the same underrun fades. Then, under
+/// the one master fade (so switching off fades the window too): left = guard((radio + window L) x
+/// master), right = guard((radio + window R) x master). With the window rings silent this is the
+/// Plan 9 mono output, bit for bit. A one-buffer (mono) output gets guard((radio + (L + R) / 2) x
+/// master); any buffer past the second gets the same as the first.
 ///
 /// **Underruns.** The callback keeps 5 ms in hand: it only plays a ring while the ring holds a block
 /// plus 5 ms. When it does not, the last 5 ms of real frames are faded out (raised cosine) and the
@@ -110,7 +119,7 @@ public final class RadioEngine: @unchecked Sendable {
         manual = manualRendering
         self.makeFiller = makeFiller
         self.makeClock = makeClock
-        let mixer = Mixer(rings: (0..<(StationRecipe.all.count + 1)).map { _ in SPSCRing(capacity: Self.ringCapacity) },
+        let mixer = Mixer(rings: (0..<Mixer.ringCount).map { _ in SPSCRing(capacity: Self.ringCapacity) },
                           sampleRate: Self.sampleRate, maxChunk: Self.manualChunkFrames)
         self.mixer = mixer
         let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 2)!
@@ -417,6 +426,9 @@ final class Mixer: @unchecked Sendable {
     static let gainSmoothingSeconds = 0.03
     static let underrunFadeSeconds = 0.005
 
+    /// Ring layout: three stations, the static, then the window's left and right.
+    static let radioRingCount = 4, windowLeftRing = 4, windowRightRing = 5, ringCount = 6
+
     let rings: [SPSCRing]
     let needleBits = Atomic<UInt64>(0)
     let offRequested = Atomic<Bool>(false)
@@ -427,13 +439,15 @@ final class Mixer: @unchecked Sendable {
     private let masterUp = Atomic<Bool>(false)
     private let masterStepBits = Atomic<UInt32>(0)
 
-    private let ringCount: Int
     private let maxChunk: Int
     private let smoothCoef: Float
     private let fadeFrames: Int
     // Callback-only state, preallocated.
     private let scratch: UnsafeMutablePointer<Float>
     private let mix: UnsafeMutablePointer<Float>
+    /// The window's two sides for this chunk; after `renderChunk`, the finished left and right.
+    private let windowL: UnsafeMutablePointer<Float>
+    private let windowR: UnsafeMutablePointer<Float>
     private let smoothed: UnsafeMutablePointer<Float>
     private let targets: UnsafeMutablePointer<Float>
     private let playing: UnsafeMutablePointer<Bool>
@@ -443,32 +457,35 @@ final class Mixer: @unchecked Sendable {
     private var masterPhase: Float = 0
 
     init(rings: [SPSCRing], sampleRate: Double, maxChunk: Int) {
-        precondition(rings.count == 4, "three stations and the static")
+        precondition(rings.count == Self.ringCount, "three stations, the static, the window's left and right")
         self.rings = rings
-        ringCount = rings.count
         self.maxChunk = maxChunk
         smoothCoef = Float(1 - exp(-1 / (Self.gainSmoothingSeconds * sampleRate)))
         fadeFrames = max(1, Int((Self.underrunFadeSeconds * sampleRate).rounded()))
         scratch = .allocate(capacity: maxChunk)
         mix = .allocate(capacity: maxChunk)
-        smoothed = .allocate(capacity: ringCount)
-        targets = .allocate(capacity: ringCount)
-        playing = .allocate(capacity: ringCount)
-        fadeInDone = .allocate(capacity: ringCount)
-        untilFadeOut = .allocate(capacity: ringCount)
-        fadeOutLeft = .allocate(capacity: ringCount)
+        windowL = .allocate(capacity: maxChunk)
+        windowR = .allocate(capacity: maxChunk)
+        smoothed = .allocate(capacity: Self.ringCount)
+        targets = .allocate(capacity: Self.ringCount)
+        playing = .allocate(capacity: Self.ringCount)
+        fadeInDone = .allocate(capacity: Self.ringCount)
+        untilFadeOut = .allocate(capacity: Self.ringCount)
+        fadeOutLeft = .allocate(capacity: Self.ringCount)
         scratch.initialize(repeating: 0, count: maxChunk)
         mix.initialize(repeating: 0, count: maxChunk)
-        smoothed.initialize(repeating: 0, count: ringCount)
-        targets.initialize(repeating: 0, count: ringCount)
-        playing.initialize(repeating: false, count: ringCount)
-        fadeInDone.initialize(repeating: 0, count: ringCount)
-        untilFadeOut.initialize(repeating: 0, count: ringCount)
-        fadeOutLeft.initialize(repeating: 0, count: ringCount)
+        windowL.initialize(repeating: 0, count: maxChunk)
+        windowR.initialize(repeating: 0, count: maxChunk)
+        smoothed.initialize(repeating: 0, count: Self.ringCount)
+        targets.initialize(repeating: 0, count: Self.ringCount)
+        playing.initialize(repeating: false, count: Self.ringCount)
+        fadeInDone.initialize(repeating: 0, count: Self.ringCount)
+        untilFadeOut.initialize(repeating: 0, count: Self.ringCount)
+        fadeOutLeft.initialize(repeating: 0, count: Self.ringCount)
     }
 
     deinit {
-        for p in [scratch, mix, smoothed, targets] { p.deallocate() }
+        for p in [scratch, mix, windowL, windowR, smoothed, targets] { p.deallocate() }
         playing.deallocate()
         for p in [fadeInDone, untilFadeOut, fadeOutLeft] { p.deallocate() }
     }
@@ -479,7 +496,8 @@ final class Mixer: @unchecked Sendable {
         case 0: bits = gain0.load(ordering: .relaxed)
         case 1: bits = gain1.load(ordering: .relaxed)
         case 2: bits = gain2.load(ordering: .relaxed)
-        default: bits = gain3.load(ordering: .relaxed)
+        case 3: bits = gain3.load(ordering: .relaxed)
+        default: return 1                                   // the window: fixed, the dial has no say
         }
         return Float(bitPattern: bits)
     }
@@ -506,7 +524,7 @@ final class Mixer: @unchecked Sendable {
         offRequested.store(false, ordering: .relaxed)
         fadedOut.store(false, ordering: .relaxed)
         masterPhase = 0
-        for i in 0..<ringCount {
+        for i in 0..<Self.ringCount {
             smoothed[i] = gainAtomic(i)
             playing[i] = false
             fadeInDone[i] = 0
@@ -525,22 +543,24 @@ final class Mixer: @unchecked Sendable {
     /// The audio callback. No locks, no allocation, no I/O.
     func render(frameCount: Int, into abl: UnsafeMutablePointer<AudioBufferList>) {
         let buffers = UnsafeMutableAudioBufferListPointer(abl)
+        let stereo = buffers.count > 1
         var offset = 0
         while offset < frameCount {
             let n = min(maxChunk, frameCount - offset)
-            renderChunk(n)
-            for b in buffers {
+            renderChunk(n, stereo: stereo)
+            for (k, b) in buffers.enumerated() {
                 guard let data = b.mData?.assumingMemoryBound(to: Float.self) else { continue }
-                (data + offset).update(from: mix, count: n)
+                (data + offset).update(from: stereo ? (k == 1 ? windowR : windowL) : mix, count: n)
             }
             offset += n
         }
         framesPlayed.wrappingAdd(frameCount, ordering: .relaxed)
     }
 
-    private func renderChunk(_ n: Int) {
+    /// Stereo: the finished left and right land in `windowL` and `windowR`. Mono: in `mix`.
+    private func renderChunk(_ n: Int, stereo: Bool) {
         for j in 0..<n { mix[j] = 0 }
-        for i in 0..<ringCount {
+        for i in 0..<Self.radioRingCount {
             targets[i] = gainAtomic(i)
             readRing(i, n)
             let target = targets[i]
@@ -551,14 +571,28 @@ final class Mixer: @unchecked Sendable {
             }
             smoothed[i] = g
         }
+        // The window: gain 1, so its rings go straight in (the underrun fades still apply).
+        readRing(Self.windowLeftRing, n)
+        windowL.update(from: scratch, count: n)
+        readRing(Self.windowRightRing, n)
+        windowR.update(from: scratch, count: n)
         let up = masterUp.load(ordering: .acquiring)
         let step = Float(bitPattern: masterStepBits.load(ordering: .relaxed))
         let off = offRequested.load(ordering: .acquiring)
         var p = masterPhase
-        for j in 0..<n {
-            p = up ? min(1, p + step) : max(0, p - step)
-            let m = 0.5 * (1 - cos(Float.pi * p))
-            mix[j] = NightFactory.masterGuard(mix[j] * m)
+        if stereo {
+            for j in 0..<n {
+                p = up ? min(1, p + step) : max(0, p - step)
+                let m = 0.5 * (1 - cos(Float.pi * p))
+                windowL[j] = NightFactory.masterGuard((mix[j] + windowL[j]) * m)
+                windowR[j] = NightFactory.masterGuard((mix[j] + windowR[j]) * m)
+            }
+        } else {
+            for j in 0..<n {
+                p = up ? min(1, p + step) : max(0, p - step)
+                let m = 0.5 * (1 - cos(Float.pi * p))
+                mix[j] = NightFactory.masterGuard((mix[j] + 0.5 * (windowL[j] + windowR[j])) * m)
+            }
         }
         masterPhase = p
         if !up, off, p == 0 { fadedOut.store(true, ordering: .releasing) }

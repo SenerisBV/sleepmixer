@@ -3,7 +3,8 @@ import NightDSP
 import NightPlan
 import Synchronization
 
-/// Fills the engine's rings (three stations, then the static) ahead of the audio callback.
+/// Fills the engine's rings (three stations, the static, the window's left and right) ahead of the
+/// audio callback.
 /// Producer side only: one thread at a time calls `fillRound`. Tests inject stubs here.
 protocol RingFiller: AnyObject, Sendable {
     /// One round: at most one block into each ring that holds less than `target` frames.
@@ -11,11 +12,15 @@ protocol RingFiller: AnyObject, Sendable {
     func fillRound(_ rings: [SPSCRing], target: Int) -> Bool
 }
 
-/// The real filler: the three `StationChain`s and the `StaticChain` of one switch-on.
+/// The real filler: the three `StationChain`s, the `StaticChain` and the `WindowChain` of one
+/// switch-on, all seeded from the session seed.
 ///
 /// The chains are not Sendable and must live on one thread, so they are built lazily by the first
 /// `fillRound`, on the producer thread, and never leave it. Rings are filled round-robin, one
-/// 2048-frame block each per round, so all four rise together from empty at switch-on.
+/// 2048-frame block each per round, so all rise together from empty at switch-on. The window is one
+/// stereo source for two rings (4 left, 5 right): it renders once per round, only when both are under
+/// the target, and writes the same block to each, so the two sides never drift apart. Handed fewer
+/// than six rings (a test), it fills only the radio's.
 final class Renderer: RingFiller, @unchecked Sendable {
     private let bundles: [String: StationBundle]
     private let seed: UInt64
@@ -24,14 +29,22 @@ final class Renderer: RingFiller, @unchecked Sendable {
     private let blockFrames: Int
     private var sources: [any SoundSource] = []
     private var block: [Float]
+    /// Test seam: tonight's weather instead of the seed's.
+    private let windowNight: WindowNight?
+    private var window: WindowChain?
+    private var windowLeft: [Float], windowRight: [Float]
 
-    init(bundles: [String: StationBundle], seed: UInt64, clock: DriftClock, sampleRate: Double, blockFrames: Int) {
+    init(bundles: [String: StationBundle], seed: UInt64, clock: DriftClock, sampleRate: Double, blockFrames: Int,
+         windowNight: WindowNight? = nil) {
+        self.windowNight = windowNight
         self.bundles = bundles
         self.seed = seed
         self.clock = clock
         self.sampleRate = sampleRate
         self.blockFrames = blockFrames
         block = [Float](repeating: 0, count: blockFrames)
+        windowLeft = block
+        windowRight = block
     }
 
     private func build() {
@@ -40,6 +53,7 @@ final class Renderer: RingFiller, @unchecked Sendable {
         }
         s.append(StaticChain(seed: seed, clock: clock, sampleRate: sampleRate))
         sources = s
+        window = WindowChain(seed: seed, sampleRate: sampleRate, night: windowNight)
     }
 
     func fillRound(_ rings: [SPSCRing], target: Int) -> Bool {
@@ -48,6 +62,13 @@ final class Renderer: RingFiller, @unchecked Sendable {
         for i in rings.indices where i < sources.count && rings[i].available < target {
             sources[i].render(into: &block, count: blockFrames)
             _ = block.withUnsafeBufferPointer { rings[i].write($0) }
+            any = true
+        }
+        let l = Mixer.windowLeftRing, r = Mixer.windowRightRing
+        if rings.count > r, rings[l].available < target, rings[r].available < target {
+            window!.render(left: &windowLeft, right: &windowRight, count: blockFrames)
+            _ = windowLeft.withUnsafeBufferPointer { rings[l].write($0) }
+            _ = windowRight.withUnsafeBufferPointer { rings[r].write($0) }
             any = true
         }
         return any

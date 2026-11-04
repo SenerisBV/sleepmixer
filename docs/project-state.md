@@ -57,7 +57,52 @@ thunder, a glassy stream, crickets, a fire), chosen per night and mixed under th
 same master fade, ignoring the dial. Spec: `docs/superpowers/specs/2026-11-04-window-weather-design.md`.
 Plan: `docs/superpowers/plans/2026-11-04-window-weather-10.md`.
 
-Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain), Task 3 (stream and crickets) and Task 4 (thunder and the fire) and Task 5 (the window chain) are built. Placeholders so far:
+**Status: built, awaiting the operator's phone.** All six tasks are built: Task 1 (the rules,
+`NightPlan/Weather.swift`), Task 2 (felted rain), Task 3 (stream and crickets), Task 4 (thunder
+and the fire), Task 5 (the window chain) and Task 6 (the window in the live engine). Nobody has
+heard it on the phone yet; every level and rate below is a best guess to tune by ear.
+
+**How it plays (Task 6).** The engine now has six rings: 0-2 the stations, 3 the static, 4 and 5
+the window's left and right. The render thread's `Renderer` builds a `WindowChain` from the
+session seed alongside the stations and renders it once per round, only when both window rings
+are under the 1.5 s target, writing the same block to each (the two sides never drift apart).
+The audio callback reads the window rings at a fixed gain of 1 (no atomic, nothing from the
+dial: the window is identical on a station, on the static and between, `windowIgnoresNeedle`),
+with the same 5 ms underrun fades as the radio's rings. The radio's four rings make the same mono
+mix as before; then, under the one master fade: left = guard((radio + window L) x master), right =
+guard((radio + window R) x master). So switching off fades the window with the radio and the
+session ends at silence as before (`offFadesWindow`). With the window rings silent the output is
+the Plan 9 mono output bit for bit (`radioUnchangedWithoutWindow`). A one-buffer (mono) output
+gets the radio plus the average of the window's two sides. Every Plan 9 rule holds: no lock,
+allocation or I/O in the callback (two more preallocated buffers), no engine call under the
+control lock, the start/teardown token protocol unchanged. Release render speed of the whole
+render thread's work (3 stations + static + window, 60 s, Mac): 37.7x (rain), 38.1x
+(rainThunder), 40.3x (cricketsStream), 42.7x (fire) real time, against 41.9x for the radio alone
+before this task (`rendersFastEnoughWithWindow`).
+
+**What to listen for on the first night.**
+- Is the window about 8 dB under a station about right, or is it too present / too faint once the
+  radio has receded?
+- Does thunder ever startle (it is meant to be always distant: low, slow-rising, a soft roll)?
+- Does the stereo read as a window: the radio in the middle, the weather wide around it?
+- Does the fire feel inside (centred, no window filter), and are its pops gentle, felt rather than
+  heard as clicks?
+
+**Controller rulings, kept here so they are not lost.**
+- **R3:** thunder and the fire are single centred instances (identical in left and right), not
+  stereo pairs. Two independent instances would double the documented rate of sudden events and
+  could put a roll or a pop on one side only.
+- **R4:** no night's loudest 10 ms may come within 3 dB of a station's loudest 10 ms (per channel,
+  every night, several seeds). Thunder got its own -6 dB trim for this.
+- **R5:** the fire's pops are shaped down to fit R4 (lower pop gain, gentler drive, a higher soft
+  clip, so their loudest 10 ms is only about 1.15x the crackle's) rather than relaxing the rule.
+
+**Deferred ideas from the spec (not built).**
+- Thunder adding a little crackle to the radio (the storm reaching the set, not just the window).
+- Rain starting or stopping in the middle of the night (today the night's weather is fixed at
+  switch-on; only the sudden sounds recede).
+
+Placeholders so far:
 
 | Name | Value | File | Why |
 |---|---|---|---|

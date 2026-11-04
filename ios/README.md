@@ -48,6 +48,9 @@ iOS 18 or later.
   hours: farther away, slower, in pieces, with growing gaps between segments.
   Picking up the phone, unlocking it or a notification does not reset anything;
   only the wheel does.
+- Each night now has weather outside the window (rain, rain with distant thunder, crickets by a
+  stream, or a fire inside), chosen at switch-on, quietly in stereo around the radio; the dial
+  does not change it, and switching off fades it with everything else.
 - **Turn back to OFF to switch off.** The sound fades out over a second and a
   half. Nothing new plays at the end of the night; you just turn it off.
 - If the Bluetooth speaker or headphones drop out, the radio fades to silence

@@ -2,6 +2,8 @@ import Testing
 import Foundation
 import Synchronization
 import NightPlan
+import NightDSP
+import AVFoundation
 @testable import NightRadio
 
 private let sr = 44100.0
@@ -21,7 +23,11 @@ private func maxJump(_ x: ArraySlice<Float>) -> Float {
     return m
 }
 
-/// Writes the drift into every ring as audio: ratchet × 0.5 at each frame's engine second.
+/// The radio's rings (three stations, then the static); 4 and 5 are the window's left and right.
+/// The Plan 9 stubs below fill only these, so the window rings stay empty (silent) under them.
+private let radioRings = 4
+
+/// Writes the drift into every radio ring as audio: ratchet × 0.5 at each frame's engine second.
 private final class LevelFiller: RingFiller, @unchecked Sendable {
     let clock: DriftClock
     private var frames = [Int](repeating: 0, count: 4)
@@ -30,7 +36,7 @@ private final class LevelFiller: RingFiller, @unchecked Sendable {
 
     func fillRound(_ rings: [SPSCRing], target: Int) -> Bool {
         var any = false
-        for (i, ring) in rings.enumerated() where ring.available < target {
+        for (i, ring) in rings.prefix(radioRings).enumerated() where ring.available < target {
             for j in 0..<2048 { buf[j] = Float(clock.level(at: Double(frames[i] + j) / sr).ratchet * 0.5) }
             _ = buf.withUnsafeBufferPointer { ring.write($0) }
             frames[i] += 2048
@@ -44,7 +50,7 @@ private func slice(_ x: [Float], _ from: Double, _ to: Double) -> ArraySlice<Flo
     x[Int(from * sr)..<min(x.count, Int(to * sr))]
 }
 
-/// Writes a constant into every ring, block by block, up to `limit` frames per ring, then nothing:
+/// Writes a constant into every radio ring, block by block, up to `limit` frames per ring, then nothing:
 /// the render thread "falls behind" for good.
 private final class StoppingFiller: RingFiller, @unchecked Sendable {
     let limit: Int
@@ -57,9 +63,63 @@ private final class StoppingFiller: RingFiller, @unchecked Sendable {
     func fillRound(_ rings: [SPSCRing], target: Int) -> Bool {
         var any = false
         let src = [Float](repeating: value, count: 2048)
-        for (i, ring) in rings.enumerated() where ring.available < target && written[i] < limit {
+        for (i, ring) in rings.prefix(radioRings).enumerated() where ring.available < target && written[i] < limit {
             let n = min(2048, limit - written[i])
             written[i] += src.withUnsafeBufferPointer { ring.write(UnsafeBufferPointer(rebasing: $0[0..<n])) }
+            any = true
+        }
+        return any
+    }
+}
+
+/// The window stub: the radio rings write `radio(frame)` (0 by default), ring 4 (window left) and
+/// ring 5 (window right) write `windowL(frame)` and `windowR(frame)`, all on the session's own frame
+/// count, so the output is deterministic.
+private final class WindowStubFiller: RingFiller, @unchecked Sendable {
+    let radio: @Sendable (Int, Int) -> Float          // (ring, frame)
+    private var frames = [Int](repeating: 0, count: 6)
+    private var buf = [Float](repeating: 0, count: 2048)
+    init(radio: @escaping @Sendable (Int, Int) -> Float = { _, _ in 0 }) { self.radio = radio }
+
+    func fillRound(_ rings: [SPSCRing], target: Int) -> Bool {
+        var any = false
+        for (i, ring) in rings.enumerated() where ring.available < target {
+            for j in 0..<2048 {
+                let f = frames[i] + j
+                buf[j] = i == 4 ? windowL(f) : i == 5 ? windowR(f) : radio(i, f)
+            }
+            _ = buf.withUnsafeBufferPointer { ring.write($0) }
+            frames[i] += 2048
+            any = true
+        }
+        return any
+    }
+}
+
+/// Known, different ramps for the window's two sides (inside the master guard's linear range).
+private func windowL(_ f: Int) -> Float { 0.05 + 0.2 * Float(f % 1000) / 1000 }
+private func windowR(_ f: Int) -> Float { -0.03 - 0.15 * Float(f % 700) / 700 }
+
+/// Hands a real `Renderer` only the radio's four rings: its window rings stay empty (silent).
+private final class RadioOnlyFiller: RingFiller, @unchecked Sendable {
+    let inner: Renderer
+    init(_ inner: Renderer) { self.inner = inner }
+    func fillRound(_ rings: [SPSCRing], target: Int) -> Bool {
+        inner.fillRound(Array(rings.prefix(radioRings)), target: target)
+    }
+}
+
+/// Window rings at 0; the static ring a loud ramp that reaches the master guard's knee.
+private final class ZeroWindowFiller: RingFiller, @unchecked Sendable {
+    static func staticAt(_ f: Int) -> Float { -1.2 + 2.4 * Float(f % 3000) / 3000 }
+    private var frames = [Int](repeating: 0, count: 6)
+    private var buf = [Float](repeating: 0, count: 2048)
+    func fillRound(_ rings: [SPSCRing], target: Int) -> Bool {
+        var any = false
+        for (i, ring) in rings.enumerated() where ring.available < target {
+            for j in 0..<2048 { buf[j] = i == 3 ? Self.staticAt(frames[i] + j) : i < 3 ? 0.3 : 0 }
+            _ = buf.withUnsafeBufferPointer { ring.write($0) }
+            frames[i] += 2048
             any = true
         }
         return any
@@ -326,12 +386,114 @@ private let staticOnly = 0.40
         #expect(fresh[0] < 0.01)
     }
 
+    /// The radio's own mono mix (the real `Renderer`, its window rings left empty) is in both channels.
     @Test func bothChannelsCarryTheMix() throws {
-        let radio = RadioEngine(bundles: [:], manualRendering: true)
+        let radio = RadioEngine(bundles: [:], manualRendering: true, makeFiller: { seed, clock in
+            RadioOnlyFiller(Renderer(bundles: [:], seed: seed, clock: clock, sampleRate: RadioEngine.sampleRate,
+                                     blockFrames: RadioEngine.blockFrames))
+        })
         radio.setNeedle(staticOnly)
         let (left, right) = try radio.renderManuallyStereo(frames: Int(2.5 * sr))
         #expect(left == right)
         #expect(left.contains { $0 != 0 })
+    }
+
+    // MARK: Plan 10: the window
+
+    /// Review Focus 2: the window does not follow the needle. On a station, on the static and between
+    /// the two, the stereo output is identical, sample for sample, fade-in included.
+    @Test func windowIgnoresNeedle() throws {
+        let lantern = StationRecipe.all[0].dialPosition
+        var outs: [(left: [Float], right: [Float])] = []
+        for needle in [lantern, staticOnly, lantern + 0.06] {
+            let radio = RadioEngine(bundles: [:], manualRendering: true, makeFiller: { _, _ in WindowStubFiller() })
+            radio.setNeedle(needle)
+            outs.append(try radio.renderManuallyStereo(frames: Int(3 * sr)))
+        }
+        #expect(outs[0].left.contains { $0 != 0 } && outs[0].right.contains { $0 != 0 }, "the window plays")
+        for o in outs.dropFirst() {
+            #expect(o.left == outs[0].left)
+            #expect(o.right == outs[0].right)
+        }
+    }
+
+    /// Left carries the window's left ring, right its right ring, each under the master fade.
+    @Test func windowIsStereoInOutput() throws {
+        let radio = RadioEngine(bundles: [:], manualRendering: true, makeFiller: { _, _ in WindowStubFiller() })
+        radio.setNeedle(staticOnly)
+        let (left, right) = try radio.renderManuallyStereo(frames: Int(3 * sr))
+        // After the 2 s fade-in the master is exactly 1.
+        for f in Int(2.1 * sr)..<left.count {
+            #expect(left[f] == windowL(f), "left at \(f): \(left[f]) vs \(windowL(f))")
+            #expect(right[f] == windowR(f), "right at \(f): \(right[f]) vs \(windowR(f))")
+            if left[f] != windowL(f) || right[f] != windowR(f) { break }
+        }
+        // During the fade-in, both sides are scaled by the same master gain.
+        let f = Int(1.0 * sr)
+        let mL = left[f] / windowL(f), mR = right[f] / windowR(f)
+        #expect(mL > 0.2 && mL < 0.8, "master at 1 s: \(mL)")
+        #expect(abs(mL - mR) < 1e-5, "one master for both sides: \(mL) vs \(mR)")
+        #expect(left[0] == 0 && right[0] == 0, "from silence")
+    }
+
+    /// Review Focus 3: switching off fades the window with the radio. The real `Renderer` on a rain night.
+    @Test func offFadesWindow() throws {
+        let radio = RadioEngine(bundles: [:], manualRendering: true, makeFiller: { seed, clock in
+            Renderer(bundles: [:], seed: seed, clock: clock, sampleRate: RadioEngine.sampleRate,
+                     blockFrames: RadioEngine.blockFrames, windowNight: .rain)
+        })
+        radio.setNeedle(staticOnly)
+        let on = try radio.renderManuallyStereo(frames: Int(5 * sr))
+        let tail = Int(4 * sr)..<on.left.count
+        #expect(tail.contains { on.left[$0] != on.right[$0] }, "the window is playing, in stereo")
+        radio.setNeedle(off)
+        let fading = try radio.renderManuallyStereo(frames: Int(3 * sr))
+        #expect(rms(fading.left[0..<tenMs]) > 0 && rms(fading.right[0..<tenMs]) > 0)
+        #expect(slice(fading.left, 2.5, 3.0).allSatisfy { $0 == 0 }, "left silent")
+        #expect(slice(fading.right, 2.5, 3.0).allSatisfy { $0 == 0 }, "right silent")
+        #expect(radio.rings.allSatisfy { $0.available == 0 }, "every ring discarded, the window's too")
+        #expect(!radio.isOn)
+    }
+
+    /// With the window rings silent, the radio's mono path is unchanged: left == right == the old
+    /// mono output, guard(radio mix x master), bit for bit.
+    @Test func radioUnchangedWithoutWindow() throws {
+        #expect(RadioEngine(bundles: [:], manualRendering: true).rings.count == 6, "stations, static, window L, R")
+        let radio = RadioEngine(bundles: [:], manualRendering: true, makeFiller: { _, _ in
+            ZeroWindowFiller()
+        })
+        radio.setNeedle(staticOnly)
+        let (left, right) = try radio.renderManuallyStereo(frames: Int(3 * sr))
+        #expect(left == right)
+        // Static gain is 1 between stations; after the fade the master is 1: out = guard(static ring).
+        for f in Int(2.1 * sr)..<left.count where left[f] != NightFactory.masterGuard(ZeroWindowFiller.staticAt(f)) {
+            Issue.record("frame \(f): \(left[f]) vs \(NightFactory.masterGuard(ZeroWindowFiller.staticAt(f)))")
+            break
+        }
+        #expect(left.contains { abs($0) > 0.6 }, "the guard's knee (above -6 dBFS) is exercised")
+    }
+
+    /// A one-buffer (mono) output gets the radio plus the window's two sides averaged.
+    @Test func monoOutputAveragesTheWindow() {
+        let rings = (0..<6).map { _ in SPSCRing(capacity: 8192) }
+        let mixer = Mixer(rings: rings, sampleRate: sr, maxChunk: 512)
+        mixer.publish(stations: [0, 0, 0], staticGain: 1)
+        mixer.prepareFresh()
+        mixer.setMaster(up: true, seconds: 1e-9)          // full after one sample
+        let values: [Float] = [0, 0, 0, 0.1, 0.3, -0.1]   // static 0.1, window L 0.3, R -0.1
+        for (i, r) in rings.enumerated() {
+            let src = [Float](repeating: values[i], count: 4096)
+            _ = src.withUnsafeBufferPointer { r.write($0) }
+        }
+        let n = 1024
+        let data = UnsafeMutablePointer<Float>.allocate(capacity: n)
+        defer { data.deallocate() }
+        let abl = AudioBufferList.allocate(maximumBuffers: 1)
+        defer { free(abl.unsafeMutablePointer) }
+        abl[0] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(n * 4), mData: data)
+        mixer.render(frameCount: n, into: abl.unsafeMutablePointer)
+        // Past the 5 ms ring fade-in: 0.1 + (0.3 - 0.1) / 2 = 0.2.
+        #expect(abs(data[n - 1] - 0.2) < 1e-6, "\(data[n - 1])")
     }
 
     @Test func tuningCrossfadesSmoothly() throws {
@@ -340,7 +502,7 @@ private let staticOnly = 0.40
         final class Constants: RingFiller, @unchecked Sendable {
             func fillRound(_ rings: [SPSCRing], target: Int) -> Bool {
                 var any = false
-                for (i, ring) in rings.enumerated() where ring.available < target {
+                for (i, ring) in rings.prefix(radioRings).enumerated() where ring.available < target {
                     let src = [Float](repeating: Float(i + 1) * 0.1, count: 2048)
                     _ = src.withUnsafeBufferPointer { ring.write($0) }
                     any = true
