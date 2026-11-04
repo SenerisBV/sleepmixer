@@ -57,7 +57,7 @@ thunder, a glassy stream, crickets, a fire), chosen per night and mixed under th
 same master fade, ignoring the dial. Spec: `docs/superpowers/specs/2026-11-04-window-weather-design.md`.
 Plan: `docs/superpowers/plans/2026-11-04-window-weather-10.md`.
 
-Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain) and Task 3 (stream and crickets) are built. Placeholders so far:
+Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain), Task 3 (stream and crickets) and Task 4 (thunder and the fire) are built. Placeholders so far:
 
 | Name | Value | File | Why |
 |---|---|---|---|
@@ -84,6 +84,14 @@ Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain) and Task 3 (
 | `CricketsSound` pulse/pause values | pulse 40 ms Hann, spacing 80 ms; carrier +/-3% per train; level 0.6-1.0; one pause per 45 s cycle (starts at least 5 s in, so spells last at least 10 s); pixellation hold 11025 Hz, 8 bits, 5.2 kHz lowpass | `NightDSP/Window/CricketsSound.swift` | Claude's guess; the cycle grid keeps pauses seekable. Pauses are 5-20 s silent stretches, a little longer in effect because trains stop before them. |
 | `CricketsSound.gain` | 0.18 (seed 1, 120 s: RMS 0.0124, 12.1 dB under rain, peak 0.157) | `NightDSP/Window/CricketsSound.swift` | Chosen so crickets sit 12 dB under rain. Pulse amplitude is thus about 0.18, so the plan's "largest step <= 0.05" is not met (steps reach 0.11, a bare 4.5 kHz sine's own slope); replaced with a carrier-relative bound plus an envelope check (R1). |
 | `CricketsSound` stream numbers | 80-84 per cell/cycle (NightRandom) | `NightDSP/Window/CricketsSound.swift` | Invented; kept out of 60-64 (reserved for window sound seeds). |
+| `ThunderSound` plan values | a roll every 2-6 min at full rate (240 s cells, start 0-120 s in); 4-10 s long; rise 0.8-2 s; rumble under 600 Hz | `NightDSP/Window/ThunderSound.swift` | Plan values. "Attack 0.8-2 s" is read as the 10-90% rise time, so the raised-cosine ramp is rise / 0.59 (1.4-3.4 s, at most 60% of the roll); a raw 0.8 s ramp would rise in 0.47 s, under the 0.5 s distance bound. |
+| `ThunderSound` rumble/pixellation values | noise through two 300 Hz lowpasses (norm 12, tanh), sample-and-hold 2756.25 Hz, 6 bits, then two 450 Hz lowpasses; level 0.6-1.0; `gain` 0.4 (seed 2, 30 min: RMS 0.017, peak 0.41) | `NightDSP/Window/ThunderSound.swift` | Claude's guess; the waves' pixellation lowered into the rumble. Gain set so the peak stays under the plan's 0.5. Tune by ear. |
+| `ThunderSound` stream numbers | 90 noise, 91-95 per cell (NightRandom) | `NightDSP/Window/ThunderSound.swift` | Invented; kept out of 60-64 (reserved for window sound seeds). |
+| `FireSound` crackle plan values | bursts 2-10 ms Hann (attack 1-5 ms, at least 1 ms), band 1-4 kHz, 3-15 bursts/s | `NightDSP/Window/FireSound.swift` | Plan values. Steady: reads no `sudden`. |
+| `FireSound` crackle values | 1/15 s cells, rate wandering with period 8-25 s; level 0.7-1.0; `crackleGain` 0.10; noise through 1 kHz highpass and three 4 kHz lowpasses, driven (norm 15) into a tanh at 0.55, then one more 4 kHz lowpass; faint bed: 400 Hz lowpassed noise, `bedGain` 0.012 (seed 1, 10 min, no pops: RMS 0.0069, peak 0.08, largest step 0.04) | `NightDSP/Window/FireSound.swift` | Claude's guess; the clip flattens noise peaks so bursts do not spike and steps stay under 0.1; the faint bed keeps the fire from going dead between bursts. |
+| `FireSound` pop values | a pop every 10-60 s at full rate (35 s cells, start 0-25 s in); 20-50 ms Hann (attack 10-25 ms); band 150-900 Hz; level 0.6-1.0; `popGain` 0.35 (seed 1, 10 min: peak 0.18 with pops vs 0.08 crackle alone) | `NightDSP/Window/FireSound.swift` | Plan range; the rest is Claude's guess: pops are lower and longer than the crackle so they are felt, never sharp. |
+| `FireSound` stream numbers | 100-103 and 114 seed-level and noise, 104-107 per crackle cell, 109-112 per pop cell (NightRandom) | `NightDSP/Window/FireSound.swift` | Invented; kept out of 60-64. |
+| R1: fire "peak <= 2 x 99th-percentile \|x\|" | replaced by: peak under 1.5 x `crackleGain`, and 10 ms-RMS-window peak over p99 <= 2 (crackle alone 1.5-1.7; with pops 5.5) | `Tests/NightDSPTests/WindowSoundTests.swift` | Controller ruling R1: sparse Hann bursts put the 99th percentile of \|x\| at about a third of a burst's peak whatever the signal holds, so the plan statistic cannot be met by a felted crackle. The replacement discriminates (it fails with pops on). Likewise the pop step bound is checked on the envelopes alone (at most 0.005), since band-limited noise steps as far as a hard edge. |
 
 ## Plan 9: Esoterica DM Radio (2026-11-03, merged to `main` 2026-11-04)
 
