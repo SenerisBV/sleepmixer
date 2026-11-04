@@ -69,6 +69,12 @@ final class RenderThread: @unchecked Sendable {
     private let finished = DispatchSemaphore(value: 0)
     private let started = Atomic<Bool>(false)
     private let joined = Atomic<Bool>(false)
+    /// The render thread's pthread, so `stop()` can tell when it is called from the thread itself.
+    private let threadID = Atomic<UInt>(0)
+    private let ended = Atomic<Bool>(false)
+
+    /// Whether the thread's loop has returned.
+    var hasEnded: Bool { ended.load(ordering: .acquiring) }
 
     init(rings: [SPSCRing], target: Int, filler: any RingFiller, onIdle: @escaping @Sendable () -> Bool = { false }) {
         self.rings = rings
@@ -79,14 +85,18 @@ final class RenderThread: @unchecked Sendable {
 
     func start() {
         guard !started.exchange(true, ordering: .sequentiallyConsistent) else { return }
-        let thread = Thread { [self] in run() }
-        thread.qualityOfService = .userInteractive
-        thread.name = "NightRadio.render"
-        thread.start()
+        let t = Thread { [self] in run() }
+        t.qualityOfService = .userInteractive
+        t.name = "NightRadio.render"
+        t.start()
     }
 
     private func run() {
-        defer { finished.signal() }
+        threadID.store(UInt(bitPattern: pthread_self()), ordering: .releasing)
+        defer {
+            ended.store(true, ordering: .releasing)
+            finished.signal()
+        }
         while !stopFlag.load(ordering: .acquiring) {
             if filler.fillRound(rings, target: target) { continue }
             if onIdle() { return }
@@ -94,9 +104,11 @@ final class RenderThread: @unchecked Sendable {
         }
     }
 
-    /// Asks the thread to finish and waits for it. Never call from the thread itself.
+    /// Asks the thread to finish and waits for it. Called from the thread itself (the engine can be
+    /// freed there, when `onIdle` held the last reference), it only asks: waiting would deadlock.
     func stop() {
         stopFlag.store(true, ordering: .releasing)
+        if threadID.load(ordering: .acquiring) == UInt(bitPattern: pthread_self()) { return }
         guard started.load(ordering: .acquiring), !joined.exchange(true, ordering: .sequentiallyConsistent) else { return }
         finished.wait()
     }

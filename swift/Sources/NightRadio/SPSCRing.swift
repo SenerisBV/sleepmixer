@@ -29,6 +29,9 @@ public final class SPSCRing: @unchecked Sendable {
         return written.load(ordering: .acquiring) - r
     }
 
+    /// Frames written since the last reset: the producer's position in the stream.
+    public var producedFrames: Int { written.load(ordering: .acquiring) }
+
     /// Producer side: copies as much of `src` as fits and returns how many frames that was.
     public func write(_ src: UnsafeBufferPointer<Float>) -> Int {
         guard let base = src.baseAddress else { return 0 }

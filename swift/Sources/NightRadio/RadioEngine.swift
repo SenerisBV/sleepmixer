@@ -56,6 +56,8 @@ public final class RadioEngine: @unchecked Sendable {
         var paused = false
         var generation = 0
         var session: Session?
+        /// The render thread (or `renderManually`) is stopping the engine outside the lock.
+        var tearingDown = false
     }
 
     private let mixer: Mixer
@@ -64,6 +66,7 @@ public final class RadioEngine: @unchecked Sendable {
     private let manual: Bool
     private let manualSetupError: Error?
     private let makeFiller: @Sendable (UInt64, DriftClock) -> any RingFiller
+    private let makeClock: @Sendable (UInt64) -> DriftClock
     private let control = Mutex(Control())
 
     var rings: [SPSCRing] { mixer.rings }
@@ -76,10 +79,17 @@ public final class RadioEngine: @unchecked Sendable {
     }
 
     /// The filler seam: tests pass a stub that stops writing, to make the callback underrun.
+    /// The clock seam: a new, already touched clock per switch-on (tests start one deep in the night).
     init(bundles: [String: StationBundle], manualRendering: Bool,
-         makeFiller: @escaping @Sendable (_ seed: UInt64, _ clock: DriftClock) -> any RingFiller) {
+         makeFiller: @escaping @Sendable (_ seed: UInt64, _ clock: DriftClock) -> any RingFiller,
+         makeClock: @escaping @Sendable (_ seed: UInt64) -> DriftClock = { seed in
+             let clock = DriftClock(seed: seed)
+             clock.touch(at: 0)
+             return clock
+         }) {
         manual = manualRendering
         self.makeFiller = makeFiller
+        self.makeClock = makeClock
         let mixer = Mixer(rings: (0..<(StationRecipe.all.count + 1)).map { _ in SPSCRing(capacity: Self.ringCapacity) },
                           sampleRate: Self.sampleRate, maxChunk: Self.manualChunkFrames)
         self.mixer = mixer
@@ -133,18 +143,28 @@ public final class RadioEngine: @unchecked Sendable {
     }
 
     /// A turn of the wheel: the drift resets to bedtime clarity. No-op while off.
+    ///
+    /// The touch lands at the producer's position, not the audible `nowSecond`: the chains have
+    /// already rendered up to 1.5 s ahead at the old depth, and a touch behind that would make the
+    /// drift step where the rendered audio runs out. So the reset is heard up to 1.5 s after the touch.
     public func wheelTouched() {
-        let now = nowSecond
         control.withLock { c in
-            guard c.on, let s = c.session else { return }
-            s.clock.touch(at: now)
+            guard c.on, !c.tearingDown, let s = c.session else { return }
+            s.clock.touch(at: producerSecond)
         }
+    }
+
+    /// Past every frame the producer has rendered or may be rendering: the furthest ring's written
+    /// frames plus one block in flight.
+    var producerSecond: Double {
+        let written = mixer.rings.reduce(0) { max($0, $1.producedFrames) }
+        return Double(written + Self.blockFrames) / Self.sampleRate
     }
 
     /// Fades out over 1.5 s; the engine and the clock keep running.
     public func pause() {
         control.withLock { c in
-            guard c.on, c.session != nil, !c.paused else { return }
+            guard c.on, !c.tearingDown, c.session != nil, !c.paused else { return }
             c.paused = true
             mixer.setMaster(up: false, seconds: Self.pauseFadeSeconds)
         }
@@ -153,7 +173,7 @@ public final class RadioEngine: @unchecked Sendable {
     /// Fades back in over 1.5 s after `pause()`.
     public func play() {
         control.withLock { c in
-            guard c.on, c.session != nil, c.paused else { return }
+            guard c.on, !c.tearingDown, c.session != nil, c.paused else { return }
             c.paused = false
             mixer.setMaster(up: true, seconds: Self.pauseFadeSeconds)
         }
@@ -170,6 +190,8 @@ public final class RadioEngine: @unchecked Sendable {
     private func switchOn(_ c: inout Control) {
         c.on = true
         c.paused = false
+        // Stopping the engine right now: the teardown starts a fresh session when it is done.
+        if c.tearingDown { return }
         if c.session != nil {
             // Still fading off: turn the fade around on the same session.
             mixer.offRequested.store(false, ordering: .releasing)
@@ -181,8 +203,7 @@ public final class RadioEngine: @unchecked Sendable {
         // Fresh: the engine is stopped and no render thread is running, so the rings and the
         // callback state can be reset here.
         let seed = UInt64.random(in: .min ... .max)
-        let clock = DriftClock(seed: seed)
-        clock.touch(at: 0)
+        let clock = makeClock(seed)
         for r in mixer.rings { r.reset() }
         mixer.prepareFresh()
         mixer.setMaster(up: true, seconds: Self.onFadeSeconds)
@@ -212,20 +233,29 @@ public final class RadioEngine: @unchecked Sendable {
 
     /// Render-thread side (or `renderManually`): when the off-fade has reached silence, stop the
     /// engine, empty the rings and end the session. Returns whether the caller's session is over.
+    /// `engine.stop()` (tens of ms) runs outside the lock so a dragging UI is never held up; a switch-on
+    /// meanwhile is deferred and started fresh here once the old session is gone.
     private func finishOffIfFaded(_ generation: Int) -> Bool {
-        control.withLock { c in
-            guard let s = c.session, s.generation == generation else { return true }
+        let stop = control.withLock { c -> Bool? in
+            guard let s = c.session, s.generation == generation, !c.tearingDown else { return true }
             // A stopped engine (failed to start, or stopped under us) has no callback to finish the fade.
             guard mixer.fadedOut.load(ordering: .acquiring) || (!c.on && !engine.isRunning) else { return false }
             guard !c.on else {
                 mixer.fadedOut.store(false, ordering: .releasing)
                 return false
             }
-            engine.stop()
+            c.tearingDown = true
+            return nil
+        }
+        if let done = stop { return done }
+        engine.stop()
+        control.withLock { c in
             for r in mixer.rings { r.reset() }
             c.session = nil
-            return true
+            c.tearingDown = false
+            if c.on { switchOn(&c) }
         }
+        return true
     }
 
     // MARK: Manual rendering (tests)

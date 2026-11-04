@@ -4848,6 +4848,16 @@ and `RenderThread` (`Renderer.swift`). The dial's needle in, stereo audio out.
   (the thread alone, no engine) — the live engine's thread-side teardown is not under test.
 - **Import guard**: `RadioEngine.swift` is the one NightRadio file allowed `import
   AVFoundation` (ImportGuardTests narrowed); UI frameworks stay banned everywhere.
+- **Wheel touches land at the producer's position** (furthest ring's written frames + one
+  2048 block, / 44100), not the audible `nowSecond` (controller ruling, fix round 1): the
+  chains are up to 1.5 s ahead, and touching behind that stepped the drift (~0.13 of a
+  0.42 level in `wheelTouchDeepInTheNightGlidesBack`, ~3.6 dB of voice gain). The audible
+  reset therefore starts up to ~1.55 s after the touch. The clock is made by a
+  `makeClock` seam (default: `DriftClock(seed:)` touched at 0).
+- **Teardown off the lock**: `engine.stop()` runs outside the control Mutex (flag
+  `tearingDown`); a switch-on during it is deferred and started fresh when the teardown
+  re-locks. `RenderThread.stop()` called from the render thread itself (the engine freed
+  there) only asks, never waits.
 - No `AVAudioSession` handling (the app does that), no route-loss handling yet (app task).
 
 **Placeholders (tune by ear):** `RadioEngine.onFadeSeconds` 2.0, `offFadeSeconds` 1.5,
