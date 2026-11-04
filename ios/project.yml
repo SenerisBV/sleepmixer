@@ -57,5 +57,8 @@ schemes:
     build:
       targets:
         Esoterica: all
+    # Release: the SwiftPM targets compile -Onone in Debug and render at ~0.6x real time.
     run:
-      config: Debug
+      config: Release
+    profile:
+      config: Release

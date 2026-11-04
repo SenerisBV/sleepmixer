@@ -9,19 +9,24 @@ Project notes: `docs/project-state.md`, section "Plan 9: Esoterica DM Radio".
 
 ## Build and run on your iPhone
 
-You need a Mac with Xcode and XcodeGen (`brew install xcodegen`), and the
-voiced recordings in `esoterica/library/` (already there if you've voiced them).
+You need a Mac with Xcode and XcodeGen (`brew install xcodegen`), pipenv (for
+`make stations`, which runs the repo's Python tools), the voiced recordings in
+`esoterica/library/` (already there if you've voiced them), and an iPhone on
+iOS 18 or later.
 
 1. From the repo root, cut the station files: `make stations`. This writes
    `ios/Esoterica/Stations/` (generated, not committed). It is free; it calls no
    voice service. Without it the app still builds, but each station plays only
    its bed of chimes, waves and warmth, with no speech.
 2. `cd ios && xcodegen`. This writes `ios/Esoterica.xcodeproj` (generated, not
-   committed). Run it again whenever `project.yml` changes.
+   committed). Run it again whenever `project.yml` changes. Run uses Release;
+   Debug renders slower than real time (about 0.6x on the Mac), so the sound
+   would break up all night.
 3. Open `ios/Esoterica.xcodeproj` in Xcode.
 4. Select the **Esoterica** target, then **Signing & Capabilities**, and choose
-   your team in the Team menu ("nl.senerisbv"). The bundle id is
-   `nl.senerisbv.esoterica`. Signing is automatic.
+   your team in the Team menu: the team is named "nl.senerisbv". That is the
+   team's name, not the bundle id; the bundle id is `nl.senerisbv.esoterica`.
+   Signing is automatic.
 5. Plug in the iPhone, unlock it, and pick it as the run destination at the top
    of the Xcode window.
 6. Press Run (the play button). If the phone says the developer is not trusted,
@@ -46,7 +51,8 @@ voiced recordings in `esoterica/library/` (already there if you've voiced them).
 - **Turn back to OFF to switch off.** The sound fades out over a second and a
   half. Nothing new plays at the end of the night; you just turn it off.
 - If the Bluetooth speaker or headphones drop out, the radio fades to silence
-  (it never falls through to the phone speaker). Turning the wheel, or Play on
+  within about 50 ms (a moment of it may reach the phone speaker before then)
+  and stays paused. Turning the wheel, or Play on
   the lock screen, brings it back.
 
 ## What is not verified yet
