@@ -235,6 +235,53 @@ private let staticOnly = 0.40
         #expect(radio.isOn)
     }
 
+    /// The engine is still running (the change did not stop it): nothing happens, no dip.
+    @Test func restartAfterConfigurationChangeWhileRunningIsANoOp() throws {
+        let radio = RadioEngine(bundles: [:], manualRendering: true,
+                                makeFiller: { _, _ in StoppingFiller(limit: .max, value: 0.5) })
+        radio.setNeedle(staticOnly)
+        _ = try radio.renderManually(frames: Int(2.5 * sr))
+        radio.restartAfterConfigurationChange()
+        let after = try radio.renderManually(frames: Int(0.5 * sr))
+        #expect(after.allSatisfy { abs($0 - 0.5) < 0.01 }, "no dip: min \(after.min()!)")
+    }
+
+    /// Engine calls never run under the control lock, and two threads never both start the engine:
+    /// many threads switching on and off, restarting, losing the route, pausing and playing at once
+    /// finish (a start held under the lock against a waiting `routeLost` would hang here), and the
+    /// radio still plays afterwards.
+    @Test(.timeLimit(.minutes(1))) func concurrentControlCallsNeverHang() async throws {
+        let radio = RadioEngine(bundles: [:], manualRendering: true,
+                                makeFiller: { _, _ in StoppingFiller(limit: .max, value: 0.5) })
+        radio.setNeedle(staticOnly)
+        _ = try radio.renderManually(frames: Int(0.5 * sr))
+        await withTaskGroup(of: Void.self) { group in
+            for t in 0..<6 {
+                group.addTask {
+                    for i in 0..<300 {
+                        switch (t + i) % 6 {
+                        case 0: radio.setNeedle(i % 2 == 0 ? off : staticOnly)
+                        case 1: radio.restartAfterConfigurationChange()
+                        case 2: radio.routeLost()
+                        case 3: radio.pause()
+                        case 4: radio.play()
+                        default:
+                            radio.stopEngineForTest()
+                            radio.restartAfterConfigurationChange()
+                        }
+                    }
+                }
+            }
+        }
+        // Settle: on, playing, the engine running.
+        radio.setNeedle(staticOnly)
+        radio.play()
+        radio.restartAfterConfigurationChange()
+        let out = try radio.renderManually(frames: Int(3 * sr))
+        #expect(radio.isOn)
+        #expect(abs(out[out.count - 1] - 0.5) < 0.01, "plays after the storm: \(out[out.count - 1])")
+    }
+
     @Test func restartAfterConfigurationChangeIsANoOpWhenOff() throws {
         let radio = RadioEngine(bundles: [:], manualRendering: true)
         radio.restartAfterConfigurationChange()

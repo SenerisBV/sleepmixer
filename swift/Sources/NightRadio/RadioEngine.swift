@@ -15,7 +15,19 @@ import Synchronization
 /// fresh start, because a fresh start under a half-faded sound would be a jump.
 ///
 /// **Threads.** The UI calls `setNeedle`, `wheelTouched`, `pause` and `play`; they serialise on a
-/// `Mutex` that the audio callback never touches. `setNeedle` computes `Dial.gains` there (it
+/// `Mutex` that the audio callback never touches. No `AVAudioEngine` call (`start`, `stop`, not even
+/// `isRunning`) is made while that lock is held: decide under the lock, call the engine outside it,
+/// then lock again to commit. So `routeLost()`, which may run on any thread, never waits on the engine.
+///
+/// **Starting and stopping the engine.** Two flags in `Control` are the engine token; at most one is
+/// set, and only its holder calls `start()` / `stop()`:
+/// - `tearingDown`: the render thread (or `renderManually`) is stopping the engine at the end of an
+///   off-fade. Starts are refused meanwhile; a switch-on is deferred and started when it is done.
+/// - `starting`: some thread is in `startEngineIfWanted`. A teardown waits for it (the render
+///   thread asks again 5 ms later); another start request sets `startAgain`, and the holder checks
+///   again once it has committed, so a configuration change right after a start is never lost.
+/// `startEpoch` counts claimed starts, so a teardown that read `isRunning` outside the lock can tell
+/// that a start slipped in between and must not stop a freshly started engine mid-fade. `setNeedle` computes `Dial.gains` there (it
 /// allocates) and publishes the four gains as `Atomic<UInt32>` Float bit patterns. The render thread
 /// owns the chains and writes the rings. The audio callback (`Mixer.render`) reads the rings and the
 /// atomics only: no locks, no allocation, no I/O.
@@ -60,6 +72,12 @@ public final class RadioEngine: @unchecked Sendable {
         var session: Session?
         /// The render thread (or `renderManually`) is stopping the engine outside the lock.
         var tearingDown = false
+        /// A thread is starting the engine outside the lock (`startEngineIfWanted`).
+        var starting = false
+        /// A start was asked for while `starting`: the holder checks again before letting go.
+        var startAgain = false
+        /// Incremented each time a thread claims `starting`.
+        var startEpoch = 0
     }
 
     private let mixer: Mixer
@@ -128,11 +146,11 @@ public final class RadioEngine: @unchecked Sendable {
     public func setNeedle(_ needle: Double) {
         mixer.needleBits.store(needle.bitPattern, ordering: .relaxed)
         let g = Dial.gains(needle: needle, stations: StationRecipe.all)
-        control.withLock { c in
+        let start = control.withLock { c -> Bool in
             // Off-zone gains (all zero) are not published: the off-fade keeps the last sound.
             if g.isOn { mixer.publish(stations: g.stations, staticGain: g.staticGain) }
             if g.isOn && !c.on {
-                switchOn(&c)
+                return switchOn(&c)
             } else if !g.isOn && c.on {
                 c.on = false
                 c.paused = false
@@ -141,7 +159,9 @@ public final class RadioEngine: @unchecked Sendable {
                     mixer.setMaster(up: false, seconds: Self.offFadeSeconds)
                 }
             }
+            return false
         }
+        if start { startEngineIfWanted() }
     }
 
     /// A turn of the wheel: the drift resets to bedtime clarity. No-op while off.
@@ -184,7 +204,8 @@ public final class RadioEngine: @unchecked Sendable {
     /// The output route was lost (headphones pulled): iOS moves a running engine to the speaker, so
     /// fade to silence in `routeLossFadeSeconds`, not the 1.5 s pause fade. While on, this is a pause
     /// (`play()` brings it back); during the off-fade it only hurries the fade, and the session still
-    /// ends as usual. Safe from any thread: it takes only the control lock.
+    /// ends as usual. Safe from any thread: it takes only the control lock, which is never held across
+    /// an engine call, so it never waits on `AVAudioEngine`.
     public func routeLost() {
         control.withLock { c in
             guard c.session != nil, !c.tearingDown else { return }
@@ -199,12 +220,7 @@ public final class RadioEngine: @unchecked Sendable {
     /// is never heard fading out of the phone speaker. Off, or switching off: nothing (the render
     /// thread ends a session whose engine has stopped).
     public func restartAfterConfigurationChange() {
-        control.withLock { c in
-            guard c.on, c.session != nil, !c.tearingDown, !engine.isRunning else { return }
-            mixer.silenceMaster()
-            if !c.paused { mixer.setMaster(up: true, seconds: Self.onFadeSeconds) }
-            startEngine()
-        }
+        startEngineIfWanted()
     }
 
     /// Test hook: stop the engine the way a configuration change does.
@@ -218,18 +234,20 @@ public final class RadioEngine: @unchecked Sendable {
     /// Whether the needle is out of the off zone (false from the moment the off-fade starts).
     public var isOn: Bool { control.withLock { $0.on } }
 
-    private func switchOn(_ c: inout Control) {
+    /// Under the lock. Returns whether the caller must call `startEngineIfWanted()` once it has
+    /// let go of the lock.
+    private func switchOn(_ c: inout Control) -> Bool {
         c.on = true
         c.paused = false
         // Stopping the engine right now: the teardown starts a fresh session when it is done.
-        if c.tearingDown { return }
+        if c.tearingDown { return false }
         if c.session != nil {
-            // Still fading off: turn the fade around on the same session.
+            // Still fading off: turn the fade around on the same session (and start the engine if it
+            // has stopped under us; the start path brings it back from silence).
             mixer.offRequested.store(false, ordering: .releasing)
             mixer.fadedOut.store(false, ordering: .releasing)
             mixer.setMaster(up: true, seconds: Self.onFadeSeconds)
-            if !engine.isRunning { startEngine() }
-            return
+            return true
         }
         // Fresh: the engine is stopped and no render thread is running, so the rings and the
         // callback state can be reset here.
@@ -249,9 +267,53 @@ public final class RadioEngine: @unchecked Sendable {
             thread = t
         }
         c.session = Session(generation: generation, clock: clock, filler: filler, thread: thread)
-        startEngine()
+        return true
     }
 
+    /// Starts the engine if the radio wants it running (on, a session, not tearing down) and it is
+    /// stopped. Synchronous, on the calling thread, with the control lock held only around the
+    /// decisions:
+    /// 1. Lock: claim `starting` (or, if another thread holds it, set `startAgain` and leave).
+    /// 2. Unlocked: read `engine.isRunning`. Running: nothing to do.
+    /// 3. Lock: still on? Then the master starts again from silence and fades in over
+    ///    `onFadeSeconds`, or stays silent if paused (until `play()`). The engine is stopped and no one
+    ///    else may start it, so the callback state is ours to set.
+    /// 4. Unlocked: `engine.start()`.
+    /// 5. Lock: let go of `starting`; if `startAgain` was set meanwhile, go round again.
+    private func startEngineIfWanted() {
+        while true {
+            let claimed = control.withLock { c -> Bool in
+                guard c.on, c.session != nil, !c.tearingDown else { return false }
+                guard !c.starting else {
+                    c.startAgain = true
+                    return false
+                }
+                c.starting = true
+                c.startAgain = false
+                c.startEpoch &+= 1
+                return true
+            }
+            guard claimed else { return }
+            if !engine.isRunning {
+                let go = control.withLock { c -> Bool in
+                    // Switched off meanwhile: a stopped engine counts as faded out; the teardown ends it.
+                    guard c.on else { return false }
+                    mixer.silenceMaster()
+                    if !c.paused { mixer.setMaster(up: true, seconds: Self.onFadeSeconds) }
+                    return true
+                }
+                if go { startEngine() }
+            }
+            let again = control.withLock { c -> Bool in
+                c.starting = false
+                defer { c.startAgain = false }
+                return c.startAgain
+            }
+            guard again else { return }
+        }
+    }
+
+    /// Only from `startEngineIfWanted`, holding `starting`, outside the lock.
     private func startEngine() {
         do {
             try engine.start()
@@ -266,11 +328,24 @@ public final class RadioEngine: @unchecked Sendable {
     /// engine, empty the rings and end the session. Returns whether the caller's session is over.
     /// `engine.stop()` (tens of ms) runs outside the lock so a dragging UI is never held up; a switch-on
     /// meanwhile is deferred and started fresh here once the old session is gone.
+    ///
+    /// `engine.isRunning` is read outside the lock too: the first look notes `startEpoch`, and the
+    /// commit refuses if a start is in flight or was claimed since (it asks again next idle round).
     private func finishOffIfFaded(_ generation: Int) -> Bool {
+        let look = control.withLock { c -> (done: Bool?, epoch: Int) in
+            guard let s = c.session, s.generation == generation, !c.tearingDown else { return (true, 0) }
+            // Playing: the common idle case; nothing to read.
+            if c.on && !mixer.fadedOut.load(ordering: .acquiring) { return (false, 0) }
+            return (nil, c.startEpoch)
+        }
+        if let done = look.done { return done }
+        let running = engine.isRunning
         let stop = control.withLock { c -> Bool? in
             guard let s = c.session, s.generation == generation, !c.tearingDown else { return true }
+            // A start in flight or slipped in since `running` was read: not now.
+            guard !c.starting, c.startEpoch == look.epoch else { return false }
             // A stopped engine (failed to start, or stopped under us) has no callback to finish the fade.
-            guard mixer.fadedOut.load(ordering: .acquiring) || (!c.on && !engine.isRunning) else { return false }
+            guard mixer.fadedOut.load(ordering: .acquiring) || (!c.on && !running) else { return false }
             guard !c.on else {
                 mixer.fadedOut.store(false, ordering: .releasing)
                 return false
@@ -280,12 +355,13 @@ public final class RadioEngine: @unchecked Sendable {
         }
         if let done = stop { return done }
         engine.stop()
-        control.withLock { c in
+        let start = control.withLock { c -> Bool in
             for r in mixer.rings { r.reset() }
             c.session = nil
             c.tearingDown = false
-            if c.on { switchOn(&c) }
+            return c.on ? switchOn(&c) : false
         }
+        if start { startEngineIfWanted() }
         return true
     }
 
