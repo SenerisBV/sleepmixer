@@ -242,6 +242,43 @@ private let staticOnly = 0.40
         #expect(try radio.renderManually(frames: 4410).allSatisfy { $0 == 0 })
     }
 
+    @Test func routeLostIsSilentWithinAFewHundredthsAndStaysPaused() throws {
+        let radio = RadioEngine(bundles: [:], manualRendering: true,
+                                makeFiller: { _, _ in StoppingFiller(limit: .max, value: 0.5) })
+        radio.setNeedle(staticOnly)
+        _ = try radio.renderManually(frames: Int(2.5 * sr))
+        radio.routeLost()
+        let lost = try radio.renderManually(frames: Int(1 * sr))
+        #expect(lost[0] > 0.4)
+        #expect(slice(lost, 0.05, 1.0).allSatisfy { $0 == 0 }, "silent by 0.05 s")
+        #expect(maxJump(lost[...]) < 0.05, "a fade, not a click: \(maxJump(lost[...]))")
+        #expect(radio.isOn)
+        // A configuration change while lost stays silent; play brings it back.
+        radio.stopEngineForTest()
+        radio.restartAfterConfigurationChange()
+        #expect(try radio.renderManually(frames: Int(0.5 * sr)).allSatisfy { $0 == 0 })
+        radio.play()
+        let back = try radio.renderManually(frames: Int(2 * sr))
+        #expect(abs(back[back.count - 1] - 0.5) < 0.01)
+    }
+
+    @Test func routeLostDuringTheOffFadeHurriesIt() throws {
+        let radio = RadioEngine(bundles: [:], manualRendering: true,
+                                makeFiller: { _, _ in StoppingFiller(limit: .max, value: 0.5) })
+        radio.setNeedle(staticOnly)
+        _ = try radio.renderManually(frames: Int(2.5 * sr))
+        radio.setNeedle(off)
+        let fading = try radio.renderManually(frames: Int(0.2 * sr))
+        #expect(fading[fading.count - 1] > 0.1, "still fading off")
+        radio.routeLost()
+        let lost = try radio.renderManually(frames: Int(0.5 * sr))
+        #expect(slice(lost, 0.05, 0.5).allSatisfy { $0 == 0 }, "silent by 0.05 s")
+        #expect(!radio.isOn)
+        radio.setNeedle(staticOnly)            // the session ended: a fresh night fades in
+        let fresh = try radio.renderManually(frames: Int(0.1 * sr))
+        #expect(fresh[0] < 0.01)
+    }
+
     @Test func bothChannelsCarryTheMix() throws {
         let radio = RadioEngine(bundles: [:], manualRendering: true)
         radio.setNeedle(staticOnly)

@@ -4901,26 +4901,40 @@ automatic signing) and installs it themselves.
   0.35 s), and the animation never touches the drift. Haptics: `.light` on each detent
   change while dragging, `.rigid` instead when crossing in or out of OFF.
 - **Audio session:** `.playback`, no options, activated just before the needle leaves OFF
-  (the engine starts inside `setNeedle`) and on lock-screen play. Never deactivated (the
-  off-fade is still running when OFF is reached) — fine for now.
-- **Route loss** (`.oldDeviceUnavailable`): pause, stay paused. **Engine configuration
-  change** (`AVAudioEngineConfigurationChange`, observed with `object: nil` — the app has
-  one engine): `restartAfterConfigurationChange()` starts the stopped engine from master
-  phase 0 — a 2 s fade in if playing, silent if paused — so a paused radio is never heard
-  fading out of the phone speaker after a lost route. Covered by
-  `pausedRestartAfterConfigurationChangeStaysSilent`, `restartAfterConfigurationChangeFadesBackIn`,
-  `restartAfterConfigurationChangeIsANoOpWhenOff`. Caveat: if a route loss does *not* stop
-  the engine (same output format), the pause is the normal 1.5 s fade and that fade plays
-  through the new route (the speaker). Untested on a device.
+  (the engine starts inside `setNeedle`) and on resume. **Never deactivated after OFF**
+  (the off-fade is still running when OFF is reached, and the engine stops later on the
+  render thread) — other apps' audio is not told it may resume. Fine for now.
+- **Route loss** (`.oldDeviceUnavailable`): `RadioEngine.routeLost()` — a 0.05 s
+  raised-cosine fade to silence (iOS has already moved a running engine to the speaker),
+  then paused; `play()` (lock screen, or turning the wheel) brings it back. During the
+  off-fade it only hurries the fade; the session ends as usual. The route-change
+  observer runs with `queue: nil` and calls `routeLost()` on the posting thread (it takes
+  only the control mutex); controller state hops to main. **Engine configuration change**
+  (`AVAudioEngineConfigurationChange`, `object: nil` — the app has one engine): if the
+  output is now `.builtInSpeaker` and the last known output (tracked from route changes)
+  was not, it is a lost route too (whichever notification arrives first); then
+  `restartAfterConfigurationChange()` starts the stopped engine from master phase 0 — a
+  2 s fade in if playing, silent if paused. Tests: `routeLostIsSilentWithinAFewHundredthsAndStaysPaused`,
+  `routeLostDuringTheOffFadeHurriesIt`, `pausedRestartAfterConfigurationChangeStaysSilent`,
+  `restartAfterConfigurationChangeFadesBackIn`, `restartAfterConfigurationChangeIsANoOpWhenOff`.
+  Up to ~0.05 s plus the notification delay can still reach the speaker. Untested on a device.
+- **While the engine is stopped by a configuration change** (between the stop and the
+  restart) the drift clock does not advance: `nowSecond` counts output frames, and the
+  render thread idles on full rings. The night simply resumes where it was.
+- **The wheel resumes a paused radio:** the dial is the only control, so a drag that starts
+  while paused (lost route, interruption, lock screen) calls `resume()` (session, engine
+  restart if stopped, `play()`).
+- **The needle lives in an app-owned `DialModel`** (`EsotericaApp.swift`), not view state,
+  so a scene reconnect (unlocking) redraws the dial where the radio is.
 - **Interruptions:** began → pause; ended with `.shouldResume` → restart + play, but only
   if the interruption is what paused it (a listener's own pause is kept).
 - **Lock screen:** play / pause / toggle → `play()` / `pause()` (play also restarts a stopped
-  engine). Title = `Dial.nowPlayingTitle`: the loudest station when its gain > 0.5, else
+  engine); the commands are disabled while the radio is off. Title = `Dial.nowPlayingTitle`: the loudest station when its gain > 0.5, else
   "DM static"; nothing (and `.stopped`) when off. Artist "Esoterica DM Radio", live stream.
 - **Not verified:** sound on a device, haptics, lock-screen controls, real route changes —
   only the simulator build, launch and the OFF screenshot.
 
 **Placeholders (tune by hand):** `DialView.travelPerWheelWidth` 0.5 *(brief)*,
-`touchPoints` 3 pt *(controller)*, `snapSeconds` 0.35; `Dial.titleGain` 0.5
+`touchPoints` 3 pt *(controller)*, `snapSeconds` 0.35; `RadioEngine.routeLossFadeSeconds` 0.05 *(controller)*; `Dial.titleGain` 0.5
 *(controller)*; wheel ridge spacing 9 pt; remembered-tick opacity 0.18; print colour
 (0.86, 0.70, 0.48) at 0.5–0.6 opacity; needle (0.95, 0.42, 0.22); restart fade = `onFadeSeconds` 2.0.

@@ -39,6 +39,8 @@ public final class RadioEngine: @unchecked Sendable {
     public static let sampleRate = 44100.0
     /// Placeholders (docs/project-state.md, "Plan 9", Task 8).
     public static let onFadeSeconds = 2.0, offFadeSeconds = 1.5, pauseFadeSeconds = 1.5
+    /// Placeholder (docs/project-state.md, "Plan 9", Task 9): the fade when the output route is lost.
+    public static let routeLossFadeSeconds = 0.05
     static let renderAheadFrames = 66150          // 1.5 s
     static let blockFrames = 2048
     static let ringCapacity = 88200               // 2 s: the target plus a block always fits
@@ -176,6 +178,18 @@ public final class RadioEngine: @unchecked Sendable {
             guard c.on, !c.tearingDown, c.session != nil, c.paused else { return }
             c.paused = false
             mixer.setMaster(up: true, seconds: Self.pauseFadeSeconds)
+        }
+    }
+
+    /// The output route was lost (headphones pulled): iOS moves a running engine to the speaker, so
+    /// fade to silence in `routeLossFadeSeconds`, not the 1.5 s pause fade. While on, this is a pause
+    /// (`play()` brings it back); during the off-fade it only hurries the fade, and the session still
+    /// ends as usual. Safe from any thread: it takes only the control lock.
+    public func routeLost() {
+        control.withLock { c in
+            guard c.session != nil, !c.tearingDown else { return }
+            if c.on { c.paused = true }
+            mixer.setMaster(up: false, seconds: Self.routeLossFadeSeconds)
         }
     }
 

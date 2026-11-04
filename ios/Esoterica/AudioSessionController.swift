@@ -6,8 +6,10 @@ import NightRadio
 /// The radio's place in iOS audio: the session, interruptions, lost routes, the lock screen.
 ///
 /// - The session is `.playback` with no mixing options, activated when the radio switches on.
-/// - A lost route (`.oldDeviceUnavailable`, e.g. headphones pulled) pauses, and the radio stays
-///   paused: it never carries on through the phone speaker.
+/// - A lost route (`.oldDeviceUnavailable`, e.g. headphones pulled) fades out in 0.05 s
+///   (`routeLost`, called on the notification's own thread) and the radio stays paused: it never
+///   carries on through the phone speaker. A configuration change that lands on the speaker from
+///   another output counts as a lost route too, whichever notification arrives first.
 /// - `AVAudioEngineConfigurationChange` (the engine stops itself on route and format changes) starts
 ///   the engine again from silence; while paused it stays silent (`restartAfterConfigurationChange`).
 /// - Interruptions: began pauses; ended with `.shouldResume` restarts the engine and plays.
@@ -20,14 +22,26 @@ final class AudioSessionController {
     private var interruptedWhilePlaying = false
     private var on = false
     private var title: String?
+    /// The output port type when the route last changed; a configuration change that lands on the
+    /// speaker from elsewhere is a lost route even if its route-change notification has not arrived.
+    private var lastOutput: AVAudioSession.Port? = AudioSessionController.currentOutput()
+
+    /// Paused (by the listener, the lock screen, a lost route or an interruption) while on.
+    var isPaused: Bool { on && paused }
 
     init(engine: RadioEngine) {
         self.engine = engine
         let center = NotificationCenter.default
+        let engine = engine
+        // Delivered on the posting thread, not hopped to main: iOS has already moved a running engine
+        // to the speaker, so the fade starts here. `routeLost()` takes only the engine's control lock.
         observers.append(center.addObserver(forName: AVAudioSession.routeChangeNotification,
-                                            object: nil, queue: .main) { [weak self] note in
-            let raw = note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt
-            MainActor.assumeIsolated { self?.routeChanged(raw.flatMap(AVAudioSession.RouteChangeReason.init)) }
+                                            object: nil, queue: nil) { [weak self] note in
+            let reason = (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                .flatMap(AVAudioSession.RouteChangeReason.init)
+            if reason == .oldDeviceUnavailable { engine.routeLost() }
+            let output = Self.currentOutput()
+            DispatchQueue.main.async { self?.routeChanged(reason, output: output) }
         })
         observers.append(center.addObserver(forName: AVAudioSession.interruptionNotification,
                                             object: nil, queue: .main) { [weak self] note in
@@ -40,9 +54,10 @@ final class AudioSessionController {
         // One engine in the app, private to RadioEngine: any engine's configuration change is ours.
         observers.append(center.addObserver(forName: .AVAudioEngineConfigurationChange,
                                             object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.engine.restartAfterConfigurationChange() }
+            MainActor.assumeIsolated { self?.configurationChanged() }
         })
         let commands = MPRemoteCommandCenter.shared()
+        Self.enableCommands(false)
         commands.playCommand.addTarget { @Sendable [weak self] _ in
             Task { @MainActor in self?.resume() }
             return .success
@@ -77,6 +92,8 @@ final class AudioSessionController {
         if nowOn != on {
             on = nowOn
             paused = false
+            interruptedWhilePlaying = false
+            Self.enableCommands(on)
         }
         let t = Dial.nowPlayingTitle(needle: needle, stations: StationRecipe.all)
         if t != title {
@@ -92,7 +109,8 @@ final class AudioSessionController {
         publishNowPlaying()
     }
 
-    private func resume() {
+    /// Back from a pause: the session again, the engine again if it stopped, then a fade in.
+    func resume() {
         guard on else { return }
         activate()
         engine.restartAfterConfigurationChange()   // no-op while the engine runs
@@ -101,8 +119,36 @@ final class AudioSessionController {
         publishNowPlaying()
     }
 
-    private func routeChanged(_ reason: AVAudioSession.RouteChangeReason?) {
-        if reason == .oldDeviceUnavailable { pause() }
+    private func routeChanged(_ reason: AVAudioSession.RouteChangeReason?, output: AVAudioSession.Port?) {
+        lastOutput = output
+        if reason == .oldDeviceUnavailable { lostRoute() }
+    }
+
+    /// The engine already faded (or is fading) out; keep the controller and lock screen in step.
+    private func lostRoute() {
+        engine.routeLost()                          // idempotent
+        guard on else { return }
+        paused = true
+        interruptedWhilePlaying = false
+        publishNowPlaying()
+    }
+
+    private func configurationChanged() {
+        let output = Self.currentOutput()
+        if output == .builtInSpeaker && lastOutput != nil && lastOutput != .builtInSpeaker { lostRoute() }
+        lastOutput = output
+        engine.restartAfterConfigurationChange()
+    }
+
+    nonisolated private static func currentOutput() -> AVAudioSession.Port? {
+        AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType
+    }
+
+    private static func enableCommands(_ enabled: Bool) {
+        let commands = MPRemoteCommandCenter.shared()
+        commands.playCommand.isEnabled = enabled
+        commands.pauseCommand.isEnabled = enabled
+        commands.togglePlayPauseCommand.isEnabled = enabled
     }
 
     private func interrupted(_ type: AVAudioSession.InterruptionType?, _ options: AVAudioSession.InterruptionOptions) {

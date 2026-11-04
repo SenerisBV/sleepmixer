@@ -9,21 +9,26 @@ import UIKit
 struct DialView: View {
     let engine: RadioEngine
     let audio: AudioSessionController
+    @Bindable var model: DialModel
 
     /// Placeholders (docs/project-state.md, "Plan 9", Task 9).
     static let travelPerWheelWidth = 0.5
     static let touchPoints: CGFloat = 3
     static let snapSeconds = 0.35
 
-    @State private var needle = 0.0
     /// The last place the radio was left on (UserDefaults `needle`), drawn as a faint tick.
     @State private var remembered: Double? = DialView.loadRemembered()
     @State private var dragStart: Double?
     @State private var lastX: CGFloat = 0
     @State private var moved: CGFloat = 0
-    @State private var detent = Dial.detentIndex(0)
+    @State private var detent: Int?
     @State private var light = UIImpactFeedbackGenerator(style: .light)
     @State private var rigid = UIImpactFeedbackGenerator(style: .rigid)
+
+    private var needle: Double {
+        get { model.needle }
+        nonmutating set { model.needle = newValue }
+    }
 
     private static let ink = Color(red: 0.86, green: 0.70, blue: 0.48)       // warm, dim dial print
     private static let needleColor = Color(red: 0.95, green: 0.42, blue: 0.22)
@@ -78,7 +83,7 @@ struct DialView: View {
                 .font(.system(size: 11, weight: .medium, design: .serif))
                 .tracking(2)
                 .foregroundStyle(Self.ink.opacity(0.5))
-                .position(x: x(Dial.offZone / 2) + 6, y: 70)
+                .position(x: x(Dial.offZone / 2) + 13, y: 70)
             ForEach(StationRecipe.all, id: \.id) { s in
                 Text(s.title)
                     .font(.system(size: 11, weight: .regular, design: .serif))
@@ -131,8 +136,11 @@ struct DialView: View {
             dragStart = needle
             lastX = drag.location.x
             moved = 0
+            detent = Dial.detentIndex(needle)
             light.prepare()
             rigid.prepare()
+            // The dial is the only control: turning it after a lost route or an interruption plays.
+            if audio.isPaused { audio.resume() }
         }
         moved += abs(drag.location.x - lastX)
         lastX = drag.location.x
@@ -151,7 +159,7 @@ struct DialView: View {
         let d = Dial.detentIndex(next)
         if nowOn != wasOn {
             rigid.impactOccurred()
-        } else if d != detent {
+        } else if let last = detent, d != last {
             light.impactOccurred()
         }
         detent = d

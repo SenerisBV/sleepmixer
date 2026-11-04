@@ -7,6 +7,9 @@ import SwiftUI
 struct EsotericaApp: App {
     private let engine: RadioEngine
     private let audio: AudioSessionController
+    /// The needle lives beside the engine, not in the view: a scene reconnect (unlocking the phone)
+    /// redraws the dial where the radio actually is.
+    @State private var dial = DialModel()
 
     init() {
         let engine = RadioEngine(bundles: Self.loadStations())
@@ -16,7 +19,7 @@ struct EsotericaApp: App {
 
     var body: some Scene {
         WindowGroup {
-            DialView(engine: engine, audio: audio)
+            DialView(engine: engine, audio: audio, model: dial)
                 .preferredColorScheme(.dark)
                 .statusBarHidden()
                 .persistentSystemOverlays(.hidden)
@@ -40,4 +43,10 @@ struct EsotericaApp: App {
         }
         return bundles
     }
+}
+
+/// Where the needle is, owned by the app for its whole life. Always starts in the off zone.
+@Observable
+final class DialModel {
+    var needle = 0.0
 }
