@@ -101,6 +101,18 @@ voicing adapters translate or strip them per provider.
 Any other bracketed text is an error. Use cues sparingly, where a real person
 would pause or breathe.
 
+### Segment marks
+
+A line containing exactly `[segment]` (on its own, between paragraphs, no other
+text) marks where a thought ends and a new radio segment may begin. It is
+structural, not a delivery cue: it is dropped before voicing, so adding or moving
+one never changes the spoken text, never makes a take stale and never costs a
+credit. A passage's segments are the stretches between its marks (the first
+starts at 0). Segments never span two passages. The Plan 9 radio plays a
+recording segment by segment, with gaps that grow through the night, so mark a
+segment at every place a listener could drift off and still have heard a whole
+thought (roughly one to two minutes apart).
+
 ### Shuffles
 
 In a `shuffles` script each passage is one burst: one concrete image per line,
@@ -182,6 +194,25 @@ no cost.
   and `esoterica/listening/` are git-ignored: the audio is large and the
   manifests are derived (a free `render` re-makes them from the raw takes and
   the scripts).
+
+## Station bundles (Plan 9)
+
+`sleepmix esoterica bundle <id>... --out <dir>` (free: no provider, no key)
+cuts each recording's raw takes into segments and writes
+`<dir>/<id>/s01.wav, s02.wav, ...` (numbered across the whole recording, 22050 Hz
+mono 16-bit PCM) plus `station.json` (id, title, segment seconds, files). Each cut
+is the middle of a detected pause nearest to where the `[segment]` mark falls
+(estimated from the share of the passage's characters before it), so a cut never
+lands inside a word. Each segment then gets the same source-character chain as
+`render`. The raw takes are only read, never changed; a stale take (script edited
+since voicing) is refused. Segments under 20 s or over 150 s are still exported
+but flagged. If no pause is left after the previous cut, that segment is silently
+not cut (fewer segments, not an error). Code: `sleepmix/esoterica/segments.py`.
+
+`make stations` (repo root) bundles the three launch stations
+(`the-lantern-accords`, `backward-lesson-one`, `the-orchard-light`) into
+`ios/Esoterica/Stations/`, which is git-ignored. The iPhone app plays them; see
+`ios/README.md`.
 
 ## The listening set
 

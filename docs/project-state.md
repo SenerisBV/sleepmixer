@@ -28,8 +28,10 @@ until they've thought about how; the voice layer is built so it can grow into it
   scene, after the operator's first listen) is built too; the new set awaits
   them (section "Plan 7b"). **Plan 8a (the Esoterica starter set: scripts, voicing, a file source in the
   engine) is built; four recordings are voiced and the listening judgement is
-  outstanding** (section "Plan 8a" below). More scenes, the planner and the app
-  are not planned or built.
+  outstanding** (section "Plan 8a" below). **Plan 9 (Esoterica DM Radio: the
+  radio dial, station segments, the live drift, the iPhone app) is built and awaits
+  the operator's first night on the phone** (section "Plan 9" below, first). More
+  scenes and more stations are not planned or built.
 - **Superseded, never built:** Plan 6 (`2026-10-25-ios-night-design.md`)
   except the sections Plan 7 keeps by name (steering by movement, the
   morning lift, audio-session rules, the night log, the builder-check
@@ -47,6 +49,341 @@ until they've thought about how; the voice layer is built so it can grow into it
 
 Below Plan 8a come the Plan 7a and 7b sections (the Swift engine); after them,
 the Python engine and the web mixer as built through Plan 5, Phase 3.
+
+## Plan 9: Esoterica DM Radio (2026-11-03, branch `feat/radio-dial`)
+
+**Status: built, awaiting the operator's first night.** Nothing in it has been
+heard on a device. The Swift package tests, the Python tests and a device-target
+build (`xcodebuild ... generic/platform=iOS CODE_SIGNING_ALLOWED=NO`) pass; the
+operator installs from Xcode themselves (`ios/README.md`). Design:
+`docs/superpowers/specs/2026-11-03-radio-dial-design.md`.
+
+**What this is, in the operator's words.** "I don't want to listen anymore - I
+want to listen on the phone and get a big-picture sense of how this is going.
+Take your best guesses and we'll refine later. Let's not play on the mac." The
+interface: "I think a radio dial might be the UI with a serrated wheel UX, and
+users scroll station to station with static between or mixed over when the
+needle is a little off. That might be the only UI." And the night: "The slow
+drift is important - it's part of the central thesis of the app." "Turning the
+dial resets the drift. If they're turning they must've woken up." "For the start
+of the night, you just turn the dial until something catches your interest or
+sounds satisfying and leave it playing." At the end: "nothing new plays at the
+end, you just turn it off." The feeling to protect is an old radio on the
+nightstand: nothing to set up, nothing to decide, nothing to look at once it's
+going; and then everything slowly recedes, the way a memory softens the further
+you get from it. The display name **Esoterica DM Radio** is the operator's
+(2026-11-03); **DM** ("dream modulation", Claude's pick) is the band printed on
+the dial, the way AM and FM are. Bundle id `nl.senerisbv.esoterica`.
+
+**How it fits together.**
+
+- Python (`sleepmix esoterica bundle`, `make stations`): cuts the voiced
+  recordings into segments at pauses, using `[segment]` marks in the scripts
+  (`esoterica/README.md`). Free; no voicing, no API calls anywhere in Plan 9.
+- `swift/Sources/NightPlan/` (no audio imports; `ImportGuardTests` enforces it):
+  `Drift` and `DriftClock` (the night's depth, touched and reset by the wheel),
+  `StationProgram` (which segment plays when, with growing gaps and an
+  end-of-recording wait), `StationRecipe` (the three stations and their beds),
+  `Dial` (needle to gains, detents, snap, title).
+- `swift/Sources/NightRadio/`: `StationChain` (beds + voice through the AM
+  channel), `StaticChain`, `StationVoice`, `SPSCRing`, `Renderer` and
+  `RadioEngine` (the live engine).
+- `ios/` (XcodeGen `project.yml`): `EsotericaApp`, `DialView`,
+  `AudioSessionController`. How to build and use it: `ios/README.md`.
+
+### The ruling that matters most: DSP runs on a render thread
+
+DSP does **not** run in the audio callback. One background render thread
+(`.userInteractive`) owns the chains and fills four lock-free single-producer
+single-consumer rings (three stations + static) ahead of the audio, to 1.5 s in
+2048-frame blocks. The `AVAudioSourceNode` callback only reads the rings and a few
+atomics: it never allocates, locks or does file I/O. **So the old "real-time
+safety" hazards of the scenes and processors (allocation, locking, file reads
+inside DSP; see "Known limitations and deferred items" in Plan 7a and 7b) are
+deferred, not fixed:** they are harmless only because that code never runs in the
+callback. If DSP is ever moved into a callback, they come back.
+
+**Measured render speed:** release build on the Mac, three StationChains + a
+StaticChain, 60 s at 44.1 kHz in 2048-frame blocks took 1.41 s: **about 42× real
+time** (40× before a fix round); `swift test -c release --filter
+rendersFastEnough`, which needs at least 10×. Not measured on a phone, where it
+will be slower; the 1.5 s of render-ahead is the headroom.
+
+### Every placeholder, by name and value (Claude's best guesses; tune by ear)
+
+| Name | Value | File |
+|---|---|---|
+| `settleSeconds` (browsing window) | 60 | `NightPlan/DriftClock.swift` |
+| `resetFadeSeconds` | 4 | `NightPlan/DriftClock.swift` |
+| `onFadeSeconds` / `offFadeSeconds` / `pauseFadeSeconds` | 2.0 / 1.5 / 1.5 (raised cosine of a linear phase) | `NightRadio/RadioEngine.swift` |
+| Trend (`trendStart`, `trendEnd`, `trendMax`) | 0 until clock 1800 s, then smoothstep to 0.85 at 21600 s, held after | `NightPlan/Drift.swift` |
+| Cycle (`cyclePeriod`, `cycleAmplitude`) | period 5400 s, amplitude 0.10 × min(1, trend / 0.3), phase `2π · unit(seed, 40, 0)` | `NightPlan/Drift.swift` |
+| `free` / `ratchet` depth | free = clamp(trend + cycle, 0, 1); ratchet = trend | `NightPlan/Drift.swift` |
+| Bed warp (`bedWarp`) | distance 0.7·free, slowness 0.8·free, fragmentation 0.6·max(0, (free − 0.35)/0.65), proportion 0.5·free, ring 0.3, softness 0.5 + 0.5·free, vibrato 0.2 | `NightPlan/Drift.swift` |
+| Voice (`voiceDistance`, `voiceGainDB`) | distance = free; gain dB = −14 · ratchet | `NightPlan/Drift.swift` |
+| Channel (`channel`) | lowCorner 180 + 120·ratchet, highCorner 4500 − 3000·ratchet, hiss −48 + 6·ratchet dB, crackle −54 dB, fadeDepth 0.25 + 0.45·free, fadeRate 0.05 Hz, squash 0.5 | `NightPlan/Drift.swift` |
+| Segment gap (`segmentGap`) | 3 s + 480 s · free^1.5 | `NightPlan/Drift.swift` |
+| End-of-recording wait (`endWait`) | 30 s + 1200 s · free | `NightPlan/Drift.swift` |
+| `staticGainDB` | −12 dB · ratchet | `NightPlan/Drift.swift` |
+| Static settings (`StaticChain.settings`) | ChannelSettings(low 300, high 3000, hiss −30, crackle −36, fadeDepth 0.4, fadeRate 0.08, squash 0.3) | `NightRadio/StaticChain.swift` |
+| Dial (`offZone`, `full`, `edge`, `detent`, `snap`) | travel 0…1; off zone < 0.06; stations at 0.25 (Lantern), 0.55 (Lesson), 0.85 (Orchard); full within ±0.015, raised-cosine to 0 at ±0.06; static gain = 1 − (max station gain); detent every 0.01; snap to a station on release within ±0.03 | `NightPlan/Dial.swift`, `StationRecipe.swift` |
+| `Dial.titleGain` | 0.5 (Now Playing shows a station above this gain, else "DM static") | `NightPlan/Dial.swift` |
+| Beds (warmth / chimes / waves) | Lantern 1.0 / 0.25 / 0.2; Lesson 0.3 / 0.2 / 1.0; Orchard 0.25 / 1.0 / 0.3 | `NightPlan/StationRecipe.swift` |
+| `StationChain.bedGainDB` | −8 dB, before the channel | `NightRadio/StationChain.swift` |
+| Render-ahead | `renderAheadFrames` 66150 (1.5 s target), `blockFrames` 2048, `ringCapacity` 88200 | `NightRadio/RadioEngine.swift` |
+| Segment export | 22050 Hz, 16-bit PCM mono WAV | `sleepmix/esoterica/segments.py` |
+| Cut placeholders | `CUT_MIN_PAUSE_S` 0.25, `CUT_WINDOW` ±20%, `CUT_DISTANCE_PENALTY` 0.02; `BUNDLE_MIN_S` 20, `BUNDLE_MAX_S` 150 | `segments.py`, `cli.py` |
+| Smaller engine and app values | in the per-component lists below: `StationVoice.preloadSeconds` 5, `fadeInSeconds` 0.03, `fadeOutSeconds` 0.05; `Mixer.gainSmoothingSeconds` 0.03, `underrunFadeSeconds` 0.005; `RenderThread.idleSleepSeconds` 0.005; `manualChunkFrames` 4096; `RadioEngine.routeLossFadeSeconds` 0.05; `DialView.travelPerWheelWidth` 0.5, `touchPoints` 3, `snapSeconds` 0.35 and the colours | `NightRadio/*`, `ios/Esoterica/*` |
+
+Also a judgement, not a number: the three launch stations are the-lantern-accords,
+backward-lesson-one and the-orchard-light (Claude's reading of "the language one"
+is Backward Lesson One, the only voiced lesson). The radio always starts off, and
+remembers only a faint tick for where it was last left. Seeds are
+`NightRandom.hash(seed, stationIndex, k)` (see "A station's sound").
+
+### Known limitations / deferred
+
+Not heard on a device. Everything below is a known gap, not a surprise.
+
+*The night and its tests*
+- The needle is stored in an atomic by the engine but nothing reads it yet.
+- `browsingNeverDeepens` is weak (it passes without any touches); there is no
+  test for a touch in the middle of a fade; exact-boundary tests of the dial
+  (0.06, ±0.015, ±0.06, ±0.03) and a mid-fade 0.5 value test are missing.
+- `StationProgram`: a huge finite `second` stalls advance (cost about
+  second/gap); `backwardsTimeDoesNotCrash` asserts nothing.
+- The reset after a wheel touch audibly starts up to ~1.55 s later (touches land
+  at the render position, not the audible one; see "The live engine").
+- Not built: Plan 7's memory layer, the every-night ease toward morning, wake
+  times, steering by movement, link pasting, the overnight DJ / call-in show, and
+  several episodes per station (adding a station should be a recording, its
+  segment marks and a bed recipe).
+
+*Segments*
+- Cuts are pause midpoints, nearest where the paragraph-character share predicts
+  the `[segment]` mark falls, verified by pause matching rather than
+  transcription. In the-orchard-light, segments s01/s02 may cut one sentence late
+  (after "And the sun had gone."): check by ear.
+- If pauses run out, fewer segments are cut with no warning; the pause choice is
+  greedy with no minimum segment length; an empty spoken passage divides by zero;
+  a mid-export failure can leave a stale `station.json`; `[segment]` edge cases
+  (doubled marker, trailing marker, CRLF) are untested; the paragraph recount is
+  O(n²).
+
+*The engine*
+- Pause/play during the teardown window is dropped; a deferred `engine.start`
+  runs under the control Mutex on the render thread; the threaded teardown and
+  deferred restart are not under test (only manual rendering is); the ring reset
+  assumes `engine.stop()` is synchronous; the real-`Renderer` tests are
+  random-seeded and slow.
+- `StationVoice` handover is not equal-power; the outgoing fade starts at the
+  block start; the chains are not `Sendable` (they are built on the render thread).
+- Switching back on within the 1.5 s off-fade reverses the fade on the same
+  session instead of starting a fresh night (a flick through OFF is not turning
+  the radio off; a wheel touch resets the drift anyway).
+- The real-time-safety hazards of Plan 7a/7b are deferred (see the ruling above).
+
+*The app*
+- Not verified on a device: sound, haptics, lock-screen controls, real route
+  changes. Only the simulator build, launch and the OFF screenshot.
+- `routeLost()` is ignored during the tearing-down window (a deferred switch-on
+  could fade in on the speaker); resume-then-off can blip quietly; the
+  controller's paused state lags the engine by a main-thread hop; the `Sendable`
+  observer closure is unverified on device. Up to ~0.05 s plus the notification
+  delay can still reach the speaker on route loss.
+- The audio session is never deactivated after OFF, so other apps' audio is not
+  told it may resume.
+
+Constraints that hold: raw takes in `esoterica/library/` are never modified; the
+`[segment]` marker never makes a take stale; nothing is sudden, every on, off,
+pause, play, reset and tuning change is a fade; a missing segment file is
+silence, never a crash; the planner has no audio imports.
+
+### Segments and station bundles (Python, `sleepmix esoterica bundle`)
+
+`sleepmix esoterica bundle <id>... --out <dir>` (free) cuts each passage's raw
+take into segments at pause midpoints and writes `<dir>/<id>/sNN.wav` (22050 Hz
+mono PCM_16, numbered across the recording) plus `station.json`. Code:
+`sleepmix/esoterica/segments.py`. Refuses stale takes. Flags segments under
+20 s or over 150 s but still exports them. `make stations` bundles the three
+launch stations; output `ios/Esoterica/Stations/` is gitignored.
+
+**Placeholders (tune by ear):** `CUT_MIN_PAUSE_S` 0.25 s, `CUT_WINDOW` +-20% of
+the take, `CUT_DISTANCE_PENALTY` 0.02 (`segments.py`); `BUNDLE_MIN_S` 20 and
+`BUNDLE_MAX_S` 150 (`cli.py`). Cuts are a pause midpoint nearest where the
+paragraph-character share predicts the `[segment]` marker falls; if no pause
+is left after the previous cut, a segment is silently not cut (fewer segments).
+
+### A station's sound (`NightRadio`: StationChain, StaticChain, StationVoice)
+
+New Swift library target `NightRadio` (deps `NightDSP`, `NightPlan`; Foundation only,
+no AVFoundation, guarded by `nightRadioImportsNoAVFoundation`). Code in
+`swift/Sources/NightRadio/`:
+
+- `StationBundle` reads `station.json` (id, title, segment seconds, segment URLs).
+  Segment files are not opened here.
+- `StationChain`: warmth/chimes/waves × recipe gain × bed gain → `Fragmenter` →
+  `Distance` (all on `Curve { Drift.bedWarp(clock.level(at:)) }`), plus
+  `StationVoice`, → `AMChannel(Curve { Drift.channel(...) })` → `masterGuard`.
+  Engine seconds from 0 (cold start, no lead-in; the engine's on-fade covers settling).
+  Curves call `DriftClock.level(at:)` directly: no per-block snapshot was needed
+  (processors read it at most once per 512 frames, scenes per event).
+- `StationVoice`: plays the program's segment via `FileSource`. A segment whose start
+  falls inside the block starts from clip time 0 at its exact frame. A segment the
+  program reveals late (it reveals on a whole-second grid but backdates `start` to
+  `end + gap`, so up to ~1 s late whenever the gap isn't whole seconds) plays from
+  clip time 0 at the reveal frame, never seeked; the speech runs up to ~1 s behind
+  the schedule (absorbed by the next gap, >= 3 s). Only the switch-on segment (already
+  under way at engine second 0) is seeked, with a 30 ms raised-cosine fade-in. A
+  clip still sounding when the next segment starts fades out over 50 ms;
+  per-block linear ramp to `Drift.voiceGainDB`; own `Distance` on
+  `WarpDepth(distance: Drift.voiceDistance)`. Preloads the next clip when
+  `upcoming` is under 5 s away; holds at most current + next. A nil load is
+  silence; the schedule carries on.
+- `StaticChain`: `AMChannel` over zeros with the static settings, × per-block
+  ramp to `Drift.staticGainDB`, then `masterGuard`.
+- Seeds: `NightRandom.hash(seed, stationIndex, k)` with stationIndex = index in
+  `StationRecipe.all` (static = 3), k: warmth 0, chimes 1, waves 2, fragmenter 3,
+  bed distance 4, channel 5, program 6, voice distance 7.
+
+**Placeholders (tune by ear):** `StationChain.bedGainDB` −8 dB;
+`StaticChain.settings` (low 300, high 3000, hiss −30, crackle −36, fadeDepth 0.4,
+fadeRate 0.08, squash 0.3); `StationVoice.preloadSeconds` 5 s;
+`StationVoice.fadeInSeconds` 0.03 (switch-on seek); `StationVoice.fadeOutSeconds` 0.05
+(overrunning clip replaced).
+
+**Measured:** release build on the Mac, three StationChains + StaticChain, 60 s at
+44.1 kHz in 2048-frame blocks: 1.41 s wall-clock, **about 42× real time** (after the fix round; 40× before)
+(`swift test -c release --filter rendersFastEnough`; needs ≥ 10×). Test temp
+bundle (300 Hz tone at −24 dBFS RMS): voice 11.8 dB above the Lantern bed over
+speech at drift 0; static RMS −35.8 dBFS at drift 0.
+
+### The live engine (`NightRadio`: RadioEngine, SPSCRing, Renderer)
+
+`RadioEngine` (`swift/Sources/NightRadio/RadioEngine.swift`), `SPSCRing`, `Renderer`
+and `RenderThread` (`Renderer.swift`). The dial's needle in, stereo audio out.
+
+- **Threads.** UI calls (`setNeedle`, `wheelTouched`, `pause`, `play`) serialise on a
+  `Mutex` the callback never touches. `setNeedle` computes `Dial.gains` on the UI thread
+  and publishes the four gains (3 stations + static) as Float bit patterns in
+  `Atomic<UInt32>`; the needle is stored as `Atomic<UInt64>` (not yet read by anything).
+  One render thread (`.userInteractive`) owns the chains — built lazily on its first
+  fill, so they never cross threads — and fills four `SPSCRing`s round-robin in 2048-frame
+  blocks to 1.5 s, sleeping 5 ms when nothing needed writing. The `AVAudioSourceNode`
+  callback (`Mixer.render`) reads rings and atomics only: no locks, no allocation, no I/O.
+- **Switch on** (needle leaves the off zone): random seed, new `DriftClock` touched at 0,
+  rings emptied, `nowSecond` 0, new `Renderer`, thread + `AVAudioEngine` started, 2 s
+  fade in. **Switch off**: 1.5 s fade; when it reaches silence the render thread itself
+  stops the engine, empties the rings and ends the session. **Turning back on during the
+  off-fade reverses the fade on the same session** (not a fresh night): a fresh start
+  under a half-faded sound would be a jump. A fresh night needs the fade to have finished.
+- **Pause/play**: master fade to 0 / back to 1 over 1.5 s; engine, render thread and
+  `nowSecond` keep running. Switching off clears the pause; switching on always plays.
+- **Off-zone gains are not published**, so the off-fade keeps the last tuning instead of
+  gliding to silence in 30 ms.
+- **Underruns**: the callback keeps 5 ms in hand. A ring plays only while it holds a block
+  + 5 ms; when it doesn't, the last 5 ms of real frames fade out (raised cosine) and the
+  rest is zeros; once it holds a block + 5 ms again, it fades back in over 5 ms. The audio
+  timeline slips by the gap (nothing is skipped to catch up).
+- **Mix**: Σ smoothed gain × ring → master fade → `NightFactory.masterGuard` → every
+  channel of a 44100 Hz stereo non-interleaved Float32 format.
+- **Manual rendering (tests)**: `manualRendering: true` uses AVAudioEngine's offline
+  manual mode and **no render thread**: `renderManually` tops the rings up synchronously
+  on the calling thread before each 4096-frame chunk and runs the off teardown after each
+  chunk. Deterministic; the threaded path is covered only by `renderThreadFillsRings`
+  (the thread alone, no engine) — the live engine's thread-side teardown is not under test.
+- **Import guard**: `RadioEngine.swift` is the one NightRadio file allowed `import
+  AVFoundation` (ImportGuardTests narrowed); UI frameworks stay banned everywhere.
+- **Wheel touches land at the producer's position** (furthest ring's written frames + one
+  2048 block, / 44100), not the audible `nowSecond` (controller ruling, fix round 1): the
+  chains are up to 1.5 s ahead, and touching behind that stepped the drift (~0.13 of a
+  0.42 level in `wheelTouchDeepInTheNightGlidesBack`, ~3.6 dB of voice gain). The audible
+  reset therefore starts up to ~1.55 s after the touch. The clock is made by a
+  `makeClock` seam (default: `DriftClock(seed:)` touched at 0).
+- **Teardown off the lock**: `engine.stop()` runs outside the control Mutex (flag
+  `tearingDown`); a switch-on during it is deferred and started fresh when the teardown
+  re-locks. `RenderThread.stop()` called from the render thread itself (the engine freed
+  there) only asks, never waits.
+- No `AVAudioSession` handling (the app does that). Route loss and engine configuration changes: see "The app".
+
+**Placeholders (tune by ear):** `RadioEngine.onFadeSeconds` 2.0, `offFadeSeconds` 1.5,
+`pauseFadeSeconds` 1.5 *(brief)* — shape: a **raised cosine of a linear phase** (phase
+moves 1/(fade s × 44100) per sample toward 0 or 1, gain = ½(1 − cos πp)), so a reversed
+fade turns around without a step, and a fade begun mid-way takes proportionally less time.
+`Mixer.gainSmoothingSeconds` 0.03 (one-pole per sample, per ring);
+`Mixer.underrunFadeSeconds` 0.005 (raised cosine, both directions);
+`RadioEngine.renderAheadFrames` 66150 (1.5 s) and `blockFrames` 2048 *(brief)*;
+`ringCapacity` 88200 (2 s, ≥ target + block); `RenderThread.idleSleepSeconds` 0.005;
+`manualChunkFrames` 4096 (manual-mode max frame count and the callback's mix chunk; a
+longer live callback is mixed in 4096-frame pieces).
+
+### The app (`ios/`, "Esoterica DM Radio")
+
+An old radio on the nightstand: one black screen, a dim band printed **DM** with **OFF** at
+the left and the three station titles at their dial positions, a warm orange needle, and a
+serrated wheel along the bottom. Nothing else to read in the dark. Bundle id
+`nl.senerisbv.esoterica`, iOS 18, iPhone, portrait, `UIBackgroundModes: audio`, dark.
+No `DEVELOPMENT_TEAM` — the operator picks the team in Xcode (Signing & Capabilities,
+automatic signing) and installs it themselves.
+
+- **Build:** `cd ios && xcodegen && xcodebuild -scheme Esoterica -destination
+  'platform=iOS Simulator,name=iPhone 18 Pro' -derivedDataPath build build`.
+  `ios/Esoterica.xcodeproj/` and `ios/build/` are generated and git-ignored; committed are
+  `ios/project.yml`, the three Swift files and `Info.plist` (XcodeGen regenerates it from
+  `project.yml`'s `info.properties` — edit there, not in the plist). `Esoterica/Stations`
+  (from `make stations`, git-ignored) is a folder reference copied as-is, marked optional so
+  a fresh clone still generates; then every station plays its bed only.
+- **Code:** `EsotericaApp.swift` (loads `Stations/<id>` per `StationRecipe.all`, owns the
+  `RadioEngine`), `DialView.swift` (band, needle, wheel, haptics, persistence),
+  `AudioSessionController.swift` (session, route loss, interruptions, engine configuration
+  changes, lock screen). Testable logic lives in the package: `Dial.nowPlayingTitle`
+  (NightPlan) and `RadioEngine.restartAfterConfigurationChange()` (NightRadio).
+- **Starts off, always.** The needle launches at 0. The last place the radio was left on
+  (UserDefaults `needle`, saved on release when ≥ the off zone) is a faint tick on the band.
+- **Wheel:** a horizontal drag; the full wheel width moves the needle 0.5 of travel.
+  Every further 3 pt of finger movement calls `engine.wheelTouched()` (accumulated, so a
+  steady drag touches the drift every few points, a resting finger does not). On release
+  the engine gets `Dial.snapped` at once; only the drawn needle animates there (ease-out
+  0.35 s), and the animation never touches the drift. Haptics: `.light` on each detent
+  change while dragging, `.rigid` instead when crossing in or out of OFF.
+- **Audio session:** `.playback`, no options, activated just before the needle leaves OFF
+  (the engine starts inside `setNeedle`) and on resume. **Never deactivated after OFF**
+  (the off-fade is still running when OFF is reached, and the engine stops later on the
+  render thread) — other apps' audio is not told it may resume. Fine for now.
+- **Route loss** (`.oldDeviceUnavailable`): `RadioEngine.routeLost()` — a 0.05 s
+  raised-cosine fade to silence (iOS has already moved a running engine to the speaker),
+  then paused; `play()` (lock screen, or turning the wheel) brings it back. During the
+  off-fade it only hurries the fade; the session ends as usual. The route-change
+  observer runs with `queue: nil` and calls `routeLost()` on the posting thread (it takes
+  only the control mutex); controller state hops to main. **Engine configuration change**
+  (`AVAudioEngineConfigurationChange`, `object: nil` — the app has one engine): if the
+  output is now `.builtInSpeaker` and the last known output (tracked from route changes)
+  was not, it is a lost route too (whichever notification arrives first); then
+  `restartAfterConfigurationChange()` starts the stopped engine from master phase 0 — a
+  2 s fade in if playing, silent if paused. Tests: `routeLostIsSilentWithinAFewHundredthsAndStaysPaused`,
+  `routeLostDuringTheOffFadeHurriesIt`, `pausedRestartAfterConfigurationChangeStaysSilent`,
+  `restartAfterConfigurationChangeFadesBackIn`, `restartAfterConfigurationChangeIsANoOpWhenOff`.
+  Up to ~0.05 s plus the notification delay can still reach the speaker. Untested on a device.
+- **While the engine is stopped by a configuration change** (between the stop and the
+  restart) the drift clock does not advance: `nowSecond` counts output frames, and the
+  render thread idles on full rings. The night simply resumes where it was.
+- **The wheel resumes a paused radio:** the dial is the only control, so a drag that starts
+  while paused (lost route, interruption, lock screen) calls `resume()` (session, engine
+  restart if stopped, `play()`).
+- **The needle lives in an app-owned `DialModel`** (`EsotericaApp.swift`), not view state,
+  so a scene reconnect (unlocking) redraws the dial where the radio is.
+- **Interruptions:** began → pause; ended with `.shouldResume` → restart + play, but only
+  if the interruption is what paused it (a listener's own pause is kept).
+- **Lock screen:** play / pause / toggle → `play()` / `pause()` (play also restarts a stopped
+  engine); the commands are disabled while the radio is off. Title = `Dial.nowPlayingTitle`: the loudest station when its gain > 0.5, else
+  "DM static"; nothing (and `.stopped`) when off. Artist "Esoterica DM Radio", live stream.
+- **Not verified:** sound on a device, haptics, lock-screen controls, real route changes —
+  only the simulator build, launch and the OFF screenshot.
+
+**Placeholders (tune by hand):** `DialView.travelPerWheelWidth` 0.5 *(brief)*,
+`touchPoints` 3 pt *(controller ruling)*, `snapSeconds` 0.35; `RadioEngine.routeLossFadeSeconds` 0.05 *(controller ruling)*; `Dial.titleGain` 0.5
+*(controller ruling)*; wheel ridge spacing 9 pt; remembered-tick opacity 0.18; print colour
+(0.86, 0.70, 0.48) at 0.5–0.6 opacity; needle (0.95, 0.42, 0.22); restart fade = `onFadeSeconds` 2.0.
 
 ## The app's UI idea: a radio dial (operator, 2026-11-03)
 
@@ -4752,189 +5089,3 @@ rendering or measuring it.*
      once per stem, which is the reason it lives above the rows at all;
      splitting it was rejected because the two halves are one thought. The
      heading is asserted by a view test and verified by deletion.
-
-## Plan 9 (Esoterica DM Radio), segments and station bundles
-
-`sleepmix esoterica bundle <id>... --out <dir>` (free) cuts each passage's raw
-take into segments at pause midpoints and writes `<dir>/<id>/sNN.wav` (22050 Hz
-mono PCM_16, numbered across the recording) plus `station.json`. Code:
-`sleepmix/esoterica/segments.py`. Refuses stale takes. Flags segments under
-20 s or over 150 s but still exports them. `make stations` bundles the three
-launch stations; output `ios/Esoterica/Stations/` is gitignored.
-
-**Placeholders (tune by ear):** `CUT_MIN_PAUSE_S` 0.25 s, `CUT_WINDOW` +-20% of
-the take, `CUT_DISTANCE_PENALTY` 0.02 (`segments.py`); `BUNDLE_MIN_S` 20 and
-`BUNDLE_MAX_S` 150 (`cli.py`). Cuts are a pause midpoint nearest where the
-paragraph-character share predicts the `[segment]` marker falls; if no pause
-is left after the previous cut, a segment is silently not cut (fewer segments).
-
-### Plan 9 Task 7: a station's sound (`NightRadio`)
-
-New Swift library target `NightRadio` (deps `NightDSP`, `NightPlan`; Foundation only,
-no AVFoundation, guarded by `nightRadioImportsNoAVFoundation`). Code in
-`swift/Sources/NightRadio/`:
-
-- `StationBundle` reads `station.json` (id, title, segment seconds, segment URLs).
-  Segment files are not opened here.
-- `StationChain`: warmth/chimes/waves × recipe gain × bed gain → `Fragmenter` →
-  `Distance` (all on `Curve { Drift.bedWarp(clock.level(at:)) }`), plus
-  `StationVoice`, → `AMChannel(Curve { Drift.channel(...) })` → `masterGuard`.
-  Engine seconds from 0 (cold start, no lead-in; the on-fade in Task 8 covers settling).
-  Curves call `DriftClock.level(at:)` directly: no per-block snapshot was needed
-  (processors read it at most once per 512 frames, scenes per event).
-- `StationVoice`: plays the program's segment via `FileSource`. A segment whose start
-  falls inside the block starts from clip time 0 at its exact frame. A segment the
-  program reveals late (it reveals on a whole-second grid but backdates `start` to
-  `end + gap`, so up to ~1 s late whenever the gap isn't whole seconds) plays from
-  clip time 0 at the reveal frame, never seeked; the speech runs up to ~1 s behind
-  the schedule (absorbed by the next gap, >= 3 s). Only the switch-on segment (already
-  under way at engine second 0) is seeked, with a 30 ms raised-cosine fade-in. A
-  clip still sounding when the next segment starts fades out over 50 ms;
-  per-block linear ramp to `Drift.voiceGainDB`; own `Distance` on
-  `WarpDepth(distance: Drift.voiceDistance)`. Preloads the next clip when
-  `upcoming` is under 5 s away; holds at most current + next. A nil load is
-  silence; the schedule carries on.
-- `StaticChain`: `AMChannel` over zeros with the static settings, × per-block
-  ramp to `Drift.staticGainDB`, then `masterGuard`.
-- Seeds: `NightRandom.hash(seed, stationIndex, k)` with stationIndex = index in
-  `StationRecipe.all` (static = 3), k: warmth 0, chimes 1, waves 2, fragmenter 3,
-  bed distance 4, channel 5, program 6, voice distance 7.
-
-**Placeholders (tune by ear):** `StationChain.bedGainDB` −8 dB;
-`StaticChain.settings` (low 300, high 3000, hiss −30, crackle −36, fadeDepth 0.4,
-fadeRate 0.08, squash 0.3); `StationVoice.preloadSeconds` 5 s;
-`StationVoice.fadeInSeconds` 0.03 (switch-on seek); `StationVoice.fadeOutSeconds` 0.05
-(overrunning clip replaced).
-
-**Measured:** release build on the Mac, three StationChains + StaticChain, 60 s at
-44.1 kHz in 2048-frame blocks: 1.41 s wall-clock, **about 42× real time** (after the fix round; 40× before)
-(`swift test -c release --filter rendersFastEnough`; needs ≥ 10×). Test temp
-bundle (300 Hz tone at −24 dBFS RMS): voice 11.8 dB above the Lantern bed over
-speech at drift 0; static RMS −35.8 dBFS at drift 0.
-
-### Plan 9 Task 8: the live engine (`NightRadio`)
-
-`RadioEngine` (`swift/Sources/NightRadio/RadioEngine.swift`), `SPSCRing`, `Renderer`
-and `RenderThread` (`Renderer.swift`). The dial's needle in, stereo audio out.
-
-- **Threads.** UI calls (`setNeedle`, `wheelTouched`, `pause`, `play`) serialise on a
-  `Mutex` the callback never touches. `setNeedle` computes `Dial.gains` on the UI thread
-  and publishes the four gains (3 stations + static) as Float bit patterns in
-  `Atomic<UInt32>`; the needle is stored as `Atomic<UInt64>` (not yet read by anything).
-  One render thread (`.userInteractive`) owns the chains — built lazily on its first
-  fill, so they never cross threads — and fills four `SPSCRing`s round-robin in 2048-frame
-  blocks to 1.5 s, sleeping 5 ms when nothing needed writing. The `AVAudioSourceNode`
-  callback (`Mixer.render`) reads rings and atomics only: no locks, no allocation, no I/O.
-- **Switch on** (needle leaves the off zone): random seed, new `DriftClock` touched at 0,
-  rings emptied, `nowSecond` 0, new `Renderer`, thread + `AVAudioEngine` started, 2 s
-  fade in. **Switch off**: 1.5 s fade; when it reaches silence the render thread itself
-  stops the engine, empties the rings and ends the session. **Turning back on during the
-  off-fade reverses the fade on the same session** (not a fresh night): a fresh start
-  under a half-faded sound would be a jump. A fresh night needs the fade to have finished.
-- **Pause/play**: master fade to 0 / back to 1 over 1.5 s; engine, render thread and
-  `nowSecond` keep running. Switching off clears the pause; switching on always plays.
-- **Off-zone gains are not published**, so the off-fade keeps the last tuning instead of
-  gliding to silence in 30 ms.
-- **Underruns**: the callback keeps 5 ms in hand. A ring plays only while it holds a block
-  + 5 ms; when it doesn't, the last 5 ms of real frames fade out (raised cosine) and the
-  rest is zeros; once it holds a block + 5 ms again, it fades back in over 5 ms. The audio
-  timeline slips by the gap (nothing is skipped to catch up).
-- **Mix**: Σ smoothed gain × ring → master fade → `NightFactory.masterGuard` → every
-  channel of a 44100 Hz stereo non-interleaved Float32 format.
-- **Manual rendering (tests)**: `manualRendering: true` uses AVAudioEngine's offline
-  manual mode and **no render thread**: `renderManually` tops the rings up synchronously
-  on the calling thread before each 4096-frame chunk and runs the off teardown after each
-  chunk. Deterministic; the threaded path is covered only by `renderThreadFillsRings`
-  (the thread alone, no engine) — the live engine's thread-side teardown is not under test.
-- **Import guard**: `RadioEngine.swift` is the one NightRadio file allowed `import
-  AVFoundation` (ImportGuardTests narrowed); UI frameworks stay banned everywhere.
-- **Wheel touches land at the producer's position** (furthest ring's written frames + one
-  2048 block, / 44100), not the audible `nowSecond` (controller ruling, fix round 1): the
-  chains are up to 1.5 s ahead, and touching behind that stepped the drift (~0.13 of a
-  0.42 level in `wheelTouchDeepInTheNightGlidesBack`, ~3.6 dB of voice gain). The audible
-  reset therefore starts up to ~1.55 s after the touch. The clock is made by a
-  `makeClock` seam (default: `DriftClock(seed:)` touched at 0).
-- **Teardown off the lock**: `engine.stop()` runs outside the control Mutex (flag
-  `tearingDown`); a switch-on during it is deferred and started fresh when the teardown
-  re-locks. `RenderThread.stop()` called from the render thread itself (the engine freed
-  there) only asks, never waits.
-- No `AVAudioSession` handling (the app does that). Route loss and engine configuration changes: see Task 9.
-
-**Placeholders (tune by ear):** `RadioEngine.onFadeSeconds` 2.0, `offFadeSeconds` 1.5,
-`pauseFadeSeconds` 1.5 *(brief)* — shape: a **raised cosine of a linear phase** (phase
-moves 1/(fade s × 44100) per sample toward 0 or 1, gain = ½(1 − cos πp)), so a reversed
-fade turns around without a step, and a fade begun mid-way takes proportionally less time.
-`Mixer.gainSmoothingSeconds` 0.03 (one-pole per sample, per ring);
-`Mixer.underrunFadeSeconds` 0.005 (raised cosine, both directions);
-`RadioEngine.renderAheadFrames` 66150 (1.5 s) and `blockFrames` 2048 *(brief)*;
-`ringCapacity` 88200 (2 s, ≥ target + block); `RenderThread.idleSleepSeconds` 0.005;
-`manualChunkFrames` 4096 (manual-mode max frame count and the callback's mix chunk; a
-longer live callback is mixed in 4096-frame pieces).
-
-### Plan 9 Task 9: the app (`ios/`, "Esoterica DM Radio")
-
-An old radio on the nightstand: one black screen, a dim band printed **DM** with **OFF** at
-the left and the three station titles at their dial positions, a warm orange needle, and a
-serrated wheel along the bottom. Nothing else to read in the dark. Bundle id
-`nl.senerisbv.esoterica`, iOS 18, iPhone, portrait, `UIBackgroundModes: audio`, dark.
-No `DEVELOPMENT_TEAM` — the operator picks the team in Xcode (Signing & Capabilities,
-automatic signing) and installs it themselves.
-
-- **Build:** `cd ios && xcodegen && xcodebuild -scheme Esoterica -destination
-  'platform=iOS Simulator,name=iPhone 18 Pro' -derivedDataPath build build`.
-  `ios/Esoterica.xcodeproj/` and `ios/build/` are generated and git-ignored; committed are
-  `ios/project.yml`, the three Swift files and `Info.plist` (XcodeGen regenerates it from
-  `project.yml`'s `info.properties` — edit there, not in the plist). `Esoterica/Stations`
-  (from `make stations`, git-ignored) is a folder reference copied as-is, marked optional so
-  a fresh clone still generates; then every station plays its bed only.
-- **Code:** `EsotericaApp.swift` (loads `Stations/<id>` per `StationRecipe.all`, owns the
-  `RadioEngine`), `DialView.swift` (band, needle, wheel, haptics, persistence),
-  `AudioSessionController.swift` (session, route loss, interruptions, engine configuration
-  changes, lock screen). Testable logic lives in the package: `Dial.nowPlayingTitle`
-  (NightPlan) and `RadioEngine.restartAfterConfigurationChange()` (NightRadio).
-- **Starts off, always.** The needle launches at 0. The last place the radio was left on
-  (UserDefaults `needle`, saved on release when ≥ the off zone) is a faint tick on the band.
-- **Wheel:** a horizontal drag; the full wheel width moves the needle 0.5 of travel.
-  Every further 3 pt of finger movement calls `engine.wheelTouched()` (accumulated, so a
-  steady drag touches the drift every few points, a resting finger does not). On release
-  the engine gets `Dial.snapped` at once; only the drawn needle animates there (ease-out
-  0.35 s), and the animation never touches the drift. Haptics: `.light` on each detent
-  change while dragging, `.rigid` instead when crossing in or out of OFF.
-- **Audio session:** `.playback`, no options, activated just before the needle leaves OFF
-  (the engine starts inside `setNeedle`) and on resume. **Never deactivated after OFF**
-  (the off-fade is still running when OFF is reached, and the engine stops later on the
-  render thread) — other apps' audio is not told it may resume. Fine for now.
-- **Route loss** (`.oldDeviceUnavailable`): `RadioEngine.routeLost()` — a 0.05 s
-  raised-cosine fade to silence (iOS has already moved a running engine to the speaker),
-  then paused; `play()` (lock screen, or turning the wheel) brings it back. During the
-  off-fade it only hurries the fade; the session ends as usual. The route-change
-  observer runs with `queue: nil` and calls `routeLost()` on the posting thread (it takes
-  only the control mutex); controller state hops to main. **Engine configuration change**
-  (`AVAudioEngineConfigurationChange`, `object: nil` — the app has one engine): if the
-  output is now `.builtInSpeaker` and the last known output (tracked from route changes)
-  was not, it is a lost route too (whichever notification arrives first); then
-  `restartAfterConfigurationChange()` starts the stopped engine from master phase 0 — a
-  2 s fade in if playing, silent if paused. Tests: `routeLostIsSilentWithinAFewHundredthsAndStaysPaused`,
-  `routeLostDuringTheOffFadeHurriesIt`, `pausedRestartAfterConfigurationChangeStaysSilent`,
-  `restartAfterConfigurationChangeFadesBackIn`, `restartAfterConfigurationChangeIsANoOpWhenOff`.
-  Up to ~0.05 s plus the notification delay can still reach the speaker. Untested on a device.
-- **While the engine is stopped by a configuration change** (between the stop and the
-  restart) the drift clock does not advance: `nowSecond` counts output frames, and the
-  render thread idles on full rings. The night simply resumes where it was.
-- **The wheel resumes a paused radio:** the dial is the only control, so a drag that starts
-  while paused (lost route, interruption, lock screen) calls `resume()` (session, engine
-  restart if stopped, `play()`).
-- **The needle lives in an app-owned `DialModel`** (`EsotericaApp.swift`), not view state,
-  so a scene reconnect (unlocking) redraws the dial where the radio is.
-- **Interruptions:** began → pause; ended with `.shouldResume` → restart + play, but only
-  if the interruption is what paused it (a listener's own pause is kept).
-- **Lock screen:** play / pause / toggle → `play()` / `pause()` (play also restarts a stopped
-  engine); the commands are disabled while the radio is off. Title = `Dial.nowPlayingTitle`: the loudest station when its gain > 0.5, else
-  "DM static"; nothing (and `.stopped`) when off. Artist "Esoterica DM Radio", live stream.
-- **Not verified:** sound on a device, haptics, lock-screen controls, real route changes —
-  only the simulator build, launch and the OFF screenshot.
-
-**Placeholders (tune by hand):** `DialView.travelPerWheelWidth` 0.5 *(brief)*,
-`touchPoints` 3 pt *(controller)*, `snapSeconds` 0.35; `RadioEngine.routeLossFadeSeconds` 0.05 *(controller)*; `Dial.titleGain` 0.5
-*(controller)*; wheel ridge spacing 9 pt; remembered-tick opacity 0.18; print colour
-(0.86, 0.70, 0.48) at 0.5–0.6 opacity; needle (0.95, 0.42, 0.22); restart fade = `onFadeSeconds` 2.0.
