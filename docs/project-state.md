@@ -57,7 +57,7 @@ thunder, a glassy stream, crickets, a fire), chosen per night and mixed under th
 same master fade, ignoring the dial. Spec: `docs/superpowers/specs/2026-11-04-window-weather-design.md`.
 Plan: `docs/superpowers/plans/2026-11-04-window-weather-10.md`.
 
-Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain), Task 3 (stream and crickets) and Task 4 (thunder and the fire) are built. Placeholders so far:
+Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain), Task 3 (stream and crickets) and Task 4 (thunder and the fire) and Task 5 (the window chain) are built. Placeholders so far:
 
 | Name | Value | File | Why |
 |---|---|---|---|
@@ -92,6 +92,12 @@ Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain), Task 3 (str
 | `FireSound` pop values | a pop every 10-60 s at full rate (35 s cells, start 0-25 s in); 20-50 ms Hann (attack 10-25 ms); band 150-900 Hz; level 0.6-1.0; `popGain` 0.35 (seed 1, 10 min: peak 0.18 with pops vs 0.08 crackle alone) | `NightDSP/Window/FireSound.swift` | Plan range; the rest is Claude's guess: pops are lower and longer than the crackle so they are felt, never sharp. |
 | `FireSound` stream numbers | 100-103 and 114 seed-level and noise, 104-107 per crackle cell, 109-112 per pop cell (NightRandom) | `NightDSP/Window/FireSound.swift` | Invented; kept out of 60-64. |
 | R1: fire "peak <= 2 x 99th-percentile \|x\|" | replaced by: peak under 1.5 x `crackleGain`, and 10 ms-RMS-window peak over p99 <= 2 (crackle alone 1.5-1.7; with pops 5.5) | `Tests/NightDSPTests/WindowSoundTests.swift` | Controller ruling R1: sparse Hann bursts put the 99th percentile of \|x\| at about a third of a burst's peak whatever the signal holds, so the plan statistic cannot be met by a felted crackle. The replacement discriminates (it fails with pops on). Likewise the pop step bound is checked on the envelopes alone (at most 0.005), since band-limited noise steps as far as a hard edge. |
+| `WindowChain.windowGainDB` | -17 dB (whole window, before per-night trim); rain, rainThunder, cricketsStream and fire land 8.0-9.3 dB under a station (rainThunder 6.7 on a seed whose first minute holds a roll), 60 s, mono sum, seeds 7 and 12 | `NightRadio/WindowChain.swift` | Plan: about 8 dB under a station (test window 6-10). Measured on the rain night: unit-gain rain is as loud as a station. Tune by ear. |
+| `WindowChain.nightTrimDB` | rain 0, rainThunder 0, cricketsStream +6.1 dB, fire +16.6 dB | `NightRadio/WindowChain.swift` | Raw levels differ (crickets+stream 5.6 dB and the fire 16.1 dB below rain), so each night gets a static trim to land in the window. rainThunder is untrimmed so its rain equals a rain night's bit for bit. |
+| `WindowChain` treatment | lowpass 5 kHz (one biquad per channel) + `Reverb` (decay 0.4 s, wet 0.2) on the window bus; the fire bypasses both | `NightRadio/WindowChain.swift` | Plan values (lowpass ~5 kHz, wet ~0.2); the 0.4 s decay is Claude's guess for a small room. |
+| `WindowChain.width` / `fireWidth` | 0.6 / 0.3 (`L' = aL + bR`, `R' = aR + bL`, a = cos(phi), b = sin(phi), phi = asin(1 - w)/2: power kept, L/R correlation 1 - w) | `NightRadio/WindowChain.swift` | Plan values; the formula is Claude's. Measured rain-night L/R correlation 0.40 after the reverb. |
+| `WindowChain` seeds | sound seeds `hash(seed, 60 + k, side)`, k = rain 0, stream 1, crickets 2, thunder 3, fire 4; reverb seeds on stream 65 | `NightRadio/WindowChain.swift` | Plan: fixed by kind, so the same seed's rain is identical across nights. |
+| R1: `windowSitsUnderAStation` | tested on seeds 7 and 12 and on all four nights (plan: three nights); `rainThunderSoundsThunderWithin30Minutes` became `...Early` (5 min: a roll is certain in the first 6 min at full rate) | `Tests/NightRadioTests/WindowChainTests.swift` | Stricter coverage; the 30-minute thunder-present check only slowed the debug build. `suddenSilentDeepInNight` still runs 30 min at 5 h. |
 
 ## Plan 9: Esoterica DM Radio (2026-11-03, merged to `main` 2026-11-04)
 
