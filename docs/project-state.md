@@ -57,7 +57,7 @@ thunder, a glassy stream, crickets, a fire), chosen per night and mixed under th
 same master fade, ignoring the dial. Spec: `docs/superpowers/specs/2026-11-04-window-weather-design.md`.
 Plan: `docs/superpowers/plans/2026-11-04-window-weather-10.md`.
 
-Task 1 (the rules, `NightPlan/Weather.swift`) and Task 2 (felted rain) are built. Placeholders so far:
+Task 1 (the rules, `NightPlan/Weather.swift`), Task 2 (felted rain) and Task 3 (stream and crickets) are built. Placeholders so far:
 
 | Name | Value | File | Why |
 |---|---|---|---|
@@ -77,6 +77,13 @@ Task 1 (the rules, `NightPlan/Weather.swift`) and Task 2 (felted rain) are built
 | `RainSound.dropGain` / `washGain` | 0.07 / 0.2 (seed 3, 60 s: RMS 0.049 = -26.2 dBFS, peak 0.28, crest 5.80) | `NightDSP/Window/RainSound.swift` | Claude's guess; the window gain is set later (WindowChain). Crest sits close to the plan's 6 limit. |
 | `RainSound.washSoftClip` | 0.55 (tanh rounding of the wash at about 2.5 sigma) | `NightDSP/Window/RainSound.swift` | Claude's guess; keeps rare noise peaks soft so crest stays under 6. |
 | `RainSound` stream numbers | 0-4 seed-level, 6-11 per cell (5 unused) (NightRandom) | `NightDSP/Window/RainSound.swift` | Invented; keeps rain's draws independent of each other. |
+| `StreamSound` plan values | bubbles rising inside 400-1500 Hz, 20-60 ms Hann (attack 10-30 ms); pixellation hold 11025 Hz, 9 bits | `NightDSP/Window/StreamSound.swift` | Plan values; the glassy brook beyond the window. |
+| `StreamSound` bubble/bed values | cell 50 ms with 25% chance (about 5 bubbles/s); start 400-1000 Hz log-uniform, end 1.3-1.5x start capped 1500; level 0.4-1.0; `bubbleGain` 0.065; bed = noise, 250 Hz highpass + 1800 Hz lowpass, `bedGain` 0.16, tanh at 0.55; output lowpass 5 kHz (seed 3, 60 s: RMS 0.0247, peak 0.13, step 0.032) | `NightDSP/Window/StreamSound.swift` | Claude's guess; soft and glassy, a little under the rain's level. Tune by ear; window gain set later (WindowChain). |
+| `StreamSound` stream numbers | 0 bed, 1-6 per cell (NightRandom) | `NightDSP/Window/StreamSound.swift` | Invented; the plan's 60-64 reservation is for window sound seeds, not these streams. |
+| `CricketsSound` plan values | carrier ~4.5 kHz, 3 pulses per train, a train every 0.5-1.5 s, pauses 5-20 s | `NightDSP/Window/CricketsSound.swift` | Plan values. Gaps come from a 1 s cell grid with the train offset in 0.25-0.75 s. |
+| `CricketsSound` pulse/pause values | pulse 40 ms Hann, spacing 80 ms; carrier +/-3% per train; level 0.6-1.0; one pause per 45 s cycle (starts at least 5 s in, so spells last at least 10 s); pixellation hold 11025 Hz, 8 bits, 5.2 kHz lowpass | `NightDSP/Window/CricketsSound.swift` | Claude's guess; the cycle grid keeps pauses seekable. Pauses are 5-20 s silent stretches, a little longer in effect because trains stop before them. |
+| `CricketsSound.gain` | 0.18 (seed 1, 120 s: RMS 0.0124, 12.1 dB under rain, peak 0.157) | `NightDSP/Window/CricketsSound.swift` | Chosen so crickets sit 12 dB under rain. Pulse amplitude is thus about 0.18, so the plan's "largest step <= 0.05" is not met (steps reach 0.11, a bare 4.5 kHz sine's own slope); replaced with a carrier-relative bound plus an envelope check (R1). |
+| `CricketsSound` stream numbers | 80-84 per cell/cycle (NightRandom) | `NightDSP/Window/CricketsSound.swift` | Invented; kept out of 60-64 (reserved for window sound seeds). |
 
 ## Plan 9: Esoterica DM Radio (2026-11-03, merged to `main` 2026-11-04)
 
