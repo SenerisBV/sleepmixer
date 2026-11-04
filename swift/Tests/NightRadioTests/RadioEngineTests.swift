@@ -496,6 +496,50 @@ private let staticOnly = 0.40
         #expect(abs(data[n - 1] - 0.2) < 1e-6, "\(data[n - 1])")
     }
 
+    /// The window's two rings are one unit in the callback: when the render thread has written the left
+    /// block but not yet the right (the two writes are separate), neither side starts, and from then on
+    /// left and right read the same ring frame, sample for sample. A centred sound (thunder, the fire)
+    /// would otherwise sit a few ms to one side all night.
+    @Test func windowSidesStayAligned() {
+        let rings = (0..<6).map { _ in SPSCRing(capacity: 16384) }
+        let mixer = Mixer(rings: rings, sampleRate: sr, maxChunk: 512)
+        mixer.publish(stations: [0, 0, 0], staticGain: 0)
+        mixer.prepareFresh()
+        mixer.setMaster(up: true, seconds: 1e-9)
+        // Left ring frame f holds ramp(f), right ring frame f holds -ramp(f).
+        func ramp(_ f: Int) -> Float { 0.01 + 0.3 * Float(f % 997) / 997 }
+        var written = [0, 0]
+        func write(_ side: Int, _ count: Int) {
+            let src = (written[side]..<(written[side] + count)).map { side == 0 ? ramp($0) : -ramp($0) }
+            _ = src.withUnsafeBufferPointer { rings[4 + side].write($0) }
+            written[side] += count
+        }
+        let n = 512
+        let l = UnsafeMutablePointer<Float>.allocate(capacity: n), r = UnsafeMutablePointer<Float>.allocate(capacity: n)
+        defer { l.deallocate(); r.deallocate() }
+        let abl = AudioBufferList.allocate(maximumBuffers: 2)
+        defer { free(abl.unsafeMutablePointer) }
+        abl[0] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(n * 4), mData: l)
+        abl[1] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(n * 4), mData: r)
+        var left = [Float](), right = [Float]()
+        func render() {
+            mixer.render(frameCount: n, into: abl.unsafeMutablePointer)
+            left.append(contentsOf: UnsafeBufferPointer(start: l, count: n))
+            right.append(contentsOf: UnsafeBufferPointer(start: r, count: n))
+        }
+        write(0, 2048)          // the left block is in, the right not yet
+        render()
+        write(1, 2048)
+        for _ in 0..<3 { render() }
+        write(0, 4096); write(1, 4096)
+        for _ in 0..<8 { render() }   // runs both rings dry: the draining edge too
+        #expect(left.contains { $0 != 0 }, "the window played")
+        for j in left.indices where right[j] != -left[j] {
+            Issue.record("frame \(j): left \(left[j]), right \(right[j])")
+            break
+        }
+    }
+
     @Test func tuningCrossfadesSmoothly() throws {
         // Ring i holds the constant i + 1 (stations 1, 2, 3, static 4) scaled down; a jump of the
         // needle from static to Lantern must glide (30 ms one-pole), not step.

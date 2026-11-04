@@ -571,10 +571,14 @@ final class Mixer: @unchecked Sendable {
             }
             smoothed[i] = g
         }
-        // The window: gain 1, so its rings go straight in (the underrun fades still apply).
-        readRing(Self.windowLeftRing, n)
+        // The window: gain 1, so its rings go straight in (the underrun fades still apply). The two
+        // rings are one unit: both decide from the smaller `available`, read once, so a left block
+        // written a moment before its right one never starts (or drains) one side a chunk early and
+        // leaves the two offset for the rest of the night. Both rings hold at least this much.
+        let pair = min(rings[Self.windowLeftRing].available, rings[Self.windowRightRing].available)
+        readRing(Self.windowLeftRing, n, available: pair)
         windowL.update(from: scratch, count: n)
-        readRing(Self.windowRightRing, n)
+        readRing(Self.windowRightRing, n, available: pair)
         windowR.update(from: scratch, count: n)
         let up = masterUp.load(ordering: .acquiring)
         let step = Float(bitPattern: masterStepBits.load(ordering: .relaxed))
@@ -599,11 +603,13 @@ final class Mixer: @unchecked Sendable {
     }
 
     /// Ring `i`'s next `n` frames into `scratch`, with the underrun fades; zeros where it has none.
-    private func readRing(_ i: Int, _ n: Int) {
+    /// `available`, when given, stands in for the ring's own count in every decision (the window's
+    /// pair passes their common minimum); it must not exceed what the ring holds.
+    private func readRing(_ i: Int, _ n: Int, available given: Int? = nil) {
         let ring = rings[i]
         let R = fadeFrames
         if !playing[i] {
-            guard ring.available >= n + R else {
+            guard (given ?? ring.available) >= n + R else {
                 for j in 0..<n { scratch[j] = 0 }
                 return
             }
@@ -614,7 +620,7 @@ final class Mixer: @unchecked Sendable {
         }
         // Playing. If this block would leave less than R frames in hand, the ring is running dry:
         // play what is left, fading the last R real frames out (the invariant keeps >= R in hand).
-        let a = ring.available
+        let a = given ?? ring.available
         if fadeOutLeft[i] == 0 && untilFadeOut[i] == 0 && a < n + R {
             let tail = min(R, a)
             untilFadeOut[i] = a - tail
