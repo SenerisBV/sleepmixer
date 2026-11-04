@@ -29,7 +29,7 @@ public struct WindowChain {
     /// Per-night trims in dB, so every night lands about 8 dB under a station. Raw levels differ:
     /// crickets+stream measure 5.6 dB and the fire 16.1 dB quieter than rain. rainThunder has no
     /// trim, so its rain is bit-identical to a rain night's; a thunder roll lifts it 1-2 dB.
-    static let nightTrimDB: [WindowNight: Double] = [.rain: 0, .rainThunder: 0, .cricketsStream: 6.1, .fire: 14.6]
+    static let nightTrimDB: [WindowNight: Double] = [.rain: 0, .rainThunder: 0, .cricketsStream: 6.1, .fire: 14.4]
     /// Thunder's own trim in dB (R4): a single centred roll adds coherently in both channels, and at
     /// unit trim its loudest 10 ms came within ~1 dB of the station's; this keeps it 3+ dB under.
     static let thunderTrimDB = -6.0

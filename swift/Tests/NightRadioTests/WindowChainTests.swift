@@ -144,17 +144,7 @@ private func stationSeries(seed: UInt64, seconds: Double) -> [Float] {
             let worst = max(peak10ms(o.l), peak10ms(o.r))
             let under = 20 * log10(station / worst)
             print("noNightPeaksAboveAStation: seed \(seed) \(night) highest 10 ms RMS \(worst), station \(station): \(under) dB under")
-            if night == .fire {
-                // OPEN CONFLICT (see task-5-report.md, fix round 1): the fire's pops must stay audible
-                // (WindowSoundTests needs popGain >= ~0.22) yet 3 dB under the station's loudest 10 ms
-                // needs the fire ~16 dB under the station, outside windowSitsUnderAStation's 6-10 dB.
-                // Recorded as a known issue, not weakened; remove the wrapper once the controller rules.
-                withKnownIssue("fire pops vs the 3 dB peak rule", isIntermittent: false) {
-                    #expect(under >= 3, "\(night) seed \(seed): \(under) dB under")
-                }
-            } else {
-                #expect(under >= 3, "\(night) seed \(seed): \(under) dB under")
-            }
+            #expect(under >= 3, "\(night) seed \(seed): \(under) dB under")
         }
     }
 }

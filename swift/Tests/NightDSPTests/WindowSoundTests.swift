@@ -357,9 +357,12 @@ private func windowLevelsDB(_ x: [Float], window: Int, count: Int) -> [Double] {
             return w.last! / w[Int(Double(w.count) * 0.99)]
         }
         #expect(windowPeakOverP99(x) <= 2)
-        // ...and it does discriminate: with the pops on, the same ratio is far above 2.
-        let withPops = render({ FireSound(seed: 3, sampleRate: 44100, startSecond: 0, sudden: full) }, seconds: 600)
-        #expect(windowPeakOverP99(withPops) > 3)
+        // ...and it does discriminate. R5: the earlier "with pops ratio > 3" was this suite's own
+        // addition and fought the window's loudest-10-ms rule (a pop loud enough for ratio 3 is
+        // startling beside the station, and a 1.25 x crackle-only ratio can not hold with the
+        // station-peak rule either: that needs the pops' loudest 10 ms under 1.19 x the crackle's).
+        // Pops must still be present; firePopsAreSoft counts them positively (render with pops minus
+        // render without), which is a stricter check than any ratio the crackle can mask.
     }
 
     @Test func firePopsAreSoft() {
@@ -369,11 +372,30 @@ private func windowLevelsDB(_ x: [Float], window: Int, count: Int) -> [Double] {
             #expect(maxStep(x) <= 0.1)
             #expect(x.map { abs($0) }.max()! <= 0.9)
         }
-        // Pops really exist: at full rate the loudest sample exceeds the crackle-only loudest.
+        // Pops really exist: at full rate the loudest 10 ms is louder than the crackle-only loudest.
+        // R5 (replaces "loudest sample > 1.5 x the crackle-only loudest sample"): that bound forced
+        // pops so loud that the fire's loudest 10 ms came 2-3 dB over the station's, which the window
+        // forbids (noNightPeaksAboveAStation). The same intent, "pops stand out", is held on 10 ms
+        // RMS: the pops' loudest 10 ms is above the crackle-only loudest 10 ms, and a pop-free fire
+        // is positively told apart below (the envelope hook).
         let off = Curve.constant(Sudden(rateScale: 0, gainDB: 0))
         let withPops = render({ FireSound(seed: 1, sampleRate: 44100, startSecond: 0, sudden: full) }, seconds: 600)
         let without = render({ FireSound(seed: 1, sampleRate: 44100, startSecond: 0, sudden: off) }, seconds: 600)
-        #expect(withPops.map { abs($0) }.max()! > 1.5 * without.map { abs($0) }.max()!)
+        func loudest10ms(_ y: [Float]) -> Double {
+            var best = 0.0, i = 0
+            while i + 441 <= y.count { best = max(best, rms(y[i..<(i + 441)])); i += 220 }
+            return best
+        }
+        #expect(loudest10ms(withPops) > 1.05 * loudest10ms(without))
+        // Positive pop presence: pops use their own noise stream, so the render with pops minus the
+        // render without them is exactly the pops. It is silent between pops and clearly not zero.
+        // And at rateScale 0 there are none: the gain of the (absent) pops cannot change anything.
+        let offQuiet = Curve.constant(Sudden(rateScale: 0, gainDB: -30))
+        let withoutQuiet = render({ FireSound(seed: 1, sampleRate: 44100, startSecond: 0, sudden: offQuiet) }, seconds: 600)
+        #expect(withoutQuiet == without)
+        let pops = zip(withPops, without).map { $0 - $1 }
+        #expect(loudest10ms(pops) > 0.5 * loudest10ms(without))
+        #expect(pops.filter { $0 != 0 }.count > Int(0.3 * sr))   // 600 s: 10+ pops of 20-50 ms
         // The attacks on their own (R1: the plan's step bound on the audio is a level test, as a
         // band-limited noise steps about as far as a hard edge would). With the noise replaced by a
         // constant only the burst and pop envelopes remain; a hard attack steps by a burst's whole

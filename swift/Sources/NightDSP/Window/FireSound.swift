@@ -41,8 +41,9 @@ public struct FireSound: SoundSource {
     static let popLengthRange = 0.020...0.050    // seconds; attack 10-25 ms
     static let popBand = 150.0...900.0           // Hz
     static let popLevelRange = 0.6...1.0
-    static let popGain = 0.22
-    static let popNorm = 6.0
+    static let popGain = 0.14
+    static let popNorm = 2.0
+    static let popSoftClip = 1.5                 // pops are only gently rounded, so their peaks stand clear of their 10 ms RMS (R5)
     // NightRandom streams: 100-101 noise, 102-103 seed-level wander, 104-108 per crackle cell,
     // 109-113 per pop cell.
     static let crackleNoiseStream: UInt64 = 100
@@ -174,7 +175,7 @@ public struct FireSound: SoundSource {
             let p = Double(popBand2.process(popBand1.process(pn))) * FireSound.popNorm
             let bn = Float(NightRandom.signed(seed, FireSound.bedNoiseStream, UInt64(f)))
             let b = Double(bed.process(bn)) * FireSound.bedNorm
-            var x = FireSound.hann(pop, at: f) * (envelopeOnly ? 1 : clip * tanh(p / clip))
+            var x = FireSound.hann(pop, at: f) * (envelopeOnly ? 1 : FireSound.popSoftClip * tanh(p / FireSound.popSoftClip))
             var env = 0.0
             for k in 0..<FireSound.slotCount { env += FireSound.hann(slots[k], at: f) }
             if envelopeOnly {
