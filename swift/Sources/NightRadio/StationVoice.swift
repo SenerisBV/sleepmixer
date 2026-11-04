@@ -14,7 +14,12 @@ import NightPlan
 ///   Without that, a segment would enter mid-word and lose up to a second whenever the gap is not a
 ///   whole number of seconds, which is nearly always once drift > 0.
 /// - The first segment at switch-on is already under way (the program starts mid-segment). It is
-///   seeked to `now − start` and faded in over `fadeInSeconds`, so it never enters at full level.
+///   seeked to `now − start`.
+/// Every segment start, whichever of the three, fades in over `segmentOnsetFadeSeconds` (a raised
+/// cosine), so nothing enters at full level after a gap. Cuts sit at pause midpoints with at least
+/// 125 ms of room tone before the speech, so the fade lands on room tone, not on a word (at 125 ms it
+/// is at 93%). At switch-on it also covers the seek into the middle of a word, under the 2 s master
+/// fade-in.
 /// When a new segment replaces a clip that is still sounding (a clip longer than its scheduled
 /// seconds), the old one fades out over `fadeOutSeconds`. Nothing starts or stops on a click.
 ///
@@ -25,7 +30,7 @@ import NightPlan
 public struct StationVoice: SoundSource {
     public static let preloadSeconds = 5.0
     /// Placeholders (docs/project-state.md, "Plan 9").
-    public static let fadeInSeconds = 0.03
+    public static let segmentOnsetFadeSeconds = 0.15
     public static let fadeOutSeconds = 0.05
     static let initialCapacity = 4096
 
@@ -46,9 +51,8 @@ public struct StationVoice: SoundSource {
     private var source: FileSource?
     /// Frames of the current block before the source begins (a segment starting mid-block).
     private var sourceDelay = 0
-    /// Frames of the switch-on fade-in still to apply (counts up to `fadeInFrames`).
+    /// Frames of the onset fade already applied (counts up to `fadeInFrames`).
     private var fadeInDone = 0
-    private var fadeInActive = false
     /// When the playing source has nothing left to say (max of the segment end and the clip end).
     private var sourceEnd = 0.0
     private var outgoing: FileSource?
@@ -70,7 +74,7 @@ public struct StationVoice: SoundSource {
         self.loader = loader
         self.level = level
         self.sampleRate = sampleRate
-        fadeInFrames = max(1, Int((Self.fadeInSeconds * sampleRate).rounded()))
+        fadeInFrames = max(1, Int((Self.segmentOnsetFadeSeconds * sampleRate).rounded()))
         fadeOutFrames = max(1, Int((Self.fadeOutSeconds * sampleRate).rounded()))
         program = StationProgram(segmentSeconds: bundle.segmentSeconds, seed: programSeed, level: level)
         let warp = Curve<WarpDepth> { WarpDepth(distance: Drift.voiceDistance(level($0))) }
@@ -117,7 +121,6 @@ public struct StationVoice: SoundSource {
         source = FileSource(samples: clip.samples, fileSampleRate: clip.sampleRate,
                             sampleRate: sampleRate, startSecond: offset)
         sourceDelay = delay
-        fadeInActive = offset > 0
         fadeInDone = 0
         let clipStart = Double(frame + delay) / sampleRate - offset
         sourceEnd = max(seg.end, clipStart + Double(clip.samples.count) / clip.sampleRate)
@@ -150,7 +153,7 @@ public struct StationVoice: SoundSource {
             let d = sourceDelay
             let n = count - d
             source!.render(into: &scratch, count: n)
-            if fadeInActive {
+            if fadeInDone < fadeInFrames {
                 let f = Double(fadeInFrames)
                 for i in 0..<n {
                     let k = fadeInDone + i
@@ -158,7 +161,6 @@ public struct StationVoice: SoundSource {
                     scratch[i] *= Float(0.5 * (1 - cos(Double.pi * Double(k) / f)))
                 }
                 fadeInDone += n
-                if fadeInDone >= fadeInFrames { fadeInActive = false }
             }
             for i in 0..<n { out[d + i] += scratch[i] }
             sourceDelay = 0

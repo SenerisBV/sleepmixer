@@ -109,3 +109,27 @@ private func rms(_ x: ArraySlice<Float>) -> Double {
     }
     #expect(worst < 0.15 * amp, "largest step \(worst / amp) of full at \(Double(at) / sr) s")
 }
+
+/// Every segment start fades in over `segmentOnsetFadeSeconds` (raised cosine), not just FileSource's
+/// 5 ms: flat (non-ramped) files at drift free 0.05, so every later segment is revealed after a gap.
+@Test func everySegmentStartFadesIn() throws {
+    let level = DriftLevel(free: 0.05, ratchet: 0)
+    let b = try bundle(files: 3, seconds: 3) { _ in tone(seconds: 3, ramp: false) }
+    let seed = firstSeed(segments: [3, 3, 3], level: level) { $0.index == 0 }
+    var v = StationVoice(bundle: b, programSeed: seed, distanceSeed: 1, level: { _ in level },
+                         sampleRate: sr, loader: { try? VoiceClip.load(url: $0) })
+    let out = render(&v, seconds: 30)
+    var onsets = [Int](), quiet = 0
+    for (i, x) in out.enumerated() {
+        if abs(x) < 1e-6 { quiet += 1; continue }
+        if quiet >= Int(sr) { onsets.append(i) }
+        quiet = 0
+    }
+    #expect(!onsets.isEmpty)
+    for o in onsets {
+        let firstTen = Double(out[o..<(o + Int(0.010 * sr))].map { abs($0) }.max()!)
+        #expect(firstTen < 0.05 * amp, "onset at \(Double(o) / sr) s: first 10 ms peak \(firstTen / amp) of full")
+        let settled = rms(out[(o + Int(0.2 * sr))..<(o + Int(0.3 * sr))])
+        #expect(settled > 0.4 * amp, "onset at \(Double(o) / sr) s: RMS at 0.2-0.3 s \(settled / amp)")
+    }
+}
