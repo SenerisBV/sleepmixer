@@ -50,6 +50,24 @@ until they've thought about how; the voice layer is built so it can grow into it
 Below Plan 8a come the Plan 7a and 7b sections (the Swift engine); after them,
 the Python engine and the web mixer as built through Plan 5, Phase 3.
 
+## Plan 10: the window (2026-11-04, branch `feat/window-weather`)
+
+Weather outside the radio: a stereo "window" layer (felted rain, pixellated
+thunder, a glassy stream, crickets, a fire), chosen per night and mixed under the
+same master fade, ignoring the dial. Spec: `docs/superpowers/specs/2026-11-04-window-weather-design.md`.
+Plan: `docs/superpowers/plans/2026-11-04-window-weather-10.md`.
+
+Task 1 (the rules, `NightPlan/Weather.swift`) is built. Placeholders so far:
+
+| Name | Value | File | Why |
+|---|---|---|---|
+| `Weather.silentRatchet` | 0.6 (sudden sounds are gone when the drift's ratchet reaches 0.6, about 4 h in) | `NightPlan/Weather.swift` | Claude's guess; sudden sounds should be gone well before the deepest drift. Tune by ear. |
+| `Weather.suddenFloorDB` | -18 dB (sudden-sound gain just before silence) | `NightPlan/Weather.swift` | Claude's guess; recedes thunder and pops smoothly rather than cutting. |
+| Night weight: rain | 0.30 | `NightPlan/Weather.swift` | Claude's guess; felted rain is the most restful default. |
+| Night weight: rainThunder | 0.25 | `NightPlan/Weather.swift` | Claude's guess; thunder as a common but not dominant night. |
+| Night weight: cricketsStream | 0.25 | `NightPlan/Weather.swift` | Claude's guess; the quietest sounds, even split with thunder. |
+| Night weight: fire | 0.20 | `NightPlan/Weather.swift` | Claude's guess; the fire's pops make it the least steady, so the rarest. |
+
 ## Plan 9: Esoterica DM Radio (2026-11-03, merged to `main` 2026-11-04)
 
 **Status: on the operator's phone, and loved.** First listen (2026-11-04): "Holy
