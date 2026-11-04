@@ -50,10 +50,27 @@ until they've thought about how; the voice layer is built so it can grow into it
 Below Plan 8a come the Plan 7a and 7b sections (the Swift engine); after them,
 the Python engine and the web mixer as built through Plan 5, Phase 3.
 
-## Plan 9: Esoterica DM Radio (2026-11-03, branch `feat/radio-dial`)
+## Plan 9: Esoterica DM Radio (2026-11-03, merged to `main` 2026-11-04)
 
-**Status: built, awaiting the operator's first night.** Nothing in it has been
-heard on a device. The Swift package tests, the Python tests and a Release
+**Status: on the operator's phone, and loved.** First listen (2026-11-04): "Holy
+cow this sounds and feels fantastic. I love it." Merged to `main` by fast-forward
+(887 Python, 193 Swift tests passing on `main`); not yet pushed. The operator's
+next direction: "we're just going to add more content and build out the sound
+library." The tweaks they asked for, for later (not built):
+
+- **Stations become numbers or symbols** instead of titles on the dial ("the
+  stations should later be numbers or symbols"). Today `Dial` derives a title
+  and `DialView` prints it.
+- **A power button**, separate from the dial. Their reasons: "the dial will get
+  long, the audio plays when the app is closed, and the off button is all the
+  way on the right." Today OFF is the dial's right-hand end (Plan 9 rule: off is
+  part of the dial, you turn out of it to switch on). With more stations, getting
+  to OFF means a long scroll; with the app closed the lock-screen play/pause is
+  the only control. Open design question for then: whether the dial keeps an OFF
+  end at all once a button exists, and whether the button switches off with the
+  same 1.5 s fade (it should, to keep the night soft).
+
+The text below records the state at build time (before the first listen). The Swift package tests, the Python tests and a Release
 device-target build (`cd ios && xcodegen && xcodebuild -scheme Esoterica
 -destination 'generic/platform=iOS' -configuration Release CODE_SIGNING_ALLOWED=NO
 build` → BUILD SUCCEEDED, 2026-11-04) pass; the operator installs from Xcode
