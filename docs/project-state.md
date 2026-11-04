@@ -53,9 +53,13 @@ the Python engine and the web mixer as built through Plan 5, Phase 3.
 ## Plan 9: Esoterica DM Radio (2026-11-03, branch `feat/radio-dial`)
 
 **Status: built, awaiting the operator's first night.** Nothing in it has been
-heard on a device. The Swift package tests, the Python tests and a device-target
-build (`xcodebuild ... generic/platform=iOS CODE_SIGNING_ALLOWED=NO`) pass; the
-operator installs from Xcode themselves (`ios/README.md`). Design:
+heard on a device. The Swift package tests, the Python tests and a Release
+device-target build (`cd ios && xcodegen && xcodebuild -scheme Esoterica
+-destination 'generic/platform=iOS' -configuration Release CODE_SIGNING_ALLOWED=NO
+build` → BUILD SUCCEEDED, 2026-11-04) pass; the operator installs from Xcode
+themselves (`ios/README.md`). **The scheme runs and profiles in Release**
+(`project.yml`, final review fix): in Debug the SwiftPM targets compile `-Onone` and
+render at about 0.6× real time on the Mac, so the phone would underrun all night. Design:
 `docs/superpowers/specs/2026-11-03-radio-dial-design.md`.
 
 **What this is, in the operator's words.** "I don't want to listen anymore - I
@@ -133,7 +137,7 @@ will be slower; the 1.5 s of render-ahead is the headroom.
 | Render-ahead | `renderAheadFrames` 66150 (1.5 s target), `blockFrames` 2048, `ringCapacity` 88200 | `NightRadio/RadioEngine.swift` |
 | Segment export | 22050 Hz, 16-bit PCM mono WAV | `sleepmix/esoterica/segments.py` |
 | Cut placeholders | `CUT_MIN_PAUSE_S` 0.25, `CUT_WINDOW` ±20%, `CUT_DISTANCE_PENALTY` 0.02; `BUNDLE_MIN_S` 20, `BUNDLE_MAX_S` 150 | `segments.py`, `cli.py` |
-| Smaller engine and app values | in the per-component lists below: `StationVoice.preloadSeconds` 5, `fadeInSeconds` 0.03, `fadeOutSeconds` 0.05; `Mixer.gainSmoothingSeconds` 0.03, `underrunFadeSeconds` 0.005; `RenderThread.idleSleepSeconds` 0.005; `manualChunkFrames` 4096; `RadioEngine.routeLossFadeSeconds` 0.05; `DialView.travelPerWheelWidth` 0.5, `touchPoints` 3, `snapSeconds` 0.35 and the colours | `NightRadio/*`, `ios/Esoterica/*` |
+| Smaller engine and app values | in the per-component lists below: `StationVoice.preloadSeconds` 5, `segmentOnsetFadeSeconds` 0.15, `fadeOutSeconds` 0.05; `Mixer.gainSmoothingSeconds` 0.03, `underrunFadeSeconds` 0.005; `RenderThread.idleSleepSeconds` 0.005; `manualChunkFrames` 4096; `RadioEngine.routeLossFadeSeconds` 0.05; `DialView.travelPerWheelWidth` 0.5, `touchPoints` 3, `snapSeconds` 0.35 and the colours | `NightRadio/*`, `ios/Esoterica/*` |
 
 Also a judgement, not a number: the three launch stations are the-lantern-accords,
 backward-lesson-one and the-orchard-light (Claude's reading of "the language one"
@@ -171,9 +175,10 @@ Not heard on a device. Everything below is a known gap, not a surprise.
   O(n²).
 
 *The engine*
-- Pause/play during the teardown window is dropped; a deferred `engine.start`
-  runs under the control Mutex on the render thread; the threaded teardown and
-  deferred restart are not under test (only manual rendering is); the ring reset
+- Pause/play during the teardown window is dropped; the threaded teardown and
+  deferred restart are not under test (`concurrentControlCallsNeverHang` hammers the
+  control calls from six threads in manual mode, but cannot reproduce the old
+  notification-thread deadlock, which needs a real route change) (only manual rendering is); the ring reset
   assumes `engine.stop()` is synchronous; the real-`Renderer` tests are
   random-seeded and slow.
 - `StationVoice` handover is not equal-power; the outgoing fade starts at the
@@ -182,6 +187,10 @@ Not heard on a device. Everything below is a known gap, not a surprise.
   session instead of starting a fresh night (a flick through OFF is not turning
   the radio off; a wheel touch resets the drift anyway).
 - The real-time-safety hazards of Plan 7a/7b are deferred (see the ruling above).
+- The render thread idle-polls every 5 ms (`RenderThread.idleSleepSeconds`) instead
+  of waiting on a signal: cheap, but it never fully sleeps while on.
+- `Mixer` hard-codes four rings (three stations + static: `gain0`…`gain3`, a
+  precondition): adding a station needs Mixer changes, not just a recording.
 
 *The app*
 - Not verified on a device: sound, haptics, lock-screen controls, real route
@@ -193,6 +202,15 @@ Not heard on a device. Everything below is a known gap, not a surprise.
   delay can still reach the speaker on route loss.
 - The audio session is never deactivated after OFF, so other apps' audio is not
   told it may resume.
+- The static sits about 10 dB below the stations: a guess, tune by ear.
+- The snap on release moves the engine's gains in 30 ms (the one-pole gain
+  smoothing), while only the drawn needle animates over 0.35 s.
+- A wheel brush after a route loss resumes, on whatever output is current (the
+  phone speaker if the headphones are gone). A conscious choice: the dial is the only
+  control, and turning it means the listener is awake and wants sound.
+- **Device checks for the first night:** pull the headphones once while playing
+  (silence, stays paused); toggle the Bluetooth speaker off and on while playing;
+  watch Xcode's memory gauge for 10 minutes (it should stay flat).
 
 Constraints that hold: raw takes in `esoterica/library/` are never modified; the
 `[segment]` marker never makes a take stale; nothing is sudden, every on, off,
@@ -234,7 +252,11 @@ no AVFoundation, guarded by `nightRadioImportsNoAVFoundation`). Code in
   `end + gap`, so up to ~1 s late whenever the gap isn't whole seconds) plays from
   clip time 0 at the reveal frame, never seeked; the speech runs up to ~1 s behind
   the schedule (absorbed by the next gap, >= 3 s). Only the switch-on segment (already
-  under way at engine second 0) is seeked, with a 30 ms raised-cosine fade-in. A
+  under way at engine second 0) is seeked. **Every segment start** (switch-on, mid-block
+  or revealed late) fades in over 150 ms, raised cosine (final review fix; before it, a
+  segment after a gap entered at full level behind only `FileSource`'s 5 ms fade, and the
+  switch-on seek had its own 30 ms fade, now subsumed). Cuts sit at pause midpoints with
+  ≥ 125 ms of room tone before speech, where the fade is already at 93%. A
   clip still sounding when the next segment starts fades out over 50 ms;
   per-block linear ramp to `Drift.voiceGainDB`; own `Distance` on
   `WarpDepth(distance: Drift.voiceDistance)`. Preloads the next clip when
@@ -249,7 +271,8 @@ no AVFoundation, guarded by `nightRadioImportsNoAVFoundation`). Code in
 **Placeholders (tune by ear):** `StationChain.bedGainDB` −8 dB;
 `StaticChain.settings` (low 300, high 3000, hiss −30, crackle −36, fadeDepth 0.4,
 fadeRate 0.08, squash 0.3); `StationVoice.preloadSeconds` 5 s;
-`StationVoice.fadeInSeconds` 0.03 (switch-on seek); `StationVoice.fadeOutSeconds` 0.05
+`StationVoice.segmentOnsetFadeSeconds` 0.15 (every segment start, raised cosine);
+`StationVoice.fadeOutSeconds` 0.05
 (overrunning clip replaced).
 
 **Measured:** release build on the Mac, three StationChains + StaticChain, 60 s at
@@ -300,9 +323,26 @@ and `RenderThread` (`Renderer.swift`). The dial's needle in, stereo audio out.
   0.42 level in `wheelTouchDeepInTheNightGlidesBack`, ~3.6 dB of voice gain). The audible
   reset therefore starts up to ~1.55 s after the touch. The clock is made by a
   `makeClock` seam (default: `DriftClock(seed:)` touched at 0).
+- **No engine call under the lock** (final review fix): `start()`, `stop()` and even
+  `isRunning` run outside the control Mutex; decide under it, call the engine, re-lock to
+  commit. So `routeLost()` (on the notification's posting thread) never waits on the
+  engine, and the old self-deadlock (a start under the lock on main or the render thread
+  while a route-change notification wanted the same non-recursive lock) is gone. The
+  engine token is one of two flags, never both: `tearingDown` (the render thread stopping
+  the engine at the end of the off-fade) or `starting` (a thread in
+  `startEngineIfWanted`). Starts are refused while tearing down (a switch-on is deferred
+  and started fresh when the teardown re-locks); a teardown waits while a start is in
+  flight (the render thread asks again 5 ms later). A start asked for during another sets
+  `startAgain` and the holder checks again before letting go, so a configuration change
+  just after a start is not lost. `startEpoch` (incremented per claimed start) lets the
+  teardown, which reads `isRunning` outside the lock, see that a start slipped in and not
+  stop a freshly started engine mid-fade. The master is silenced and faded in (unless
+  paused) inside the start path, once the engine is confirmed stopped and the token held;
+  so turning back on during an off-fade whose engine had stopped now fades in from
+  silence instead of resuming at the old fade phase.
 - **Teardown off the lock**: `engine.stop()` runs outside the control Mutex (flag
   `tearingDown`); a switch-on during it is deferred and started fresh when the teardown
-  re-locks. `RenderThread.stop()` called from the render thread itself (the engine freed
+  re-locks, and its engine start runs after the lock is released. `RenderThread.stop()` called from the render thread itself (the engine freed
   there) only asks, never waits.
 - No `AVAudioSession` handling (the app does that). Route loss and engine configuration changes: see "The app".
 
