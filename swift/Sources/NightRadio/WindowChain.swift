@@ -27,7 +27,7 @@ public struct WindowChain {
     /// (unit-gain rain is as loud as a station), this puts it about 8.5 dB under a station at drift 0.
     public static let windowGainDB = -17.0
     /// Per-night trims in dB, so every night lands about 8 dB under a station. Raw levels differ:
-    /// crickets+stream measure 5.6 dB and the fire 16.1 dB quieter than rain. rainThunder has no
+    /// crickets+stream measure 5.6 dB and the fire 14.1 dB quieter than rain. rainThunder has no
     /// trim, so its rain is bit-identical to a rain night's; a thunder roll lifts it 1-2 dB.
     static let nightTrimDB: [WindowNight: Double] = [.rain: 0, .rainThunder: 0, .cricketsStream: 6.1, .fire: 14.4]
     /// Thunder's own trim in dB (R4): a single centred roll adds coherently in both channels, and at
@@ -144,7 +144,9 @@ public struct WindowChain {
         Self.addMono(&fire, count: count, tmp: &tmpL, busL: &fireL, busR: &fireR)
 
         let wet = Float(Self.reverbWet)
-        let hasWindow = fire == nil
+        // The window bus (rain, stream, crickets, thunder) gets the lowpass and reverb; the fire
+        // bus bypasses them. Any window-treated sound on the night turns the treatment on.
+        let hasWindow = rain != nil || stream != nil || crickets != nil || thunder != nil
         for i in 0..<count {
             var l = fireL[i], r = fireR[i]
             if hasWindow {
