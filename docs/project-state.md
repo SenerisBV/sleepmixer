@@ -68,13 +68,15 @@ Task 1 (the rules, `NightPlan/Weather.swift`) and Task 2 (felted rain) are built
 | Night weight: rainThunder | 0.25 | `NightPlan/Weather.swift` | Claude's guess; thunder as a common but not dominant night. |
 | Night weight: cricketsStream | 0.25 | `NightPlan/Weather.swift` | Claude's guess; the quietest sounds, even split with thunder. |
 | Night weight: fire | 0.20 | `NightPlan/Weather.swift` | Claude's guess; the fire's pops make it the least steady, so the rarest. |
+| `RainSound.rateWanderPeriodRange` | 25-70 s (period of the slow wander of the drop rate inside 40-120/s) | `NightDSP/Window/RainSound.swift` | Claude's guess; keeps the rain from sounding mechanical. |
 | `RainSound.dropRateRange` | 40-120 drops/s, wandering slowly (period 25-70 s) between them | `NightDSP/Window/RainSound.swift` | Plan value; the wander keeps the rain from sounding mechanical. |
 | `RainSound.dropAttackMinSeconds` | 3 ms (drops are 12-30 ms Hann bursts, so attacks are 6-15 ms) | `NightDSP/Window/RainSound.swift` | Plan value; felted, no hard attacks. |
-| `RainSound.dropLengthRange` / `dropHzRange` / `dropLevelRange` | 12-30 ms; 600-3000 Hz log-uniform; level 0.3-1.0 | `NightDSP/Window/RainSound.swift` | Claude's guess; small soft pings as on a pane close by. Tune by ear. |
+| `RainSound.dropLengthRange` / `dropHzRange` / `dropLevelRange` | 12-30 ms; 500-2200 Hz log-uniform (lowered from 600-3000 so drops alone step <= 0.05); level 0.3-1.0 | `NightDSP/Window/RainSound.swift` | Claude's guess; small soft pings as on a pane close by. Tune by ear. |
 | `RainSound.washCutoffHz` / `washHighpassHz` | 3000 Hz lowpass; 150 Hz highpass | `NightDSP/Window/RainSound.swift` | Lowpass is the plan's ~3 kHz; the highpass is invented so the wash does not thump. |
 | `RainSound.swellPeriodRange` / `swellDepthDB` | 20-60 s; +/-3 dB on drops and wash together | `NightDSP/Window/RainSound.swift` | Plan value. |
-| `RainSound.dropGain` / `washGain` | 0.09 / 0.2 (seed 3, 60 s: RMS 0.058 = -24.8 dBFS, peak 0.34, crest 5.9) | `NightDSP/Window/RainSound.swift` | Claude's guess; the window gain is set later (WindowChain). Crest sits close to the plan's 6 limit. |
-| `RainSound` stream numbers | 0-4 seed-level, 6-11 per cell (NightRandom) | `NightDSP/Window/RainSound.swift` | Invented; keeps rain's draws independent of each other. |
+| `RainSound.dropGain` / `washGain` | 0.07 / 0.2 (seed 3, 60 s: RMS 0.049 = -26.2 dBFS, peak 0.28, crest 5.80) | `NightDSP/Window/RainSound.swift` | Claude's guess; the window gain is set later (WindowChain). Crest sits close to the plan's 6 limit. |
+| `RainSound.washSoftClip` | 0.55 (tanh rounding of the wash at about 2.5 sigma) | `NightDSP/Window/RainSound.swift` | Claude's guess; keeps rare noise peaks soft so crest stays under 6. |
+| `RainSound` stream numbers | 0-4 seed-level, 6-11 per cell (5 unused) (NightRandom) | `NightDSP/Window/RainSound.swift` | Invented; keeps rain's draws independent of each other. |
 
 ## Plan 9: Esoterica DM Radio (2026-11-03, merged to `main` 2026-11-04)
 

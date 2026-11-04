@@ -58,6 +58,19 @@ private func rainRender(seed: UInt64, from: Double = 0, seconds: Double, sr: Dou
         #expect(RainSound.dropAttackMinSeconds >= 0.003)
     }
 
+    /// The behavioral felted check: with the wash off, the drops alone must have no hard edges.
+    @Test func rainDropsAreSoftOnTheirOwn() {
+        for seed in UInt64(0)..<4 {
+            var rain = RainSound(seed: seed, sampleRate: sr, startSecond: 0)
+            rain.washLevel = 0
+            var x = [Float](repeating: 0, count: Int(30 * sr))
+            rain.render(into: &x, count: x.count)
+            #expect(rms(x[...]) > 0.005)   // the drops really are there
+            let step = zip(x.dropFirst(), x).map { abs(Double($0) - Double($1)) }.max()!
+            #expect(step <= 0.05)
+        }
+    }
+
     @Test func rainSeeksCloseToContinuous() {
         let whole = rainRender(seed: 3, seconds: 130)
         let slice = Array(whole[Int(120 * sr)..<Int(130 * sr)])

@@ -22,13 +22,15 @@ public struct RainSound: SoundSource {
     // MARK: - Invented values (placeholders recorded in docs/project-state.md)
 
     static let dropLengthRange = 0.012...0.030   // seconds; the Hann window's attack is half of this
-    static let dropHzRange = 600.0...3000.0      // log-uniform pitch
+    static let dropHzRange = 500.0...2200.0      // log-uniform pitch
     static let dropLevelRange = 0.3...1.0
-    static let dropGain = 0.09
+    static let dropGain = 0.07
     static let washGain = 0.2
+    /// The wash is gently rounded (tanh) at about 2.5 sigma so its rare noise peaks stay soft.
+    static let washSoftClip = 0.55
     static let washHighpassHz = 150.0            // keeps the wash from thumping
     static let rateWanderPeriodRange = 25.0...70.0
-    // NightRandom streams (seed-level streams 0-5, per-cell streams 6-10).
+    // NightRandom streams (seed-level streams 0-4, per-cell streams 6-11; 5 unused).
     static let swellPeriodStream: UInt64 = 0
     static let swellPhaseStream: UInt64 = 1
     static let ratePeriodStream: UInt64 = 2
@@ -58,6 +60,8 @@ public struct RainSound: SoundSource {
     private let cellFrames: Int
     private let swellOmega: Double, swellPhase: Double
     private let rateOmega: Double, ratePhase: Double
+    /// Test hook: 0 renders the drops alone (to check their attacks without the wash).
+    var washLevel = 1.0
     private var frame: Int
     private var slots = [Drop](repeating: Drop(), count: RainSound.slotCount)
     private var loadedCell: Int
@@ -130,7 +134,8 @@ public struct RainSound: SoundSource {
                 x += d.amp * w * sin(d.omega * Double(age) + d.phase)
             }
             let n = Float(NightRandom.signed(seed, RainSound.washStream, UInt64(f)))
-            x += RainSound.washGain * Double(washHP.process(wash.process(n)))
+            let y = Double(washHP.process(wash.process(n)))
+            x += washLevel * RainSound.washGain * RainSound.washSoftClip * tanh(y / RainSound.washSoftClip)
             let t = Double(f) / sr
             x *= pow(10, swellDB * sin(swellOmega * t + swellPhase) / 20)
             out[i] = Float(x)
